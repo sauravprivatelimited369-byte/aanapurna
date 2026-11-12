@@ -1,0 +1,30 @@
+# Environment and secrets
+.env*
+!.env.example
+!.env.production.example
+*.pem
+*.key
+*.eml
+secrets/
+
+# Node / Next
+node_modules/
+.next/
+.turbo/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Runtime data
+uploads/
+logs/
+*.log
+*.dump
+*.sql.gz
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

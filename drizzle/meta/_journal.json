@@ -1,0 +1,62 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1794471490386,
+      "tag": "20261112081810_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794472546141,
+      "tag": "20261112083546_onboarding_and_private_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794473424931,
+      "tag": "20261112085024_private_locations_and_delivery_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794474268491,
+      "tag": "20261112090428_helper_reviews_and_policy_authorship",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794475336800,
+      "tag": "20261112092216_support_data_request_reviews",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794479964081,
+      "tag": "20261112103924_better_auth_rate_limit_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794501611751,
+      "tag": "20261112164011_better_auth_rate_limit_text_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794502741000,
+      "tag": "20261112165901_public_impact_summary",
+      "breakpoints": true
+    }
+  ]
+}
