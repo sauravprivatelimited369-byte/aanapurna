@@ -34,6 +34,10 @@ async function launchApp() {
 }
 async function main() {
   if (process.env.NODE_ENV === 'production' || process.env.OPERATIONS_ENABLED === 'true') throw new Error('This launcher is for local development only and cannot enable real operations.');
+  if (process.platform === 'win32' && (!existsSync(envFile) || existsSync(marker))) {
+    const elevated = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'if (([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 1 }'], { stdio: 'ignore' });
+    if (elevated.status !== 0) throw new Error('Managed PostgreSQL must run as a normal Windows user, not as Administrator. Close this window and double-click start.bat without elevation.');
+  }
   if (!existsSync(envFile)) {
     if (existsSync(marker) || existsSync(data)) throw new Error('Local PostgreSQL data already exists but .env is missing. Restore the original .env; do not overwrite your database.');
     run(['scripts/create-local-env.mjs'], { LOCAL_DATABASE_PORT: String(port) });

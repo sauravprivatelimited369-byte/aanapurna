@@ -261,6 +261,16 @@ jobs:
       - name: First start, authenticated test, and restart
         shell: pwsh
         run: |
+          # PostgreSQL refuses elevated Windows processes. Exercise a standard
+          # user just as a normal double-click would, not the elevated CI account.
+          $username = 'annapurna-ci'
+          $temporaryPassword = ConvertTo-SecureString ([guid]::NewGuid().ToString() + 'Aa1!') -AsPlainText -Force
+          New-LocalUser -Name $username -Password $temporaryPassword -PasswordNeverExpires | Out-Null
+          $credential = [System.Management.Automation.PSCredential]::new(".\$username", $temporaryPassword)
+          & icacls $PWD /grant "${username}:(OI)(CI)M" /T /C /Q | Out-Null
+          New-Item -ItemType Directory -Force -Path '.local-data/npm-cache' | Out-Null
+          & icacls '.local-data' /grant "${username}:(OI)(CI)M" /T /C /Q | Out-Null
+          $env:npm_config_cache = Join-Path $PWD '.local-data/npm-cache'
           function Wait-Ready {
             $deadline = (Get-Date).AddSeconds(120)
             while ((Get-Date) -lt $deadline) {
@@ -277,7 +287,7 @@ jobs:
           }
           function Start-Launcher {
             param([string]$Suffix)
-            return Start-Process -FilePath cmd.exe -ArgumentList '/c','start.bat' -WorkingDirectory $PWD -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:RUNNER_TEMP\launch-$Suffix.out" -RedirectStandardError "$env:RUNNER_TEMP\launch-$Suffix.err"
+            return Start-Process -FilePath cmd.exe -ArgumentList '/c','start.bat' -WorkingDirectory $PWD -PassThru -WindowStyle Hidden -Credential $credential -LoadUserProfile -RedirectStandardOutput "$env:RUNNER_TEMP\launch-$Suffix.out" -RedirectStandardError "$env:RUNNER_TEMP\launch-$Suffix.err"
           }
           function Stop-Launcher {
             param($Server)
