@@ -166,10 +166,11 @@ jobs:
           docker compose up --build --detach --wait --wait-timeout 180 > "$RUNNER_TEMP/compose-smoke.log" 2>&1
           result=$?
           if [ "$result" -ne 0 ]; then
-            while IFS= read -r line; do
-              line="${line//'%'/'%25'}"; line="${line//$'\r'/'%0D'}"
-              echo "::error title=Compose diagnostic::$line"
-            done < <(tail -n 35 "$RUNNER_TEMP/compose-smoke.log")
+            # The stack has only generated throwaway credentials. Still filter out
+            # possible secret-bearing database lines before adding a diagnostic.
+            diagnostic="$( { tail -n 45 "$RUNNER_TEMP/compose-smoke.log"; docker compose logs --tail=50 db migrate web 2>&1; } | grep -viE 'password|secret|postgres://|_key=' | tail -n 45 | head -c 6000 )"
+            diagnostic="${diagnostic//'%'/'%25'}"; diagnostic="${diagnostic//$'\r'/'%0D'}"; diagnostic="${diagnostic//$'\n'/'%0A'}"
+            echo "::error title=Compose diagnostic::$diagnostic"
             exit "$result"
           fi
           echo 'Compose stack started.'
