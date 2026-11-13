@@ -1,0 +1,66 @@
+{
+  "name": "annapurna-link",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.0.0 <23"
+  },
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "setup:env": "node scripts/create-local-env.mjs",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:smtp-sink": "node scripts/test-smtp-sink.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:check": "tsx scripts/check-db.ts",
+    "bootstrap:admin": "tsx scripts/bootstrap-admin.ts",
+    "worker": "node --conditions=react-server --import tsx src/worker/index.ts"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "4.3.5",
+    "better-auth": "1.7.21",
+    "drizzle-orm": "0.45.4",
+    "graphile-worker": "0.18.0",
+    "lucide-react": "1.72.0",
+    "next": "16.4.6",
+    "nodemailer": "10.5.0",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "server-only": "^0.0.1",
+    "tailwindcss": "4.3.5",
+    "tsx": "^4.23.15",
+    "zod": "4.6.7"
+  },
+  "overrides": {
+    "esbuild@~0.18.20": "0.25.12",
+    "eslint-config-next": {
+      "typescript-eslint": {
+        "@typescript-eslint/typescript-estree": {
+          "minimatch": "11.0.8"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@electric-sql/pglite": "^0.5.16",
+    "@playwright/test": "1.65.0",
+    "@types/node": "26.6.6",
+    "@types/nodemailer": "8.0.2",
+    "@types/pg": "8.15.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "drizzle-kit": "0.31.11",
+    "eslint": "9.39.2",
+    "eslint-config-next": "16.4.6",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  }
+}

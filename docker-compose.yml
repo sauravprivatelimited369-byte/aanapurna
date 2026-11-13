@@ -1,0 +1,99 @@
+name: annapurna-link
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DATABASE_URL: postgres://annapurna_app:${APP_DB_PASSWORD:?Generate .env with scripts/create-local-env.mjs}@db:5432/${POSTGRES_DB:-annapurna_link}
+  AUTH_DATABASE_URL: postgres://annapurna_auth:${AUTH_DB_PASSWORD:?Generate .env with scripts/create-local-env.mjs}@db:5432/${POSTGRES_DB:-annapurna_link}
+  WORKER_DATABASE_URL: postgres://annapurna_worker:${WORKER_DB_PASSWORD:?Generate .env with scripts/create-local-env.mjs}@db:5432/${POSTGRES_DB:-annapurna_link}
+  MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER:-annapurna_migrator}:${POSTGRES_PASSWORD:?Generate .env with scripts/create-local-env.mjs}@db:5432/${POSTGRES_DB:-annapurna_link}
+  AUTH_SECRET: ${AUTH_SECRET:?Generate .env with scripts/create-local-env.mjs}
+  OTP_HASH_KEY: ${OTP_HASH_KEY:?Generate .env with scripts/create-local-env.mjs}
+  OTP_ENCRYPTION_KEY: ${OTP_ENCRYPTION_KEY:?Generate .env with scripts/create-local-env.mjs}
+  EMAIL_ENCRYPTION_KEY: ${EMAIL_ENCRYPTION_KEY:?Generate .env with scripts/create-local-env.mjs}
+  APP_URL: ${APP_URL:-http://localhost:3000}
+  DATABASE_SSL: ${DATABASE_SSL:-false}
+  OPERATIONS_ENABLED: ${OPERATIONS_ENABLED:-false}
+  PRIVATE_STORAGE_DIR: /app/uploads/private
+  FILE_SCAN_MODE: ${FILE_SCAN_MODE:-disabled}
+  SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
+  SMTP_FROM: ${SMTP_FROM:-Annapurna Link <no-reply@annapurna.local>}
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-annapurna_link}
+      POSTGRES_USER: ${POSTGRES_USER:-annapurna_migrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate .env with scripts/create-local-env.mjs}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Generate .env with scripts/create-local-env.mjs}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?Generate .env with scripts/create-local-env.mjs}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD:?Generate .env with scripts/create-local-env.mjs}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILPIT_WEB_PORT:-8025}:8025"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "db:migrate"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "server.js"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    volumes:
+      - private_uploads:/app/uploads/private
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "worker"]
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  private_uploads:
