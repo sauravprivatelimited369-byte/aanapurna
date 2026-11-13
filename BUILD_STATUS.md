@@ -1,6 +1,18 @@
 # Build status
 
+## GitHub-hosted verification — 2026-11-13
+
+GitHub Actions [run 43392655106](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43392655106) at commit `584b48a` **passed all five jobs**: application checks/build and public browsers (11 passed, 3 opt-in skips), isolated real PostgreSQL 16 domain/auth plus custom-format backup/restore drill, PostgreSQL 17 authenticated multi-role browser workflow, Docker Compose image/build/startup/database-role/health/Mailpit smoke with PostgreSQL 17, and Windows 2025 native PostgreSQL/start.bat/authentication smoke. These are synthetic tests, not production or legal certification. GitHub emitted action-runtime deprecation warnings.
+
+Earlier GitHub runs failed and exposed two actual Compose defects: production-only `npm ci` installed incompatible esbuild binaries, and Next's standalone server bound the container hostname rather than the loopback health-check interface. The image now installs before pruning development dependencies and explicitly binds to `0.0.0.0`; the final hosted Compose run passed. Earlier browser login timing and PostgreSQL client-version environment issues were also corrected. The local sandbox still cannot run Docker or reach Docker's registry; the verified Docker result comes from GitHub's hosted runner, not this sandbox. Windows verification is similarly hosted, not a test of all Windows installations.
+
+Production SMTP has not been tested: an operator must configure a provider privately and run the documented `smtp:verify` probe, then separately verify authorized inbox delivery, sender identity and retry behavior. The backup test used fictional records and a temporary same-server destination; encrypted off-host backup, upload recovery, point-in-time recovery and a real disaster-recovery exercise remain open. Human legal, food-safety, partner and launch approvals are still required. `OPERATIONS_ENABLED=false` remains the default and no real operations were enabled.
+
+---
+
 ## Recovery, Windows and CI follow-up — 2026-11-13
+
+Historical checkpoint; the GitHub-hosted results above supersede pending checks below.
 
 - Added a guarded disposable PostgreSQL custom-format `pg_dump`/`pg_restore` drill. A real PostgreSQL 14.24 run with fictional domain fixtures passed: restored donation, receipt, inspection and migration counts, selected RLS/grants, and worker schema ownership. A separate run proved an existing restore target is refused and preserved. This is not a production backup, upload recovery, off-host encryption, point-in-time recovery or a complete restore verification. PostgreSQL 16 execution is now defined in CI but has not yet been observed.
 - Added a Windows 2025 GitHub-hosted native PostgreSQL/start.bat/authentication smoke job, and a no-email-sent, explicit authenticated TLS SMTP connection probe (`npm run smtp:verify`) for a human operator's own provider. Neither Windows nor a real SMTP provider has been tested here; verification requires actual infrastructure and credentials, and successful connectivity alone is not delivery validation.
@@ -9,6 +21,8 @@
 ---
 
 ## Arrival, inspection and browser workflow — 2026-11-13
+
+Historical checkpoint; the GitHub-hosted results above supersede pending checks below.
 
 **Not approved for pilot or production.** Real operations remain disabled; test-only fixtures and approvals are fictional. This section supersedes older observations and outstanding items below, which are retained as historical context.
 
@@ -23,6 +37,8 @@
 ---
 
 ## Domain integration follow-up — 2026-11-13
+
+Historical checkpoint; the GitHub-hosted results above supersede pending checks below.
 
 **Still not pilot- or production-approved.** No real operations were enabled. The test below temporarily sets the operations flag only inside its test process against a dedicated empty local `annapurna_link_test` database; its organisations, policy, approvals and people are fictional. `.env` and deployed configuration remain unchanged. The test creates identities directly as fixtures, calls domain services with explicit identities, and executes database access using the restricted application role; it is not an authenticated HTTP or browser end-to-end test.
 
