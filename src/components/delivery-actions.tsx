@@ -7,6 +7,8 @@ export function DeliveryActions({
   jobId,
   canClaim,
   canPickup,
+  canReportArrival,
+  canConfirmInspection,
   canVerify,
   canViewCode,
   canReportIncident,
@@ -14,6 +16,8 @@ export function DeliveryActions({
   jobId: string;
   canClaim: boolean;
   canPickup: boolean;
+  canReportArrival: boolean;
+  canConfirmInspection: boolean;
   canVerify: boolean;
   canViewCode: boolean;
   canReportIncident: boolean;
@@ -23,6 +27,8 @@ export function DeliveryActions({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [pickupCondition, setPickupCondition] = useState("");
+  const [inspectionNotes, setInspectionNotes] = useState("");
+  const [acceptanceConfirmed, setAcceptanceConfirmed] = useState(false);
   const [code, setCode] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [incidentType, setIncidentType] = useState("quality_concern");
@@ -32,7 +38,10 @@ export function DeliveryActions({
   async function request(method: "POST", path: string, body?: Record<string, unknown>) {
     const response = await fetch(path, { method, cache: "no-store", headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
     const result = await response.json() as { error?: { message?: string }; code?: string; expiresAt?: string; verified?: boolean; attemptsRemaining?: number; receipt?: { reference: string } };
-    if (!response.ok) throw new Error(result.error?.message ?? "The action could not be completed.");
+    if (!response.ok) {
+      if (result.verified === false) throw new Error(`That code did not match. ${result.attemptsRemaining ?? 0} attempts remain. Contact operations if locked.`);
+      throw new Error(result.error?.message ?? "The action could not be completed.");
+    }
     return result;
   }
 
@@ -47,6 +56,20 @@ export function DeliveryActions({
     event.preventDefault(); setBusy(true); setError(""); setMessage("");
     try { await request("POST", `/api/jobs/${jobId}/pickup`, { condition: pickupCondition.trim() }); setMessage("Collection was recorded. Follow the handling instructions and go to the Receiver."); router.refresh(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Collection could not be recorded."); }
+    finally { setBusy(false); }
+  }
+
+  async function reportArrival() {
+    setBusy(true); setError(""); setMessage("");
+    try { await request("POST", `/api/jobs/${jobId}/arrival`); setMessage("Arrival reported. Ask the Receiver to inspect and record acceptance before sharing the code."); router.refresh(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Arrival could not be recorded."); }
+    finally { setBusy(false); }
+  }
+
+  async function confirmInspection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); setMessage("");
+    try { await request("POST", `/api/jobs/${jobId}/inspection`, { acceptanceConfirmed, notes: inspectionNotes.trim() }); setInspectionNotes(""); setAcceptanceConfirmed(false); setMessage("Your acceptance and observations were recorded. You may now show the delivery code to the assigned Helper."); router.refresh(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Your inspection could not be recorded."); }
     finally { setBusy(false); }
   }
 
@@ -74,6 +97,8 @@ export function DeliveryActions({
   return <div className="form-stack">
     {canClaim && <div><p className="form-hint">Claiming assigns this delivery to you for a limited window. Do not claim unless you can complete the collection.</p><button className="button button--primary" type="button" disabled={busy} onClick={() => void claim()}>{busy ? "Please wait…" : "Claim delivery"}</button></div>}
     {canPickup && <form className="form-stack" onSubmit={pickup}><div className="form-field"><label htmlFor="pickup-condition">Collection condition</label><textarea className="form-control" id="pickup-condition" required maxLength={500} value={pickupCondition} onChange={(event) => setPickupCondition(event.target.value)} placeholder="Describe packaging and any relevant handling observation" /></div><button className="button button--primary" type="submit" disabled={busy || pickupCondition.trim().length < 1}>{busy ? "Recording…" : "Confirm collection"}</button></form>}
+    {canReportArrival && <div><p className="form-hint">Only report arrival when you are physically at the receiving location.</p><button className="button button--primary" type="button" disabled={busy} onClick={() => void reportArrival()}>{busy ? "Recording…" : "Report physical arrival"}</button></div>}
+    {canConfirmInspection && <form className="form-stack" onSubmit={confirmInspection}><p className="form-hint">Check the delivery using your approved operating procedure. If you cannot accept it, report a concern below and contact operations instead. The platform does not certify food safety.</p><div className="form-field"><label htmlFor="inspection-notes">Acceptance check observations</label><textarea className="form-control" id="inspection-notes" required maxLength={500} value={inspectionNotes} onChange={(event) => setInspectionNotes(event.target.value)} placeholder="Record relevant packaging and handling observations" /></div><label><input type="checkbox" checked={acceptanceConfirmed} onChange={(event) => setAcceptanceConfirmed(event.target.checked)} required /> I confirm the Helper has physically arrived, my organisation has completed its checks, and we accept this delivery.</label><button className="button button--primary" type="submit" disabled={busy || !acceptanceConfirmed || !inspectionNotes.trim()}>{busy ? "Recording…" : "Record checks and acceptance"}</button></form>}
     {canViewCode && <div className="form-stack"><p className="form-hint">Only request this when the Helper has physically arrived and your acceptance checks are complete. Never share the code earlier.</p><button className="button button--secondary" type="button" onClick={() => void revealCode()} disabled={busy}>{code ? "Refresh delivery code" : "Show delivery code"}</button>{code && <div className="otp-display" aria-label="One-time delivery code"><span>{code.slice(0,3)}</span><span>{code.slice(3)}</span></div>}</div>}
     {canVerify && <form className="form-stack" onSubmit={verify}><div className="form-field"><label htmlFor="delivery-code">Receiver&apos;s six-digit code</label><input className="form-control otp-input" id="delivery-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} minLength={6} required value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" /></div><span className="form-hint">This field is sent only to the verification endpoint; the code is never returned to the Helper.</span><button className="button button--primary" type="submit" disabled={busy || verificationCode.length !== 6}>{busy ? "Verifying…" : "Verify delivery"}</button></form>}
     {canReportIncident && <details className="incident-details"><summary>Report a concern or incident</summary><form className="form-stack" onSubmit={reportIncident}><div className="form-field"><label htmlFor="incident-type">Concern type</label><select className="form-control" id="incident-type" value={incidentType} onChange={(event) => setIncidentType(event.target.value)}><option value="damaged_packaging">Damaged packaging</option><option value="temperature_concern">Temperature concern</option><option value="allergen_mismatch">Allergen or label mismatch</option><option value="quality_concern">Quality concern</option><option value="delay">Delay</option><option value="failed_collection">Failed collection</option><option value="other">Other</option></select></div><div className="form-field"><label htmlFor="incident-severity">Severity</label><select className="form-control" id="incident-severity" value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option><option value="critical">Critical</option></select></div><div className="form-field"><label htmlFor="incident-description">What happened?</label><textarea className="form-control" id="incident-description" required maxLength={1000} value={incidentDescription} onChange={(event) => setIncidentDescription(event.target.value)} /></div><button className="button button--danger" type="submit" disabled={busy}>{busy ? "Submitting…" : "Submit report"}</button></form></details>}

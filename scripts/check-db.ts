@@ -42,7 +42,7 @@ async function main(): Promise<void> {
     if (row.bypass_rls) problems.push("runtime database role has BYPASSRLS");
     if (row.rls_tables < 20) problems.push(`expected at least 20 RLS-protected tables, found ${row.rls_tables}`);
     if (row.required_functions !== 9) problems.push(`expected required database functions, found ${row.required_functions}/9`);
-    if (row.migrations < 8) problems.push(`expected at least 8 applied migrations, found ${row.migrations}`);
+    if (row.migrations < 10) problems.push(`expected at least 10 applied migrations, found ${row.migrations}`);
     console.info(JSON.stringify({
       level: problems.length ? "error" : "info",
       event: "database.configuration_check",

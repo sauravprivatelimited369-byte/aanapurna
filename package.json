@@ -20,7 +20,15 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:check": "tsx scripts/check-db.ts",
     "bootstrap:admin": "tsx scripts/bootstrap-admin.ts",
-    "worker": "node --conditions=react-server --import tsx src/worker/index.ts"
+    "worker": "node --conditions=react-server --import tsx src/worker/index.ts",
+    "local:db:setup": "node --env-file=.env scripts/setup-native-db.mjs",
+    "local:migrate": "node --env-file=.env --import tsx scripts/migrate.ts",
+    "local:start": "node --env-file=.env scripts/local-start.mjs",
+    "test:local-auth": "node scripts/test-local-auth.mjs",
+    "test:local-domain": "node --env-file=.env --conditions=react-server --import tsx tests/integration/local-domain.ts",
+    "test:local-workflow": "node --env-file=.env scripts/run-local-workflow.mjs",
+    "test:local-backup": "node --env-file=.env scripts/test-local-backup.mjs",
+    "smtp:verify": "node --env-file=.env scripts/verify-smtp.mjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "4.3.5",

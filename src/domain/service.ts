@@ -300,7 +300,12 @@ export async function createDonation(identity: Identity, input: DonationInput, r
     }
     if (!organization.serviceAreaId) throw new HttpError(422, "A reviewed service area must be assigned before listing.", "SERVICE_AREA_REQUIRED");
 
-    const [donation] = await tx.insert(donations).values({
+    // INSERT RETURNING cannot evaluate an RLS policy that looks up the new row
+    // in the same statement snapshot. Allocate the identifier before insertion.
+    const donation = { id: randomUUID(), status: "offered" as const, createdAt: new Date() };
+    await tx.insert(donations).values({
+      id: donation.id,
+      createdAt: donation.createdAt,
       generatorOrganizationId: organization.id,
       serviceAreaId: organization.serviceAreaId,
       pickupCity: organization.cityOrDistrict,
@@ -323,8 +328,7 @@ export async function createDonation(identity: Identity, input: DonationInput, r
       temperatureRequirement: input.temperatureRequirement,
       policyVersion: policy.version,
       status: "offered",
-    }).returning({ id: donations.id, status: donations.status, createdAt: donations.createdAt });
-    if (!donation) throw new HttpError(500, "The donation listing could not be saved.");
+    });
     await tx.insert(donationPrivateDetails).values({
       donationId: donation.id,
       pickupAddress: input.pickupAddress,
@@ -517,6 +521,18 @@ export async function getOfferDetail(identity: Identity, offerId: string) {
 export async function respondToOffer(identity: Identity, offerId: string, input: OfferResponse) {
   if (input.action === "accept") assertOperationsEnabled();
   return withDomainContext(identity.id, async (tx) => {
+    // Every responder locks the shared donation before locking any offer. If
+    // different Receivers lock their own offers first, withdrawing competing
+    // offers can deadlock against a responder waiting for the donation lock.
+    const [offerScope] = await tx.select({
+      donationId: donationOffers.donationId,
+      receiverOrganizationId: donationOffers.receiverOrganizationId,
+    }).from(donationOffers).where(eq(donationOffers.id, offerId)).limit(1);
+    if (!offerScope) throw new HttpError(404, "This offer is no longer available.", "OFFER_NOT_FOUND");
+    requireMember(identity, offerScope.receiverOrganizationId, ["owner", "manager", "operator"]);
+    const [lockedDonation] = await tx.select({ id: donations.id, status: donations.status })
+      .from(donations).where(eq(donations.id, offerScope.donationId)).for("update").limit(1);
+    if (!lockedDonation) throw new HttpError(404, "This offer is no longer available.", "OFFER_NOT_FOUND");
     const [offer] = await tx.select({
       id: donationOffers.id,
       donationId: donationOffers.donationId,
@@ -535,7 +551,7 @@ export async function respondToOffer(identity: Identity, offerId: string, input:
       .from(donationOffers)
       .innerJoin(donations, eq(donations.id, donationOffers.donationId))
       .where(eq(donationOffers.id, offerId))
-      .for("update");
+      .for("update", { of: donationOffers });
     if (!offer) throw new HttpError(404, "This offer is no longer available.", "OFFER_NOT_FOUND");
     requireMember(identity, offer.receiverOrganizationId, ["owner", "manager", "operator"]);
     const [receiver] = await tx.select({ status: organizations.status })
@@ -565,19 +581,28 @@ export async function respondToOffer(identity: Identity, offerId: string, input:
       throw new HttpError(422, "The active policy does not permit partial acceptance.", "PARTIAL_ACCEPTANCE_DISABLED");
     }
 
-    // Lock the donation and guard the transition so concurrent Receiver decisions cannot create two deliveries.
-    const [lockedDonation] = await tx.select({ id: donations.id, status: donations.status })
-      .from(donations).where(eq(donations.id, offer.donationId)).for("update").limit(1);
-    if (!lockedDonation || lockedDonation.status !== "offered") throw new HttpError(409, "Another Receiver has already reserved this donation.", "OFFER_ALREADY_RESERVED");
+    // The donation was locked before the offer; reject a reservation that lost the race.
+    if (lockedDonation.status !== "offered") throw new HttpError(409, "Another Receiver has already reserved this donation.", "OFFER_ALREADY_RESERVED");
 
-    const [job] = await tx.insert(deliveryJobs).values({
+    // Allocate the ID before INSERT; the SELECT policy cannot look up an inserted
+    // delivery row through a stable function during the same RETURNING statement.
+    const job = { id: randomUUID() };
+    await tx.insert(deliveryJobs).values({
+      id: job.id,
       donationId: offer.donationId,
       offerId: offer.id,
       generatorOrganizationId: offer.generatorOrganizationId,
       receiverOrganizationId: offer.receiverOrganizationId,
       status: "open",
-    }).returning({ id: deliveryJobs.id });
-    if (!job) throw new HttpError(500, "The delivery could not be opened.");
+    });
+    // Establish the Receiver's scoped access before reading private pickup details.
+    // The transaction rolls this change back if any later handover step fails.
+    await tx.update(donations).set({
+      status: "reserved",
+      receiverOrganizationId: offer.receiverOrganizationId,
+      quantity: String(acceptedQuantity),
+      updatedAt: new Date(),
+    }).where(eq(donations.id, offer.donationId));
     const [privatePickup] = await tx.select({
       pickupAddress: donationPrivateDetails.pickupAddress,
       pickupInstructions: donationPrivateDetails.pickupInstructions,
@@ -605,12 +630,6 @@ export async function respondToOffer(identity: Identity, offerId: string, input:
     await tx.update(donationOffers)
       .set({ status: "withdrawn", respondedAt: new Date(), responseReason: "Another Receiver accepted the offer." })
       .where(and(eq(donationOffers.donationId, offer.donationId), eq(donationOffers.status, "pending"), sql`${donationOffers.id} <> ${offer.id}`));
-    await tx.update(donations).set({
-      status: "reserved",
-      receiverOrganizationId: offer.receiverOrganizationId,
-      quantity: String(acceptedQuantity),
-      updatedAt: new Date(),
-    }).where(eq(donations.id, offer.donationId));
     await tx.insert(custodyEvents).values({
       donationId: offer.donationId,
       deliveryJobId: job?.id,
@@ -697,6 +716,7 @@ export async function confirmPickup(identity: Identity, jobId: string, input: Pi
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       bestBeforeAt: donations.bestBeforeAt,
+      pickupEarliestAt: donations.pickupEarliestAt,
       pickupLatestAt: donations.pickupLatestAt,
       quantity: donations.quantity,
       unit: donations.unit,
@@ -713,6 +733,7 @@ export async function confirmPickup(identity: Identity, jobId: string, input: Pi
     if (job.status !== "assigned") throw new HttpError(409, "This delivery is not waiting for collection.", "DELIVERY_STATE_INVALID");
     const now = new Date();
     if (job.claimExpiresAt && job.claimExpiresAt.getTime() <= now.getTime()) throw new HttpError(409, "The assignment window expired. Ask operations to reassign this delivery.", "ASSIGNMENT_EXPIRED");
+    if (job.pickupEarliestAt.getTime() > now.getTime()) throw new HttpError(409, "The agreed collection window has not opened yet. Contact operations if timing must change.", "PICKUP_WINDOW_NOT_OPEN");
     if (job.pickupLatestAt.getTime() <= now.getTime() || job.bestBeforeAt.getTime() <= now.getTime()) throw new HttpError(409, "The listed food window has expired. Do not collect it; contact operations.", "DONATION_EXPIRED");
 
     const code = createDeliveryCode();
@@ -741,6 +762,62 @@ export async function confirmPickup(identity: Identity, jobId: string, input: Pi
   });
 }
 
+/** The assigned Helper reports physical arrival; this is a declaration, not location proof. */
+export async function confirmDeliveryArrival(identity: Identity, jobId: string) {
+  assertOperationsEnabled();
+  return withDomainContext(identity.id, async (tx) => {
+    const [job] = await tx.select({ id: deliveryJobs.id, donationId: deliveryJobs.donationId,
+      status: deliveryJobs.status, helperUserId: deliveryJobs.helperUserId, arrivedAt: deliveryJobs.arrivedAt,
+      receiverOrganizationId: deliveryJobs.receiverOrganizationId, bestBeforeAt: donations.bestBeforeAt,
+      name: donations.name }).from(deliveryJobs).innerJoin(donations, eq(donations.id, deliveryJobs.donationId))
+      .where(eq(deliveryJobs.id, jobId)).for("update");
+    if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
+    if (job.helperUserId !== identity.id) throw new HttpError(403, "Only the assigned Helper can report arrival.", "HELPER_NOT_ASSIGNED");
+    const [helper] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
+    if (helper?.status !== "active") throw new HttpError(403, "Your Helper approval is not active.", "HELPER_NOT_APPROVED");
+    if (job.status !== "collected") throw new HttpError(409, "Arrival can only be recorded for food in transit.", "DELIVERY_STATE_INVALID");
+    if (job.arrivedAt) return { arrivedAt: job.arrivedAt };
+    if (job.bestBeforeAt.getTime() <= Date.now()) throw new HttpError(409, "The food has expired. Do not hand it over; contact operations.", "DONATION_EXPIRED");
+    const arrivedAt = new Date();
+    await tx.update(deliveryJobs).set({ arrivedAt, arrivalReportedBy: identity.id, updatedAt: arrivedAt }).where(eq(deliveryJobs.id, job.id));
+    await tx.insert(custodyEvents).values({ donationId: job.donationId, deliveryJobId: job.id, actorUserId: identity.id,
+      eventType: "delivery.arrival_reported", occurredAt: arrivedAt, details: {} });
+    await audit(tx, identity, "delivery.arrival_reported", "delivery_job", job.id);
+    await notifyOrganization(tx, job.receiverOrganizationId, job.donationId, "delivery.arrived", "Helper reports arrival", `${job.name} has reportedly arrived. Check the handover and record your decision.`, `/app/deliveries/${job.id}`);
+    return { arrivedAt };
+  });
+}
+
+/** The Receiver declares its own checks and acceptance; the platform does not certify the food. */
+export async function confirmDeliveryInspection(identity: Identity, jobId: string, input: { acceptanceConfirmed: true; notes: string }) {
+  assertOperationsEnabled();
+  const notes = input.notes.trim();
+  if (input.acceptanceConfirmed !== true || !notes || notes.length > 500) throw new HttpError(422, "Confirm acceptance and record your inspection observations.", "INSPECTION_INVALID");
+  return withDomainContext(identity.id, async (tx) => {
+    const [job] = await tx.select({ id: deliveryJobs.id, donationId: deliveryJobs.donationId,
+      status: deliveryJobs.status, receiverOrganizationId: deliveryJobs.receiverOrganizationId,
+      arrivedAt: deliveryJobs.arrivedAt, inspectionConfirmedAt: deliveryJobs.inspectionConfirmedAt,
+      inspectionNotes: deliveryJobs.inspectionNotes, bestBeforeAt: donations.bestBeforeAt, name: donations.name }).from(deliveryJobs)
+      .innerJoin(donations, eq(donations.id, deliveryJobs.donationId)).where(eq(deliveryJobs.id, jobId)).for("update");
+    if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
+    requireMember(identity, job.receiverOrganizationId, ["owner", "manager", "operator"]);
+    const [receiver] = await tx.select({ status: organizations.status }).from(organizations).where(eq(organizations.id, job.receiverOrganizationId)).limit(1);
+    if (receiver?.status !== "verified") throw new HttpError(403, "The receiving organisation is not currently verified.", "ORGANIZATION_NOT_VERIFIED");
+    if (job.status !== "collected" || !job.arrivedAt) throw new HttpError(409, "The assigned Helper must report arrival first.", "ARRIVAL_NOT_RECORDED");
+    if (job.inspectionConfirmedAt) {
+      if (job.inspectionNotes !== notes) throw new HttpError(409, "These acceptance observations are already recorded and cannot be changed. Contact operations to add a correction.", "INSPECTION_ALREADY_RECORDED");
+      return { inspectionConfirmedAt: job.inspectionConfirmedAt };
+    }
+    if (job.bestBeforeAt.getTime() <= Date.now()) throw new HttpError(409, "The food has expired. Do not accept it; contact operations.", "DONATION_EXPIRED");
+    const inspectionConfirmedAt = new Date();
+    await tx.update(deliveryJobs).set({ inspectionConfirmedAt, inspectionConfirmedBy: identity.id, inspectionNotes: notes, updatedAt: inspectionConfirmedAt }).where(eq(deliveryJobs.id, job.id));
+    await tx.insert(custodyEvents).values({ donationId: job.donationId, deliveryJobId: job.id, actorUserId: identity.id,
+      eventType: "receiver.inspection_confirmed", occurredAt: inspectionConfirmedAt, details: { notes } });
+    await audit(tx, identity, "receiver.inspection_confirmed", "delivery_job", job.id, undefined, {}, job.receiverOrganizationId);
+    return { inspectionConfirmedAt };
+  });
+}
+
 export async function getReceiverDeliveryCode(identity: Identity, jobId: string): Promise<{ code: string; expiresAt: Date }> {
   assertOperationsEnabled();
   return withUserContext(identity.id, async (tx) => {
@@ -749,10 +826,12 @@ export async function getReceiverDeliveryCode(identity: Identity, jobId: string)
       status: deliveryJobs.status,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       helperUserId: deliveryJobs.helperUserId,
+      arrivedAt: deliveryJobs.arrivedAt,
+      inspectionConfirmedAt: deliveryJobs.inspectionConfirmedAt,
     }).from(deliveryJobs).where(eq(deliveryJobs.id, jobId)).limit(1);
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
     requireMember(identity, job.receiverOrganizationId, ["owner", "manager", "operator"]);
-    if (job.status !== "collected") throw new HttpError(409, "The code is available only after the assigned Helper confirms collection.", "CODE_NOT_READY");
+    if (job.status !== "collected" || !job.arrivedAt || !job.inspectionConfirmedAt) throw new HttpError(409, "The code is available only after arrival and your recorded acceptance checks.", "CODE_NOT_READY");
     const [record] = await tx.select({
       encryptedCode: deliveryCodes.encryptedCode,
       expiresAt: deliveryCodes.expiresAt,
@@ -777,6 +856,8 @@ export async function verifyDelivery(identity: Identity, jobId: string, code: st
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       collectedAt: deliveryJobs.collectedAt,
+      arrivedAt: deliveryJobs.arrivedAt,
+      inspectionConfirmedAt: deliveryJobs.inspectionConfirmedAt,
       name: donations.name,
       quantity: donations.quantity,
       unit: donations.unit,
@@ -790,6 +871,7 @@ export async function verifyDelivery(identity: Identity, jobId: string, code: st
     const [helperProfile] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
     if (helperProfile?.status !== "active") throw new HttpError(403, "Your Helper approval is not active. Contact operations.", "HELPER_NOT_APPROVED");
     if (job.status !== "collected") throw new HttpError(409, "This delivery is not ready for verification.", "DELIVERY_STATE_INVALID");
+    if (!job.arrivedAt || !job.inspectionConfirmedAt) throw new HttpError(409, "Arrival and Receiver acceptance must be recorded before verification.", "INSPECTION_NOT_RECORDED");
     if (!job.collectedAt) throw new HttpError(500, "Collection history is incomplete. Do not complete delivery; contact operations.", "CUSTODY_DATA_INVALID");
     // Helpers cannot SELECT delivery_codes. This narrowly-scoped database function checks the keyed
     // candidate hash in constant time, increments attempts, and consumes a valid code atomically.
@@ -909,6 +991,9 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       claimedAt: deliveryJobs.claimedAt,
       claimExpiresAt: deliveryJobs.claimExpiresAt,
       collectedAt: deliveryJobs.collectedAt,
+      arrivedAt: deliveryJobs.arrivedAt,
+      inspectionConfirmedAt: deliveryJobs.inspectionConfirmedAt,
+      inspectionNotes: deliveryJobs.inspectionNotes,
       deliveredAt: deliveryJobs.deliveredAt,
       collectionCondition: deliveryJobs.collectionCondition,
       deliveryCondition: deliveryJobs.deliveryCondition,
@@ -944,6 +1029,7 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
 
     const generatorMember = canAccessOrganization(identity, job.generatorOrganizationId, ["owner", "manager", "operator", "viewer"]);
     const receiverMember = canAccessOrganization(identity, job.receiverOrganizationId, ["owner", "manager", "operator", "viewer"]);
+    const receiverOperator = canAccessOrganization(identity, job.receiverOrganizationId, ["owner", "manager", "operator"]);
     const assignedHelper = job.helperUserId === identity.id;
     const [helper] = identity.helperStatus === "active" ? await tx.select({ serviceAreaId: helperProfiles.serviceAreaId })
       .from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1) : [];
@@ -967,6 +1053,9 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       claimedAt: job.claimedAt,
       claimExpiresAt: job.claimExpiresAt,
       collectedAt: job.collectedAt,
+      arrivedAt: job.arrivedAt,
+      inspectionConfirmedAt: job.inspectionConfirmedAt,
+      inspectionNotes: assignedDetails ? job.inspectionNotes : null,
       deliveredAt: job.deliveredAt,
       collectionCondition: job.collectionCondition,
       deliveryCondition: job.deliveryCondition,
@@ -995,9 +1084,11 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       receipt: receipt ?? null,
       isAssignedToMe: assignedHelper,
       canClaim: Boolean(process.env.OPERATIONS_ENABLED === "true" && isEligibleOpenHelper && !assignedHelper && (job.status === "open" || (job.claimExpiresAt && job.claimExpiresAt.getTime() <= Date.now()))),
-      canPickup: assignedHelper && job.status === "assigned",
-      canVerify: assignedHelper && job.status === "collected",
-      canViewCode: receiverMember && job.status === "collected",
+      canPickup: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "assigned",
+      canReportArrival: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "collected" && !job.arrivedAt,
+      canConfirmInspection: process.env.OPERATIONS_ENABLED === "true" && receiverOperator && job.status === "collected" && Boolean(job.arrivedAt) && !job.inspectionConfirmedAt,
+      canVerify: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "collected" && Boolean(job.inspectionConfirmedAt),
+      canViewCode: process.env.OPERATIONS_ENABLED === "true" && receiverOperator && job.status === "collected" && Boolean(job.inspectionConfirmedAt),
       canReportIncident: generatorMember || receiverMember || assignedHelper || operations,
     };
   });
@@ -1248,7 +1339,7 @@ export async function decideHelper(identity: Identity, helperUserId: string, inp
       displayName: userProfiles.displayName,
     }).from(helperProfiles)
       .innerJoin(userProfiles, eq(userProfiles.userId, helperProfiles.userId))
-      .where(eq(helperProfiles.userId, helperUserId)).for("update");
+      .where(eq(helperProfiles.userId, helperUserId)).for("update", { of: helperProfiles });
     if (!helper) throw new HttpError(404, "Helper request not found.", "HELPER_NOT_FOUND");
     if (input.decision === "approve" && helper.status !== "pending") {
       throw new HttpError(409, "Only a pending Helper request can be approved.", "HELPER_REVIEW_CLOSED");

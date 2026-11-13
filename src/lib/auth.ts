@@ -56,7 +56,8 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 7,
     updateAge: 60 * 60 * 12,
-    cookieCache: { enabled: true, maxAge: 60 },
+    // Consult the database on every request so logout and revocation take effect immediately.
+    cookieCache: { enabled: false },
   },
   rateLimit: {
     enabled: true,

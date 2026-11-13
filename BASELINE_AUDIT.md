@@ -49,3 +49,13 @@ The base commit contains only a minimal README. The current working tree adds a 
 3. Verify the browser CORS/API request and provider data-use terms; keep the discovery entry isolated from partner workflows.
 4. Complete operator/food-safety/legal/privacy review and configure a scanner before enabling any real operations or production document uploads.
 5. Review dependency advisories and update the deprecated loader safely when an upstream-compatible release is available.
+
+## Follow-up audit — 2026-11-13, current branch
+
+Base `bafc7a76dc50a3b350ab44df0a7df4d1ed92283` already contains the application described above; the earlier audit's references to an empty base and six migrations are historical. Eight migrations are present. Existing product code has substantial delivery/auth/RLS functionality, but the end-to-end pilot and security claims remain unproven. This is not yet a complete or approved production platform. Preserve the existing work and keep real operations disabled.
+
+The supplied `public-apis/public-apis` repository is an API directory, not Annapurna Link or a database; its entries need independent evaluation. `multica-ai/andrej-karpathy-skills` is a coding-guidelines file, not a food-distribution application or infrastructure. Neither should be installed as the product or treated as proof of an integration. Existing restaurant-directory integration has an unresolved terms review; no additional API is necessary for the local database.
+
+This environment has Node 22 but no Docker or system PostgreSQL tools. The previous Windows launcher required Docker and reported success even after a readiness timeout. The Compose Dockerfile omitted `public` assets from the final image. A new isolated native PostgreSQL path and cautious launcher are provided, without weakening the database or fabricating service data. The local PostgreSQL test below used disposable PostgreSQL binaries separately installed outside the repository, not a new production dependency. Docker remains untested here.
+
+An additional real-database authentication smoke test found that Better Auth's 60-second cookie cache allowed an already logged-out session cookie to be replayed; the cache was disabled so revocation checks the database. Scope of this observation is the locally tested logout flow, not a full authentication security audit.

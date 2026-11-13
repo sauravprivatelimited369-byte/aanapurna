@@ -12,3 +12,5 @@ logs
 *.dump
 *.sql.gz
 *.tsbuildinfo
+
+.local-data
