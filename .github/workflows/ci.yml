@@ -261,6 +261,8 @@ jobs:
       - name: First start, authenticated test, and restart
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          trap { Write-Output "::error title=Managed launcher untrapped::$($_ | Out-String)".Replace("`r",'').Replace("`n",'%0A'); exit 1 }
           $diagnosticPath = Join-Path $PWD '.local-data/windows-launch-diagnostic.txt'
           New-Item -ItemType Directory -Force -Path '.local-data' | Out-Null
           Set-Content -Path $diagnosticPath -Value 'Windows launcher diagnostic not yet captured.'
@@ -327,6 +329,22 @@ jobs:
             throw
           } finally {
             if ($server -and !$server.HasExited) { & taskkill /PID $server.Id /T /F 2>$null | Out-Null }
+          }
+          # Every check above passed. taskkill reports a non-zero code when part of
+          # the process tree has already gone; do not let that fail the step.
+          Write-Output 'Windows one-click first start, authentication and restart persistence passed.'
+          exit 0
+      - name: Report sanitized Windows launcher diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          $files = @('.local-data/windows-launch-diagnostic.txt') + @(Get-ChildItem "$env:RUNNER_TEMP\launch-*" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+          foreach ($file in $files) {
+            $lines = Get-Content $file -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch 'password|secret|postgres://|_KEY=' } | Select-Object -Last 40
+            $text = (($lines -join "`n") + ' ')
+            if ($text.Length -gt 3500) { $text = $text.Substring($text.Length - 3500) }
+            $text = $text.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Output "::error title=$(Split-Path $file -Leaf)::$text"
           }
       - name: Preserve sanitized Windows launcher diagnostics
         if: always()
