@@ -64,7 +64,7 @@ The Compose sample intentionally keeps `OPERATIONS_ENABLED=false`. Its default `
 
 ## GitHub Pages frontend with a separately hosted app
 
-A static public frontend is published at **<https://sauravprivatelimited369-byte.github.io/aanapurna/>**. GitHub Pages serves the informational site only. It cannot run this repository's PostgreSQL-backed APIs, account flows, or worker, so those require a separately hosted instance of the full Next.js application.
+A static public frontend is configured for publication at **<https://sauravprivatelimited369-byte.github.io/aanapurna/>**. The repository's GitHub Pages environment currently allows deployment from `main` only, so this version will appear at that URL after the pull request is merged and the Pages deployment succeeds. GitHub Pages serves the informational site only. It cannot run this repository's PostgreSQL-backed APIs, account flows, or worker, so those require a separately hosted instance of the full Next.js application.
 
 The Pages workflow deploys the content in `github-pages/` on pushes to `main` or the active deployment branch. Until an application server is configured, account links stay disabled and the page explains why. To connect one, add the Actions repository variable `ANNAPURNA_BACKEND_URL` with the public HTTPS origin of the full app (for example, `https://app.your-domain.io`) in **Settings → Secrets and variables → Actions → Variables**. The workflow injects that URL when it publishes; the account links then open the hosted app. Do not put secrets in this public variable. Follow the deployment steps below to host the backend and database; DNS and a domain you control are still required.
 
