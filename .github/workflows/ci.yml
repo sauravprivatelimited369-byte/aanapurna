@@ -228,8 +228,18 @@ jobs:
               Start-Sleep -Seconds 1
             }
             if (!$ready) { throw 'Windows launcher did not start a healthy, operations-disabled server.' }
-            npm run test:local-auth
-            if ($LASTEXITCODE -ne 0) { throw 'Windows authentication smoke test failed.' }
+            $authOutput = & npm.cmd run test:local-auth 2>&1
+            $authResult = $LASTEXITCODE
+            if ($authResult -ne 0) {
+              $diagnostic = ($authOutput | Out-String).Trim()
+              if ($diagnostic.Length -gt 1800) { $diagnostic = $diagnostic.Substring(0, 1800) }
+              throw "Windows authentication smoke test failed: $diagnostic"
+            }
+            Write-Output 'Windows local authentication smoke test passed.'
+          } catch {
+            $diagnostic = $_.Exception.Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows smoke diagnostic::$diagnostic"
+            throw
           } finally {
             & taskkill /PID $server.Id /T /F 2>$null | Out-Null
           }
