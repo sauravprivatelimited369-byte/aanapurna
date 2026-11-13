@@ -62,7 +62,13 @@ docker compose down -v
 
 The Compose sample intentionally keeps `OPERATIONS_ENABLED=false`. Its default `FILE_SCAN_MODE=disabled` also blocks private uploads in production-mode containers until an antivirus scanner is configured. Do not enable live donations by changing a flag alone.
 
-## Publish on a short custom domain
+## GitHub Pages frontend with a separately hosted app
+
+A static public frontend is published at **<https://sauravprivatelimited369-byte.github.io/aanapurna/>**. GitHub Pages serves the informational site only. It cannot run this repository's PostgreSQL-backed APIs, account flows, or worker, so those require a separately hosted instance of the full Next.js application.
+
+The Pages workflow deploys the content in `github-pages/` on pushes to `main` or the active deployment branch. Until an application server is configured, account links stay disabled and the page explains why. To connect one, add the Actions repository variable `ANNAPURNA_BACKEND_URL` with the public HTTPS origin of the full app (for example, `https://app.your-domain.io`) in **Settings → Secrets and variables → Actions → Variables**. The workflow injects that URL when it publishes; the account links then open the hosted app. Do not put secrets in this public variable. Follow the deployment steps below to host the backend and database; DNS and a domain you control are still required.
+
+## Publish the full app on a short custom domain
 
 The same application can run at `localhost` for development or behind a public domain. A short `.io` address is **not** created automatically: you must own/register the domain and point its DNS to a server you control. This repository includes a Docker Compose + Caddy deployment overlay for a single Linux host; Caddy obtains and renews HTTPS certificates automatically once DNS is correct and ports 80/443 reach that host.
 
