@@ -261,14 +261,18 @@ jobs:
       - name: First start, authenticated test, and restart
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          trap { Write-Output "::error title=Managed launcher untrapped::$($_ | Out-String)".Replace("`r",'').Replace("`n",'%0A'); exit 1 }
           $diagnosticPath = Join-Path $PWD '.local-data/windows-launch-diagnostic.txt'
           New-Item -ItemType Directory -Force -Path '.local-data' | Out-Null
           Set-Content -Path $diagnosticPath -Value 'Windows launcher diagnostic not yet captured.'
           # PostgreSQL refuses elevated Windows processes. Exercise a standard
           # user just as a normal double-click would, not the elevated CI account.
+          Write-Output '::notice::stage: begin'
           $username = 'annapurna-ci'
           $temporaryPassword = ConvertTo-SecureString ([guid]::NewGuid().ToString() + 'Aa1!') -AsPlainText -Force
           New-LocalUser -Name $username -Password $temporaryPassword -PasswordNeverExpires | Out-Null
+          Write-Output '::notice::stage: user created'
           $credential = [System.Management.Automation.PSCredential]::new(".\$username", $temporaryPassword)
           & icacls $PWD /grant "${username}:(OI)(CI)M" /T /C /Q | Out-Null
           New-Item -ItemType Directory -Force -Path '.local-data/npm-cache','.local-data/tmp' | Out-Null
@@ -276,6 +280,7 @@ jobs:
           $env:npm_config_cache = Join-Path $PWD '.local-data/npm-cache'
           $env:TEMP = Join-Path $PWD '.local-data/tmp'
           $env:TMP = $env:TEMP
+          Write-Output '::notice::stage: acl done'
           function Wait-Ready {
             $deadline = (Get-Date).AddSeconds(120)
             while ((Get-Date) -lt $deadline) {
@@ -307,10 +312,13 @@ jobs:
           try {
             $server = Start-Launcher 'first'
             Wait-Ready
+            Write-Output '::notice::stage: first start healthy'
             npm run test:local-auth
             if ($LASTEXITCODE -ne 0) { throw 'Managed local authentication smoke failed.' }
+            Write-Output '::notice::stage: auth passed'
             Stop-Launcher $server
             $server = Start-Launcher 'restart'
+            Write-Output '::notice::stage: restarted'
             Wait-Ready
             @'
           const {Client} = require('pg');
@@ -327,6 +335,18 @@ jobs:
             throw
           } finally {
             if ($server -and !$server.HasExited) { & taskkill /PID $server.Id /T /F 2>$null | Out-Null }
+          }
+      - name: Report sanitized Windows launcher diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          $files = @('.local-data/windows-launch-diagnostic.txt') + @(Get-ChildItem "$env:RUNNER_TEMP\launch-*" -ErrorAction SilentlyContinue | ForEach-Object FullName)
+          foreach ($file in $files) {
+            $lines = Get-Content $file -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch 'password|secret|postgres://|_KEY=' } | Select-Object -Last 40
+            $text = (($lines -join "`n") + ' ')
+            if ($text.Length -gt 3500) { $text = $text.Substring($text.Length - 3500) }
+            $text = $text.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Output "::error title=$(Split-Path $file -Leaf)::$text"
           }
       - name: Preserve sanitized Windows launcher diagnostics
         if: always()
