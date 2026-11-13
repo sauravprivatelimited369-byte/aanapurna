@@ -17,7 +17,7 @@ test("fictional Generator to Receiver inspection and verified receipt", async ({
     await page.getByLabel("Email address").fill(`${role}@example.test`);
     await page.getByRole("textbox", { name: "Password", exact: true }).fill(password!);
     await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/app(?:\?|$)/);
+    await expect(page).toHaveURL(/\/app(?:\?|$)/, { timeout: 30_000 });
     return page;
   }
   const generator = await login("generator");

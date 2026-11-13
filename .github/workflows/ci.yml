@@ -14,7 +14,7 @@ concurrency:
 jobs:
   verify:
     name: Verify application
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -57,7 +57,7 @@ jobs:
 
   native-postgres:
     name: Native PostgreSQL and authentication smoke test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
@@ -110,7 +110,7 @@ jobs:
 
   browser-workflow:
     name: Disposable PostgreSQL browser workflow
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
@@ -151,7 +151,7 @@ jobs:
 
   compose-smoke:
     name: Docker Compose build and health smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -160,7 +160,19 @@ jobs:
           node-version-file: .nvmrc
       - run: npm run setup:env
       - name: Build and start local containers
-        run: docker compose up --build --detach --wait --wait-timeout 180
+        shell: bash
+        run: |
+          set +e
+          docker compose up --build --detach --wait --wait-timeout 180 > "$RUNNER_TEMP/compose-smoke.log" 2>&1
+          result=$?
+          if [ "$result" -ne 0 ]; then
+            while IFS= read -r line; do
+              line="${line//'%'/'%25'}"; line="${line//$'\r'/'%0D'}"
+              echo "::error title=Compose diagnostic::$line"
+            done < <(tail -n 35 "$RUNNER_TEMP/compose-smoke.log")
+            exit "$result"
+          fi
+          echo 'Compose stack started.'
       - name: Check database role and app health
         run: |
           docker compose run --rm web npm run db:check

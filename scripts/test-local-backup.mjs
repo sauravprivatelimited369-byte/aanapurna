@@ -38,7 +38,12 @@ try {
   Object.assign(env, { PGHOST: source.hostname, PGPORT: source.port || '5432', PGUSER: decodeURIComponent(source.username), PGPASSWORD: decodeURIComponent(source.password), PGSSLMODE: 'disable' });
   function run(binary, args) {
     const result = spawnSync(binary, args, { env, encoding: 'utf8', windowsHide: true });
-    if (result.error || result.status !== 0) throw new Error(`${binary} failed; check the installed PostgreSQL client version and server logs.`);
+    if (result.error || result.status !== 0) {
+      // Arguments and connection data are supplied separately. Redact the temporary
+      // password defensively before printing bounded diagnostics from the client.
+      const detail = (result.stderr || result.error?.message || 'unknown error').replaceAll(decodeURIComponent(source.password), '[redacted]').slice(0, 1200);
+      throw new Error(`${binary} failed: ${detail}`);
+    }
   }
   run(process.env.PG_DUMP_BIN || 'pg_dump', ['--format=custom', '--file', file, '--dbname', 'annapurna_link_test']);
   await sourceDb.query(`CREATE DATABASE ${pg.escapeIdentifier(restoredName)} TEMPLATE template0`);
