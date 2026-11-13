@@ -30,6 +30,50 @@ The audit and implementation tracker in [`UI_UX_AUDIT.md`](UI_UX_AUDIT.md) and [
 - Nodemailer-compatible SMTP; Mailpit for local email capture
 - Vitest, PGlite migration/security checks, and Playwright browser tests
 
+## Windows: start everything with `start.bat`
+
+On a fresh Windows x64 checkout, install **Node.js 22 with npm**, then double-click `start.bat` normally (**do not** use “Run as administrator”; PostgreSQL refuses elevated Windows accounts). Internet access is needed the first time for the locked npm dependencies and PostgreSQL binaries. The launcher generates local secrets, prepares its own real PostgreSQL 17 database, runs migrations, then starts the web app, worker and a loopback-only **test email inbox**. Open <http://localhost:3000> when ready; press Ctrl+C to stop. Docker and a separately installed PostgreSQL server are not required for this new managed setup. Ports **3000, 2526 and 55432** must be free. The managed PostgreSQL dependency is a pinned beta package for local development, not production infrastructure.
+
+Your local database and private test inbox are stored under `.local-data/`; `.env` and `.local-data/managed-postgres.json` contain local secrets and must remain private. Keep all three together: deleting/regenerating `.env` or the managed settings can make the existing database inaccessible. Back up needed local data before changing either; do not commit or share the files. Windows file permissions depend on your account and directory ACLs. There is no automatic backup or production recovery guarantee.
+
+If `.env` already exists without managed settings, the launcher preserves it and uses the **existing** native configuration instead: its PostgreSQL instance must already be running and migrated as described below. If the managed port is occupied, settings are missing, or setup is incomplete, the launcher stops rather than overwrite data. Do not delete any database to make it start. The first run may take several minutes; if npm installation fails, check Node/npm and network access and retry.
+
+**Safety:** `start.bat` is local development only, leaves real operations disabled, and sends no real email. The sink writes one-time links to `.local-data/inbox.eml`; keep that file private. Gmail/provider settings require the separate operator steps below and are not used by this local launcher.
+
+## Local setup without Docker
+
+Docker is **optional** for local development. The Windows launcher above provides a managed local PostgreSQL server; the manual path below uses a separately installed one: the app cannot safely replace its database with GitHub, browser storage, or static files. These steps are for a **fresh, isolated development PostgreSQL instance**, not a shared or production server.
+
+1. Install Node.js 22 and PostgreSQL (17 recommended, running on `127.0.0.1:5432`). During PostgreSQL installation, set a password for the local `postgres` administrator; do not reuse a production database. Make sure ports 3000, 5432 and 2526 are free. PostgreSQL must remain running while using the application.
+2. From the repository directory, install dependencies and generate the ignored local settings file:
+
+   ```sh
+   npm ci
+   npm run setup:env
+   ```
+
+   The generator will not overwrite an existing `.env`. Its generated local passwords must match the database; do not delete or regenerate this file while keeping the same database.
+3. Set `PG_ADMIN_URL` **temporarily** to your own local PostgreSQL superuser connection URL, e.g. `postgres://postgres:<URL-encoded-password>@127.0.0.1:5432/postgres`. Do not literally type angle brackets; URL-encode special characters in the password. Do not commit the URL or paste it in chat. To avoid storing it in shell history, on macOS/Linux enter it using `read -rs PG_ADMIN_URL; export PG_ADMIN_URL` (input is hidden). On PowerShell use `$env:PG_ADMIN_URL = [System.Net.NetworkCredential]::new('', (Read-Host 'Local PostgreSQL admin URL' -AsSecureString)).Password`. The URL is held only in the current shell.
+4. Create the isolated database and roles **once**, then run the checked-in migrations:
+
+   ```sh
+   npm run local:db:setup
+   npm run local:migrate
+   ```
+
+   Remove the administrator URL from your shell afterward (`unset PG_ADMIN_URL` on macOS/Linux, `Remove-Item Env:PG_ADMIN_URL` on PowerShell). Bootstrap refuses existing Annapurna databases or roles rather than overwrite them. It creates a local superuser migrator, as the Compose PostgreSQL image does; the app, authentication and worker use separate restricted roles. If setup partially fails, inspect the server and resolve the error deliberately; never drop databases or roles without a backup. Do not use this bootstrap on shared infrastructure.
+5. Start the local app, worker and a **test-only** loopback email sink together:
+
+   ```sh
+   npm run local:start
+   ```
+
+   Open <http://localhost:3000>. On Windows, an existing manual setup can instead use `start.bat`; it will not replace or automatically start your separately managed PostgreSQL instance. Stop with Ctrl+C. This command checks the restricted database role and migrations before starting; it refuses enabled real operations and nonlocal database URLs. If startup fails, read the diagnostic: check PostgreSQL, `.env`, migrations and port conflicts.
+
+The development mail sink writes verification and password-reset messages to `.local-data/inbox.eml` rather than Mailpit. Open it in a text editor to find the latest one-time link. This is a deliberately limited test adapter, not real email: it is bound to loopback, appends messages, has no web inbox and should contain only fictional test data. The file contains sensitive links, is ignored by Git and must be kept private and deleted when no longer needed. To exercise the real local signup/login/reset and revocation paths with a synthetic `example.test` account, leave `local:start` running and execute `RUN_LOCAL_AUTH_TEST=true npm run test:local-auth` (PowerShell: `$env:RUN_LOCAL_AUTH_TEST='true'; npm run test:local-auth; Remove-Item Env:RUN_LOCAL_AUTH_TEST`). Run only against a throwaway database; the test leaves its fictional account in that database. Rate limits apply; wait a minute if repeated runs hit them.
+
+For a first local operations administrator, create and verify a fictional test account, then run the documented bootstrap command below via the host with `node --env-file=.env --import tsx scripts/bootstrap-admin.ts` and the three bootstrap environment variables set privately. This does not approve food operations. Docker Compose/Mailpit remains the alternative below and is required for the supplied container deployment scaffold, not for opening the native development app.
+
 ## Local Compose setup
 
 Prerequisites: Docker Engine with the Compose plugin, Git, and Node.js 22 (Node is needed for the local environment generator and optional host checks).
@@ -84,7 +128,7 @@ The same application can run at `localhost` for development or behind a public d
    FILE_SCAN_MODE=disabled
    ```
 
-   Use the exact provider URL format documented by your SMTP service, keep `.env` private, and never commit it. Use a real transactional mail provider; the local Mailpit default is for development only.
+   Use the exact provider URL format documented by your SMTP service, keep `.env` private, and never commit it. Use a real transactional mail provider; the local Mailpit default is for development only. For an authenticated external `smtp://` (STARTTLS required) or `smtps://` provider URL, run `RUN_SMTP_VERIFY=true npm run smtp:verify` on the intended host (PowerShell: `$env:RUN_SMTP_VERIFY='true'; npm run smtp:verify; Remove-Item Env:RUN_SMTP_VERIFY`). The explicit probe checks TLS and authentication without sending mail by default or logging credentials; it does not establish sender-domain verification, inbox delivery, retries or provider compliance. To request exactly one test message to your own inbox, set `RUN_SMTP_SEND_TEST=true` and `SMTP_TEST_TO` to that single operator-controlled address in addition to `RUN_SMTP_VERIFY=true`. Provider acceptance is not proof of inbox delivery; check the inbox and spam folder separately. Verify worker/outbox delivery and retries separately before launch. The probe requires hostname, credentials and no URL query options; it does not support every provider configuration.
 3. Start the complete stack (web, PostgreSQL, migrations, mail worker, and HTTPS proxy):
 
    ```sh
@@ -95,6 +139,15 @@ The same application can run at `localhost` for development or behind a public d
 4. Visit `https://your-short-domain.io`. The local workflow remains unchanged at `http://localhost:3000`; choose either local run or hosted run against the same codebase. Use `docker compose down` to stop services without removing data. Back up PostgreSQL and private-upload volumes using an off-host, tested restore procedure.
 
 This is a deployment scaffold, **not a launch approval**. The public site and account pages can be hosted, but production auth/email, database recovery, host hardening, upload scanning, monitoring, privacy/legal review, and role-specific workflows still need validation. Keep live operations disabled until all launch gates are explicitly approved; do not publish real personal information or enable donations just to make the site appear complete. A custom domain must be purchased/configured by its owner—this code cannot register a short `.io` domain or create an external server for you.
+
+## Optional Gmail SMTP for an operator-controlled test
+
+Gmail is not a substitute for an approved transactional-mail service, and account ownership or an SMTP acceptance does not authorize food operations. To try Gmail on a machine that can reach Google's SMTP servers:
+
+1. Secure your Google account with 2-Step Verification. Google says [app passwords](https://support.google.com/mail/answer/185833) may be available for apps that do not support Google sign-in, but are not recommended in most cases; availability depends on account restrictions. This application currently supports authenticated SMTP, not Google OAuth. Never paste an app password, Google password, OAuth token or verification code into chat, GitHub, or an issue.
+2. Generate local `.env` with `npm run setup:env` only if you do not already have one. Edit the ignored `.env` **privately** on the intended host. Set `SMTP_FROM` to your Gmail address and `SMTP_URL` using `smtps://` with your full Gmail address as the username, the app password as the password, `smtp.gmail.com` as the host, and port `465`. URL-encode special characters in the username and password (for example, encode `@` as `%40`); use the app password without display spaces. Do not commit `.env` or send it to anyone. Google's SMTP host and ports are documented [here](https://support.google.com/a/answer/176600). The local `npm run local:start` deliberately overrides SMTP to its test-only sink; it does **not** send Gmail.
+3. First check connectivity without sending: `RUN_SMTP_VERIFY=true npm run smtp:verify`. To send a single opt-in diagnostic message to your own address, run `RUN_SMTP_VERIFY=true RUN_SMTP_SEND_TEST=true SMTP_TEST_TO=your-address@example.test npm run smtp:verify`, replacing the example with your controlled Gmail address. PowerShell: `$env:RUN_SMTP_VERIFY='true'; $env:RUN_SMTP_SEND_TEST='true'; $env:SMTP_TEST_TO='your-address@example.test'; npm run smtp:verify; Remove-Item Env:RUN_SMTP_VERIFY,Env:RUN_SMTP_SEND_TEST,Env:SMTP_TEST_TO`. The test contains no user records or login links. Inspect your inbox and spam; the SMTP server accepting the message does not guarantee delivery. Connection tests do not validate worker retries, provider limits, policy, or production deliverability.
+4. For a deployed service, privately configure the worker and web environment with the same provider settings, require TLS, and test account verification/reset emails and failure/retry behavior with an authorized test user. Review provider quotas, terms, sender identity and monitoring. Prefer a dedicated transactional provider and organization-controlled sender for real deployments. Revoke test app passwords when no longer needed.
 
 ## First operations administrator
 
@@ -124,7 +177,38 @@ npm run build
 npx playwright install chromium
 ```
 
-The GitHub Actions workflow in `.github/workflows/ci.yml` runs typecheck, lint, unit/migration tests, the public browser suite, dependency audits and a production build using generated ephemeral local-only configuration; it needs no repository secrets. The opt-in real-PostgreSQL/auth workflows are not run in CI. `npm run test:e2e` starts the Next.js dev server automatically (and reuses a running local server outside CI). `setup:env` creates local config/secrets only; it does not start PostgreSQL or provide real records. The migration/security suite uses PGlite, a PostgreSQL-compatible embedded test engine. It does **not** replace integration tests against a real PostgreSQL server. The UI verification also used an isolated, disposable local PostgreSQL database; this does not validate Docker Compose or production services. Docker Compose has been authored but could not be run in this environment because Docker Engine/Compose is unavailable; validate Compose on a Docker-capable machine before relying on it.
+The GitHub Actions workflow in `.github/workflows/ci.yml` runs typecheck, lint, unit/migration tests, the public browser suite, dependency audits and a production build using generated ephemeral local-only configuration; it needs no repository secrets. Separate CI jobs are defined for disposable real-PostgreSQL/domain/auth checks, the authenticated browser handover, a Compose build/health smoke, and a Windows native launcher/authentication check. All five jobs passed on GitHub-hosted runners in [run 43392655106](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43392655106) at commit `584b48a`; results are limited to the synthetic smoke tests described below. `npm run test:e2e` starts the Next.js dev server automatically (and reuses a running local server outside CI). `setup:env` creates local config/secrets only; it does not start PostgreSQL or provide real records. The migration/security suite uses PGlite, a PostgreSQL-compatible embedded test engine. It does **not** replace integration tests against a real PostgreSQL server. The UI verification also used an isolated, disposable local PostgreSQL database; this does not validate Docker Compose or production services. Docker is unavailable in this sandbox, but the disposable Compose image/build/startup/health smoke passed on a GitHub-hosted Linux runner; validate your own host and deployment before relying on it.
+
+### Real PostgreSQL domain integration test
+
+This test creates fictional verified partners, Helpers and a fictitious approved food policy. It briefly enables operations **only in its own test process**. Never run it against a normal development, staging, pilot or production database; the database must be empty, local, disposable and named `annapurna_link_test`. Do not reuse it for real operations. The script checks these conditions and refuses to overwrite populated tables. It leaves its test data in place, so a second run requires a new empty isolated database. It does not test browser authentication or HTTP routes.
+
+On a **separate disposable local PostgreSQL instance** and a fresh repository working directory, run `npm ci` and `npm run setup:env`. Before database setup, replace `annapurna_link` with `annapurna_link_test` in the generated `.env` (`POSTGRES_DB` and all four database URLs). Configure the temporary local `PG_ADMIN_URL` as described above, then:
+
+```sh
+npm run local:db:setup
+npm run local:migrate
+RUN_LOCAL_DOMAIN_TEST=true npm run test:local-domain
+```
+
+PowerShell: `$env:RUN_LOCAL_DOMAIN_TEST='true'; npm run test:local-domain; Remove-Item Env:RUN_LOCAL_DOMAIN_TEST`. The local setup refuses to overwrite existing roles; use a separate disposable PostgreSQL instance if the default Annapurna roles already exist. Drop that isolated test instance only after verifying it has no data you need. CI runs this test, the backup drill and the auth smoke test on a disposable PostgreSQL 16 service; these passed in the hosted run linked above.
+
+The test exercises domain services using synthetic identities and the restricted application database role: onboarding/review, matching, competing Receiver reservations and Helper claims, pickup-window enforcement, assigned-Helper arrival, Receiver acceptance/inspection, OTP visibility/lock/replay, receipt and impact uniqueness, and a safety hold. It is **not** a substitute for browser end-to-end, complete RLS/security testing, human safety review, or production approval. `OPERATIONS_ENABLED=false` remains the default.
+
+### Disposable PostgreSQL backup/restore drill
+
+After running the domain integration test on a dedicated test instance, use matching-version `pg_dump` and `pg_restore` binaries on PATH and run `RUN_LOCAL_BACKUP_TEST=true npm run test:local-backup`. This creates and cleans up a separate throwaway restore database, refuses an existing target, and checks fictional records and selected permissions. See [`DATABASE.md`](DATABASE.md) for safety requirements and limitations; this is not a production backup or a private-upload recovery test.
+
+### Disposable multi-role browser workflow
+
+The separate `test:local-workflow` fixture runner tests real sign-ins and a synthetic Generator → Receiver → Helper handover in Chromium, including arrival, Receiver inspection, wrong-code handling, verification and receipt/impact. It seeds fictional verified organisations, Helpers, and an approved *test* policy directly in a fresh database. It does not demonstrate real approval, food safety, delivery, email or production readiness. **Use only a disposable, empty, local `annapurna_link_test` database** prepared and migrated as in the preceding section, with `OPERATIONS_ENABLED=false`, `APP_URL=http://localhost:3000` and port 3000 unused. The runner starts its own server bound to loopback and enables operations only for that subprocess. Do not expose it or use real accounts/data. A populated test database is refused; use a fresh disposable instance for every run and never drop a database without confirming it contains nothing needed.
+
+```sh
+npx playwright install chromium
+RUN_LOCAL_WORKFLOW_TEST=true npm run test:local-workflow
+```
+
+PowerShell: `$env:RUN_LOCAL_WORKFLOW_TEST='true'; npm run test:local-workflow; Remove-Item Env:RUN_LOCAL_WORKFLOW_TEST`. Traces, screenshots and video are disabled for this test, but Playwright failure diagnostics may still contain page content or fictional one-time codes. Keep `test-results/` private, delete it after testing, and never upload it as an artifact. The browser uses a random fixture password provided only to the test subprocess. An optional `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and JSON array `PLAYWRIGHT_CHROMIUM_ARGS` can select a compatible locally installed browser; custom binaries/sandbox settings have their own security and compatibility risks. The standard Playwright install is preferred.
 
 ### Optional isolated PostgreSQL and authenticated browser checks
 
@@ -133,8 +217,8 @@ The opt-in integration tests use a throwaway, migrated local database with `OPER
 1. Configure the four local database URLs and apply/check migrations:
 
    ```sh
-   npm run db:migrate
-   npm run db:check
+   npm run local:migrate
+   node --env-file=.env --import tsx scripts/check-db.ts
    ```
 
 2. Start the test-only SMTP sink; it binds to `127.0.0.1` and writes captured mail to a mode-0600 local file. Playwright starts the app automatically (or reuses a local dev server):
@@ -173,4 +257,4 @@ To run the web server directly on the host, provide local PostgreSQL URLs for `D
 
 ## Safety and production status
 
-This repository is not approved for a real-world pilot or production use. Real food operations require a human-approved policy, partner verification and local legal/privacy/security review. Email credentials, domain/TLS, private-storage scanner, backup/restore and real PostgreSQL integration are additional deployment gates. See [`BUILD_STATUS.md`](BUILD_STATUS.md), [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) and [`DECISIONS/ADR-0001-public-restaurant-discovery.md`](DECISIONS/ADR-0001-public-restaurant-discovery.md).
+This repository is not approved for a real-world pilot or production use. Real food operations require a human-approved policy, partner verification and local legal/privacy/security review. Email credentials, domain/TLS, private-storage scanner, backup/restore and real PostgreSQL integration are additional deployment gates. See [`LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md), [`BUILD_STATUS.md`](BUILD_STATUS.md), [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) and [`DECISIONS/ADR-0001-public-restaurant-discovery.md`](DECISIONS/ADR-0001-public-restaurant-discovery.md).

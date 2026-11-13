@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   donationCreateSchema,
   helperDecisionSchema,
+  inspectionSchema,
   onboardingSchema,
   policyDraftSchema,
   serviceAreaSchema,
@@ -81,6 +82,13 @@ describe("request validation", () => {
     });
     expect(policy.success).toBe(true);
     expect(policyDraftSchema.safeParse({ version: "bad/version", rules: {} }).success).toBe(false);
+  });
+
+  it("requires a Receiver's explicit acceptance and recorded inspection observations", () => {
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "Packaging checked" }).success).toBe(true);
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: false, notes: "Packaging checked" }).success).toBe(false);
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "  " }).success).toBe(false);
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "ok", ignored: true }).success).toBe(false);
   });
 
   it("requires an IANA-like timezone string and uppercase ISO country code shape", () => {

@@ -11,6 +11,8 @@ const migrationFiles = [
   "20261112103924_better_auth_rate_limit_id.sql",
   "20261112164011_better_auth_rate_limit_text_id.sql",
   "20261112165901_public_impact_summary.sql",
+  "20261113073000_fix_donation_helper_rls.sql",
+  "20261113074000_arrival_inspection_gate.sql",
 ];
 
 let database: PGlite;

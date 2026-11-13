@@ -22,16 +22,22 @@ RUN DATABASE_URL=postgres://build:build@127.0.0.1:5432/build \
     APP_URL=https://build.invalid \
     npm run build
 
-FROM base AS production-dependencies
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# Install the lockfile first, then prune. A fresh npm ci --omit=dev can retain
+# Better Auth's optional drizzle-kit peer but omit its matching platform esbuild,
+# causing a version mismatch at install time.
+FROM dependencies AS production-dependencies
+RUN npm prune --omit=dev && npm cache clean --force
 
 FROM base AS runtime
 ENV NODE_ENV=production
+# Next standalone otherwise binds to Docker's injected container hostname,
+# which prevents loopback health checks from connecting.
+ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY --from=builder --chown=node:node /app/.next/standalone ./
 COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/src ./src
 COPY --from=builder --chown=node:node /app/scripts ./scripts

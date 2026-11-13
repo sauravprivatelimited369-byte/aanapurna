@@ -57,6 +57,20 @@
       "when": 1794502741000,
       "tag": "20261112165901_public_impact_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794555000000,
+      "tag": "20261113073000_fix_donation_helper_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794555600000,
+      "tag": "20261113074000_arrival_inspection_gate",
+      "breakpoints": true
     }
   ]
 }

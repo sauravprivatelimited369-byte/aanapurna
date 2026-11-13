@@ -28,3 +28,6 @@ logs/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Local development email and other private runtime data
+.local-data/

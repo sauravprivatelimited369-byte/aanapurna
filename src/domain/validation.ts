@@ -88,6 +88,11 @@ export const pickupSchema = z.object({
   condition: safeText(500),
 }).strict();
 
+export const inspectionSchema = z.object({
+  acceptanceConfirmed: z.literal(true),
+  notes: safeText(500),
+}).strict();
+
 export const verifyDeliverySchema = z.object({
   code: z.string().regex(/^\d{6}$/),
 }).strict();

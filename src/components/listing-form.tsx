@@ -85,11 +85,11 @@ export function ListingForm({ organizations, enabled }: { organizations: Generat
     <section className="app-card app-card--span-5">
       <div className="app-card-title"><div><h2>Time &amp; handling</h2><p>Times are entered in your device&apos;s local timezone.</p></div></div>
       <div className="form-stack">
-        <div className="form-field"><label htmlFor="preparedAt">Prepared at</label><input className="form-control" id="preparedAt" name="preparedAt" type="datetime-local" required /></div>
-        <div className="form-field"><label htmlFor="packedAt">Packed at <span className="form-hint">(if applicable)</span></label><input className="form-control" id="packedAt" name="packedAt" type="datetime-local" /></div>
-        <div className="form-field"><label htmlFor="bestBeforeAt">Use-by / best-before</label><input className="form-control" id="bestBeforeAt" name="bestBeforeAt" type="datetime-local" required /></div>
-        <div className="form-field"><label htmlFor="pickupEarliestAt">Collection from</label><input className="form-control" id="pickupEarliestAt" name="pickupEarliestAt" type="datetime-local" required /></div>
-        <div className="form-field"><label htmlFor="pickupLatestAt">Collect by</label><input className="form-control" id="pickupLatestAt" name="pickupLatestAt" type="datetime-local" required /></div>
+        <div className="form-field"><label htmlFor="preparedAt">Prepared at</label><input className="form-control" id="preparedAt" name="preparedAt" type="datetime-local" step="1" required /></div>
+        <div className="form-field"><label htmlFor="packedAt">Packed at <span className="form-hint">(if applicable)</span></label><input className="form-control" id="packedAt" name="packedAt" type="datetime-local" step="1" /></div>
+        <div className="form-field"><label htmlFor="bestBeforeAt">Use-by / best-before</label><input className="form-control" id="bestBeforeAt" name="bestBeforeAt" type="datetime-local" step="1" required /></div>
+        <div className="form-field"><label htmlFor="pickupEarliestAt">Collection from</label><input className="form-control" id="pickupEarliestAt" name="pickupEarliestAt" type="datetime-local" step="1" required /></div>
+        <div className="form-field"><label htmlFor="pickupLatestAt">Collect by</label><input className="form-control" id="pickupLatestAt" name="pickupLatestAt" type="datetime-local" step="1" required /></div>
         <div className="form-field"><label htmlFor="storageInstructions">Storage / handling instructions</label><textarea className="form-control" id="storageInstructions" name="storageInstructions" required maxLength={500} /></div>
         <div className="form-field"><label htmlFor="temperatureRequirement">Temperature requirement <span className="form-hint">(if applicable)</span></label><input className="form-control" id="temperatureRequirement" name="temperatureRequirement" maxLength={200} /></div>
       </div>
