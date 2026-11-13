@@ -1,5 +1,20 @@
 # Build status
 
+## Windows one-click startup — 2026-11-13
+
+- `start.bat` now checks Node.js 22/npm, installs locked dependencies when needed, and for a fresh checkout provisions a persistent, loopback-only PostgreSQL 17 instance, local roles, migrations, web app, worker and test-only inbox. Existing `.env` files are not overwritten and still use the existing separately managed database. Operations remain disabled; Gmail is not used by the local launcher.
+- A real PostgreSQL 17 managed first-start, local auth/email-sink smoke and persistence after restart passed in the Linux sandbox by directly running the same Node coordinator. Lint/typecheck and 57 unit/migration/safety tests passed locally. The added Windows first-start/restart CI job is defined but its result is not yet known; Windows behavior must be observed on GitHub before claiming it passed. The bundled local PostgreSQL package is a beta development dependency and has not been assessed for production.
+- Preserve `.env`, `.local-data/managed-postgres.json` and `.local-data/postgres` together and protect them with local OS permissions. This is not a production backup or authorization for real operations. Internet and Node.js 22/npm are required for initial setup; ports 3000, 2526 and 55432 must be free. A partial/missing setup or pre-existing settings are not overwritten.
+
+---
+
+## Gmail operator test preparation — 2026-11-13
+
+- Prepared an opt-in SMTP test that can send one diagnostic message to a single operator-controlled address after TLS and authentication. By default it sends nothing; it never prints addresses, credentials, SMTP responses, or message bodies. Fake-transport unit tests cover consent, TLS configuration, recipient validation and provider rejection. No actual Gmail authentication or message was attempted: an SMTP-over-TLS handshake to smtp.gmail.com:465 was reset by the sandbox network, and no provider credentials were configured. The account address provided in conversation was not added to the public repository.
+- Lint, typecheck and 53 unit/migration tests pass locally. For a real test the account owner must privately configure their own provider credentials on a host with network access and check their inbox, as described in `README.md`. Delivery, worker retries and sender verification remain unverified. `OPERATIONS_ENABLED=false`; a mailbox address does not grant operational, partner, legal or food-safety approval.
+
+---
+
 ## GitHub-hosted verification — 2026-11-13
 
 GitHub Actions [run 43393468547](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43393468547) at commit `752e0c8` **passed all five jobs**: application checks/build and public browsers (11 passed, 3 opt-in skips), isolated real PostgreSQL 16 domain/auth plus custom-format backup/restore drill, PostgreSQL 17 authenticated multi-role browser workflow, Docker Compose image/build/startup/database-role/health/Mailpit smoke with PostgreSQL 17, and Windows 2025 native PostgreSQL/start.bat/authentication smoke. These are synthetic tests, not production or legal certification. GitHub emitted action-runtime deprecation warnings. An intervening run ([43393077170](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43393077170)) failed the Windows launcher/auth smoke step without a detailed annotation, although earlier runs and the subsequent run passed. Diagnostic annotations were added; the intermittent failure's cause is not confirmed and should be investigated if it recurs.

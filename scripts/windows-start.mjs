@@ -1,0 +1,114 @@
+// Managed, loopback-only PostgreSQL for local development. Never touches existing DBs.
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import EmbeddedPostgres from 'embedded-postgres';
+import pg from 'pg';
+
+const port = 55432;
+const marker = resolve('.local-data/managed-postgres.json');
+const data = resolve('.local-data/postgres');
+const envFile = resolve('.env');
+let postgres;
+let application;
+let stopping = false;
+function run(args, extraEnv = {}) {
+  const result = spawnSync(process.execPath, args, { stdio: 'inherit', env: { ...process.env, ...extraEnv } });
+  if (result.status !== 0) throw new Error('A local setup step failed. Review the error above; existing data was not deleted.');
+}
+async function freePort() {
+  await new Promise((resolvePromise, reject) => {
+    const server = createServer();
+    server.once('error', () => reject(new Error(`Port ${port} is already in use. Stop the other service; no data was changed.`)));
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => server.close(resolvePromise));
+  });
+}
+async function launchApp() {
+  application = spawn(process.execPath, ['--env-file=.env', 'scripts/local-start.mjs'], { stdio: 'inherit', env: process.env });
+  return await new Promise((resolvePromise, reject) => {
+    application.once('error', reject);
+    application.once('exit', (code, signal) => resolvePromise(stopping ? 0 : (code ?? (signal ? 1 : 0))));
+  });
+}
+async function main() {
+  if (process.env.NODE_ENV === 'production' || process.env.OPERATIONS_ENABLED === 'true') throw new Error('This launcher is for local development only and cannot enable real operations.');
+  if (!existsSync(envFile)) {
+    if (existsSync(marker) || existsSync(data)) throw new Error('Local PostgreSQL data already exists but .env is missing. Restore the original .env; do not overwrite your database.');
+    run(['scripts/create-local-env.mjs'], { LOCAL_DATABASE_PORT: String(port) });
+    mkdirSync(resolve('.local-data'), { recursive: true, mode: 0o700 });
+    writeFileSync(marker, JSON.stringify({ version: 1, port, password: randomBytes(32).toString('base64url') }), { flag: 'wx', mode: 0o600 });
+  }
+  process.loadEnvFile(envFile);
+  if (!existsSync(marker)) {
+    if (existsSync(data)) throw new Error('Local PostgreSQL data exists without its managed configuration. Inspect it; no files were changed.');
+    console.log('Existing .env detected. Using the existing local PostgreSQL setup; it must already be running and migrated.');
+    return await launchApp();
+  }
+  if (process.env.NODE_ENV === 'production' || process.env.OPERATIONS_ENABLED !== 'false' || process.env.APP_URL !== 'http://localhost:3000') throw new Error('Managed startup requires local APP_URL and OPERATIONS_ENABLED=false.');
+  let settings;
+  try { settings = JSON.parse(readFileSync(marker, 'utf8')); } catch { throw new Error('Managed PostgreSQL settings cannot be read. Restore the original private settings; do not delete data.'); }
+  if (settings.version !== 1 || settings.port !== port || !/^[A-Za-z0-9_-]{40,}$/.test(settings.password || '')) throw new Error('Managed PostgreSQL settings are invalid. Restore the original private settings.');
+  for (const [key, role, passwordKey] of [
+    ['DATABASE_URL', 'annapurna_app', 'APP_DB_PASSWORD'], ['AUTH_DATABASE_URL', 'annapurna_auth', 'AUTH_DB_PASSWORD'],
+    ['WORKER_DATABASE_URL', 'annapurna_worker', 'WORKER_DB_PASSWORD'], ['MIGRATION_DATABASE_URL', 'annapurna_migrator', 'POSTGRES_PASSWORD'],
+  ]) {
+    let url;
+    try { url = new URL(process.env[key]); } catch { throw new Error(`${key} is invalid.`); }
+    if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.hostname !== '127.0.0.1' || url.port !== String(port) || url.pathname !== '/annapurna_link' || url.search || url.hash || decodeURIComponent(url.username) !== role || decodeURIComponent(url.password) !== process.env[passwordKey]) {
+      throw new Error(`${key} must match the managed loopback database and role. Existing data was not changed.`);
+    }
+  }
+  await freePort();
+  if (stopping) throw new Error('Startup was interrupted.');
+  postgres = new EmbeddedPostgres({
+    databaseDir: data, port, user: 'postgres', password: settings.password,
+    authMethod: 'scram-sha-256', persistent: true, autoRehydrateSymlinks: true,
+    postgresFlags: ['-h', '127.0.0.1'], initdbFlags: ['--encoding=UTF8'],
+    onLog: () => {}, onError: () => {},
+  });
+  if (!existsSync(data)) {
+    console.log('Preparing a private local PostgreSQL database (first launch only)...');
+    await postgres.initialise();
+    if (stopping) throw new Error('Startup was interrupted.');
+  } else if (!existsSync(resolve(data, 'PG_VERSION'))) {
+    throw new Error('The local PostgreSQL directory is incomplete. Inspect it; no data was removed or overwritten.');
+  }
+  console.log('Starting managed local PostgreSQL...');
+  await postgres.start();
+  if (stopping) throw new Error('Startup was interrupted.');
+  const adminUrl = `postgres://postgres:${encodeURIComponent(settings.password)}@127.0.0.1:${port}/postgres`;
+  const admin = new pg.Client({ connectionString: adminUrl, connectionTimeoutMillis: 5000 });
+  await admin.connect();
+  try {
+    const roles = await admin.query("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [['annapurna_migrator', 'annapurna_app', 'annapurna_auth', 'annapurna_worker']]);
+    const database = await admin.query("SELECT datname FROM pg_database WHERE datname = 'annapurna_link'");
+    if (roles.rowCount === 0 && database.rowCount === 0) {
+      console.log('Creating local-only database roles...');
+      run(['--env-file=.env', 'scripts/setup-native-db.mjs'], { PG_ADMIN_URL: adminUrl });
+    } else if (roles.rowCount !== 4 || database.rowCount !== 1) {
+      throw new Error('Managed database setup is incomplete. Inspect it manually; nothing was overwritten or deleted.');
+    }
+  } finally { await admin.end(); }
+  if (stopping) throw new Error('Startup was interrupted.');
+  console.log('Applying local database migrations...');
+  run(['--env-file=.env', '--import', 'tsx', 'scripts/migrate.ts']);
+  if (stopping) throw new Error('Startup was interrupted.');
+  return await launchApp();
+}
+function stop() {
+  stopping = true;
+  if (application) application.kill('SIGTERM');
+}
+process.on('SIGINT', stop);
+process.on('SIGTERM', stop);
+try {
+  process.exitCode = await main();
+} catch (error) {
+  console.error(`Local startup failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+  console.error('See README.md. Do not delete .env or .local-data/postgres if you need the local data.');
+  process.exitCode = 1;
+} finally {
+  if (postgres) await postgres.stop().catch(() => { console.error('PostgreSQL did not stop cleanly; inspect the local instance.'); process.exitCode = 1; });
+}

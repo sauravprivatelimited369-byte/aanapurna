@@ -11,6 +11,8 @@ try {
   if (error instanceof Error && error.message.includes("already exists")) throw error;
 }
 
+const localPort = process.env.LOCAL_DATABASE_PORT ?? "5432";
+if (!/^\d{1,5}$/.test(localPort) || Number(localPort) < 1 || Number(localPort) > 65535) throw new Error("LOCAL_DATABASE_PORT must be a valid TCP port.");
 const template = await readFile(templatePath, "utf8");
 const databasePassword = () => randomBytes(24).toString("base64url");
 const values = {
@@ -24,7 +26,7 @@ const values = {
   EMAIL_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
 };
 
-let environment = template;
+let environment = template.replace(/^POSTGRES_PORT=.*$/m, `POSTGRES_PORT=${localPort}`);
 for (const [key, value] of Object.entries(values)) {
   environment = environment.replace(new RegExp(`^${key}=.*$`, "m"), `${key}=${value}`);
 }
@@ -35,7 +37,7 @@ for (const [key, role, passwordKey] of [
   ["MIGRATION_DATABASE_URL", "annapurna_migrator", "POSTGRES_PASSWORD"],
 ]) {
   const password = values[passwordKey];
-  const url = `postgres://${role}:${password}@127.0.0.1:5432/annapurna_link`;
+  const url = `postgres://${role}:${password}@127.0.0.1:${localPort}/annapurna_link`;
   environment = environment.replace(new RegExp(`^${key}=.*$`, "m"), `${key}=${url}`);
 }
 
