@@ -262,7 +262,11 @@ jobs:
         shell: pwsh
         run: |
           function Wait-Ready {
-            for ($i = 0; $i -lt 240; $i++) {
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $deadline) {
+              if ($server -and $server.HasExited) { throw 'Managed launcher exited before becoming healthy.' }
+              $log = Get-Content "$env:RUNNER_TEMP\launch-*.out" -Tail 15 -ErrorAction SilentlyContinue | Out-String
+              if ($log -match 'Startup failed|Dependency installation failed|Local startup failed') { throw 'Managed launcher reported a startup failure.' }
               try {
                 $health = Invoke-RestMethod -Uri 'http://127.0.0.1:3000/api/health' -TimeoutSec 2
                 if ($health.realOperationsEnabled -eq $false) { return }
@@ -301,7 +305,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Managed database persistence check failed.' }
           } catch {
             $diag = $_.Exception.Message
-            $logs = Get-Content "$env:RUNNER_TEMP\launch-*.err" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch 'password|secret|postgres://|_KEY=' } | Select-Object -Last 12
+            $logs = Get-Content "$env:RUNNER_TEMP\launch-*.out","$env:RUNNER_TEMP\launch-*.err" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch 'password|secret|postgres://|_KEY=' } | Select-Object -Last 25
             $diag = ($diag + ' ' + ($logs -join ' ')).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Output "::error title=Managed launcher diagnostic::$diag"
             throw
