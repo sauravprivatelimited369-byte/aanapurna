@@ -83,9 +83,9 @@ async function main() {
     await postgres.start();
     postgresReady = true;
   } catch {
-    const diagnostic = startupLog.split(/\r?\n/).filter((line) => /fatal|error|could not|failed|permission denied/i.test(line))
-      .map((line) => line.replaceAll(settings.password, '[redacted]')).slice(-4).join(' ').slice(0, 1000);
-    throw new Error(`Managed PostgreSQL could not start.${diagnostic ? ` ${diagnostic}` : ''}`);
+    const diagnostic = startupLog.split(/\r?\n/).filter((line) => line && !/password|secret|postgres:\/\//i.test(line))
+      .map((line) => line.replaceAll(settings.password, '[redacted]')).slice(-6).join(' ').slice(0, 1000);
+    throw new Error(`Managed PostgreSQL could not start (exit ${postgres.process?.exitCode ?? 'unknown'}, signal ${postgres.process?.signalCode ?? 'none'}).${diagnostic ? ` ${diagnostic}` : ''}`);
   }
   if (stopping) throw new Error('Startup was interrupted.');
   const adminUrl = `postgres://postgres:${encodeURIComponent(settings.password)}@127.0.0.1:${port}/postgres`;
