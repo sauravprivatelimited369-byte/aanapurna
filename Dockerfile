@@ -22,9 +22,11 @@ RUN DATABASE_URL=postgres://build:build@127.0.0.1:5432/build \
     APP_URL=https://build.invalid \
     npm run build
 
-FROM base AS production-dependencies
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# Install the lockfile first, then prune. A fresh npm ci --omit=dev can retain
+# Better Auth's optional drizzle-kit peer but omit its matching platform esbuild,
+# causing a version mismatch at install time.
+FROM dependencies AS production-dependencies
+RUN npm prune --omit=dev && npm cache clean --force
 
 FROM base AS runtime
 ENV NODE_ENV=production
