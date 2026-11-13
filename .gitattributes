@@ -1,0 +1,6 @@
+# Windows batch files must keep CRLF so cmd.exe parses them reliably,
+# including labels, multi-line blocks and `set /p` prompts.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Shell scripts must keep LF so they run on macOS/Linux.
+*.sh text eol=lf

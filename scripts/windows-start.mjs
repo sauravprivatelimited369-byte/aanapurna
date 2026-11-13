@@ -1,4 +1,7 @@
 // Managed, loopback-only PostgreSQL for local development. Never touches existing DBs.
+// This supervisor is started by start.bat / ./start.sh through
+// scripts/launch-setup.mjs; it refuses to download packages itself so all
+// network work happens behind the launcher's explicit y/n consent.
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -6,18 +9,27 @@ import { resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
+import { APP_URL, INBOX_PATH, openUrl, parseInbox, probeHealth } from './launch-support.mjs';
 
 const port = 55432;
+const inboxUrl = 'http://127.0.0.1:2527/';
+const healthUrl = 'http://127.0.0.1:3000/api/health';
 const marker = resolve('.local-data/managed-postgres.json');
 const data = resolve('.local-data/postgres');
 const envFile = resolve('.env');
+const autoOpen = process.env.ANNAPURNA_LAUNCH_OPEN === '1';
 let postgres;
 let application;
 let stopping = false;
+let readinessTimer;
+let readyAnnounced = false;
+let failedHealthChecks = 0;
+
 function run(args, extraEnv = {}) {
   const result = spawnSync(process.execPath, args, { stdio: 'inherit', env: { ...process.env, ...extraEnv } });
   if (result.status !== 0) throw new Error('A local setup step failed. Review the error above; existing data was not deleted.');
 }
+
 async function freePort() {
   await new Promise((resolvePromise, reject) => {
     const server = createServer();
@@ -25,8 +37,83 @@ async function freePort() {
     server.listen({ host: '127.0.0.1', port, exclusive: true }, () => server.close(resolvePromise));
   });
 }
+
+function announceReady() {
+  if (readyAnnounced) return;
+  readyAnnounced = true;
+  console.log('');
+  console.log('  ==================================================================');
+  console.log('   Annapurna Link is ready - local development only');
+  console.log('  ==================================================================');
+  console.log(`   App:         ${APP_URL}`);
+  console.log(`   Test inbox:  ${inboxUrl}`);
+  console.log(`   Health:      ${healthUrl}`);
+  console.log('   Real operations: DISABLED     Real email: never sent');
+  console.log('');
+  const existing = inboxMessageCount();
+  console.log(
+    existing > 0
+      ? `   The test inbox already holds ${existing} message${existing === 1 ? '' : 's'} from earlier runs.`
+      : `   Sign-in links are written to ${INBOX_PATH} and shown in the test inbox.`,
+  );
+  console.log('   Keep that inbox private. Press Ctrl+C here to stop everything.');
+  console.log('');
+  if (autoOpen) {
+    void (async () => {
+      const app = await openUrl(APP_URL);
+      const inbox = await openUrl(inboxUrl);
+      const opened = [app && 'app', inbox && 'private test inbox'].filter(Boolean);
+      if (opened.length > 0) console.log(`   Opened the ${opened.join(' and the ')} in your browser.`);
+      else console.log('   No browser could be opened automatically. Use the URLs above.');
+    })();
+  }
+  console.log('  ==================================================================');
+  console.log('');
+}
+
+function inboxMessageCount() {
+  try {
+    return parseInbox(readFileSync(resolve(INBOX_PATH), 'utf8')).length;
+  } catch {
+    return 0;
+  }
+}
+
+function watchReadiness() {
+  const deadline = Date.now() + 180_000;
+  let checking = false;
+  readinessTimer = setInterval(async () => {
+    if (checking || stopping) return;
+    checking = true;
+    try {
+      const health = await probeHealth({ timeoutMs: 2500 });
+      if (health?.status === 'ok' && health?.realOperationsEnabled === false && !readyAnnounced) {
+        announceReady();
+        clearInterval(readinessTimer);
+        readinessTimer = setInterval(async () => {
+          const again = await probeHealth({ timeoutMs: 2500 });
+          if (again?.status === 'ok' && again?.realOperationsEnabled === false) failedHealthChecks = 0;
+          else if (++failedHealthChecks >= 6) {
+            console.error('Local health check is failing; check the app log above. Your data was not changed.');
+            failedHealthChecks = 0;
+          }
+        }, 30_000);
+        readinessTimer.unref?.();
+      }
+    } finally {
+      checking = false;
+    }
+    if (Date.now() > deadline && !readyAnnounced) {
+      console.error('The app did not report healthy within 3 minutes. Check the log above; your data was not changed.');
+      clearInterval(readinessTimer);
+    }
+  }, 1500);
+  readinessTimer.unref?.();
+}
+
 async function launchApp() {
   application = spawn(process.execPath, ['--env-file=.env', 'scripts/local-start.mjs'], { stdio: 'inherit', env: process.env });
+  watchReadiness();
   return await new Promise((resolvePromise, reject) => {
     application.once('error', reject);
     application.once('exit', (code, signal) => resolvePromise(stopping ? 0 : (code ?? (signal ? 1 : 0))));
@@ -114,10 +201,12 @@ async function main() {
   console.log('Applying local database migrations...');
   run(['--env-file=.env', '--import', 'tsx', 'scripts/migrate.ts']);
   if (stopping) throw new Error('Startup was interrupted.');
+  console.log('Starting the web app, worker and private test inbox...');
   return await launchApp();
 }
 function stop() {
   stopping = true;
+  if (readinessTimer) clearInterval(readinessTimer);
   if (application) application.kill('SIGTERM');
 }
 process.on('SIGINT', stop);
@@ -129,5 +218,6 @@ try {
   console.error('See README.md. Do not delete .env or .local-data/postgres if you need the local data.');
   process.exitCode = 1;
 } finally {
+  if (readinessTimer) clearInterval(readinessTimer);
   if (postgres) await postgres.stop().catch(() => { console.error('PostgreSQL did not stop cleanly; inspect the local instance.'); process.exitCode = 1; });
 }
