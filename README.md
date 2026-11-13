@@ -62,6 +62,40 @@ docker compose down -v
 
 The Compose sample intentionally keeps `OPERATIONS_ENABLED=false`. Its default `FILE_SCAN_MODE=disabled` also blocks private uploads in production-mode containers until an antivirus scanner is configured. Do not enable live donations by changing a flag alone.
 
+## GitHub Pages frontend with a separately hosted app
+
+A static public frontend is configured for publication at **<https://sauravprivatelimited369-byte.github.io/aanapurna/>**. The repository's GitHub Pages environment currently allows deployment from `main` only, so this version will appear at that URL after the pull request is merged and the Pages deployment succeeds. GitHub Pages serves the informational site only. It cannot run this repository's PostgreSQL-backed APIs, account flows, or worker, so those require a separately hosted instance of the full Next.js application.
+
+The Pages workflow deploys the content in `github-pages/` on pushes to `main` or the active deployment branch. Until an application server is configured, account links stay disabled and the page explains why. To connect one, add the Actions repository variable `ANNAPURNA_BACKEND_URL` with the public HTTPS origin of the full app (for example, `https://app.your-domain.io`) in **Settings → Secrets and variables → Actions → Variables**. The workflow injects that URL when it publishes; the account links then open the hosted app. Do not put secrets in this public variable. Follow the deployment steps below to host the backend and database; DNS and a domain you control are still required.
+
+## Publish the full app on a short custom domain
+
+The same application can run at `localhost` for development or behind a public domain. A short `.io` address is **not** created automatically: you must own/register the domain and point its DNS to a server you control. This repository includes a Docker Compose + Caddy deployment overlay for a single Linux host; Caddy obtains and renews HTTPS certificates automatically once DNS is correct and ports 80/443 reach that host.
+
+1. Provision a supported Linux host with Docker Compose, a persistent disk, and ports 80/443 open. Register the short domain you want (for example, a name you own under `.io`) and set its DNS A/AAAA records to the host. Do not use a domain you do not control.
+2. Clone this repository on the host and generate fresh secrets with `npm run setup:env` (Node.js 22 is required). Edit `.env` privately and set:
+
+   ```dotenv
+   APP_DOMAIN=your-short-domain.io
+   APP_URL=https://your-short-domain.io
+   SMTP_URL=smtps://...your-provider-credentials...
+   SMTP_FROM="Annapurna Link <verified-sender@your-domain>"
+   OPERATIONS_ENABLED=false
+   FILE_SCAN_MODE=disabled
+   ```
+
+   Use the exact provider URL format documented by your SMTP service, keep `.env` private, and never commit it. Use a real transactional mail provider; the local Mailpit default is for development only.
+3. Start the complete stack (web, PostgreSQL, migrations, mail worker, and HTTPS proxy):
+
+   ```sh
+   docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
+   docker compose -f docker-compose.yml -f docker-compose.production.yml logs -f web caddy worker
+   ```
+
+4. Visit `https://your-short-domain.io`. The local workflow remains unchanged at `http://localhost:3000`; choose either local run or hosted run against the same codebase. Use `docker compose down` to stop services without removing data. Back up PostgreSQL and private-upload volumes using an off-host, tested restore procedure.
+
+This is a deployment scaffold, **not a launch approval**. The public site and account pages can be hosted, but production auth/email, database recovery, host hardening, upload scanning, monitoring, privacy/legal review, and role-specific workflows still need validation. Keep live operations disabled until all launch gates are explicitly approved; do not publish real personal information or enable donations just to make the site appear complete. A custom domain must be purchased/configured by its owner—this code cannot register a short `.io` domain or create an external server for you.
+
 ## First operations administrator
 
 1. Create an account at <http://localhost:3000/signup> and select a public role request only if applicable.

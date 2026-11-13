@@ -1,0 +1,36 @@
+# Production-style single-host deployment overlay.
+# Keep docker-compose.yml as the base so web, database, migrations, and worker
+# continue to run together. Caddy terminates HTTPS and routes the chosen domain.
+services:
+  web:
+    environment:
+      APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS URL}
+      SMTP_URL: ${SMTP_URL:?Set SMTP_URL to your transactional email provider}
+      SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM to a verified sender}
+
+  worker:
+    environment:
+      APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS URL}
+      SMTP_URL: ${SMTP_URL:?Set SMTP_URL to your transactional email provider}
+      SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM to a verified sender}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN to a domain you control}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:
