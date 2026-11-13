@@ -30,6 +30,9 @@ RUN npm prune --omit=dev && npm cache clean --force
 
 FROM base AS runtime
 ENV NODE_ENV=production
+# Next standalone otherwise binds to Docker's injected container hostname,
+# which prevents loopback health checks from connecting.
+ENV HOSTNAME=0.0.0.0
 ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 COPY --from=builder --chown=node:node /app/.next/standalone ./
