@@ -77,7 +77,12 @@ async function main() {
   });
   if (!existsSync(data)) {
     console.log('Preparing a private local PostgreSQL database (first launch only)...');
-    await postgres.initialise();
+    try {
+      await postgres.initialise();
+    } catch {
+      const diagnostic = startupLog.split(/\r?\n/).filter((line) => /fatal|error|could not|failed|permission denied/i.test(line) && !/password|secret|postgres:\/\//i.test(line)).slice(-4).join(' ').slice(0, 1000);
+      throw new Error(`Managed PostgreSQL could not initialize.${diagnostic ? ` ${diagnostic}` : ' Check access to the local folder and temporary directory.'}`);
+    }
     if (stopping) throw new Error('Startup was interrupted.');
   } else if (!existsSync(resolve(data, 'PG_VERSION'))) {
     throw new Error('The local PostgreSQL directory is incomplete. Inspect it; no data was removed or overwritten.');

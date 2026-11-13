@@ -268,9 +268,11 @@ jobs:
           New-LocalUser -Name $username -Password $temporaryPassword -PasswordNeverExpires | Out-Null
           $credential = [System.Management.Automation.PSCredential]::new(".\$username", $temporaryPassword)
           & icacls $PWD /grant "${username}:(OI)(CI)M" /T /C /Q | Out-Null
-          New-Item -ItemType Directory -Force -Path '.local-data/npm-cache' | Out-Null
+          New-Item -ItemType Directory -Force -Path '.local-data/npm-cache','.local-data/tmp' | Out-Null
           & icacls '.local-data' /grant "${username}:(OI)(CI)M" /T /C /Q | Out-Null
           $env:npm_config_cache = Join-Path $PWD '.local-data/npm-cache'
+          $env:TEMP = Join-Path $PWD '.local-data/tmp'
+          $env:TMP = $env:TEMP
           function Wait-Ready {
             $deadline = (Get-Date).AddSeconds(120)
             while ((Get-Date) -lt $deadline) {
