@@ -261,6 +261,9 @@ jobs:
       - name: First start, authenticated test, and restart
         shell: pwsh
         run: |
+          $diagnosticPath = Join-Path $PWD '.local-data/windows-launch-diagnostic.txt'
+          New-Item -ItemType Directory -Force -Path '.local-data' | Out-Null
+          Set-Content -Path $diagnosticPath -Value 'Windows launcher diagnostic not yet captured.'
           # PostgreSQL refuses elevated Windows processes. Exercise a standard
           # user just as a normal double-click would, not the elevated CI account.
           $username = 'annapurna-ci'
@@ -319,7 +322,7 @@ jobs:
             $diag = $_.Exception.Message
             $logs = Get-Content "$env:RUNNER_TEMP\launch-*.out","$env:RUNNER_TEMP\launch-*.err" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch 'password|secret|postgres://|_KEY=' } | Select-Object -Last 25
             $diag = ($diag + ' ' + ($logs -join ' ')).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Set-Content -Path "$env:RUNNER_TEMP\windows-launch-diagnostic.txt" -Value $diag
+            Set-Content -Path $diagnosticPath -Value $diag
             Write-Output "::error title=Managed launcher diagnostic::$diag"
             throw
           } finally {
@@ -330,6 +333,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-launch-diagnostics
-          path: ${{ runner.temp }}/windows-launch-diagnostic.txt
+          path: .local-data/windows-launch-diagnostic.txt
           if-no-files-found: ignore
           retention-days: 1
