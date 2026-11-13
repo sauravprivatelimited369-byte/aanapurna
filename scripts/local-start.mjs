@@ -33,9 +33,11 @@ if (check.status !== 0) {
   process.exit(1);
 }
 console.log('\nStarting local development only. App: http://localhost:3000');
-console.log('Email test inbox: .local-data/inbox.eml (private; contains login links). Press Ctrl+C to stop.\n');
+console.log('Email test inbox: .local-data/inbox.eml (private; contains login links).');
+console.log('Readable inbox page: http://127.0.0.1:2527/ (loopback only). Press Ctrl+C to stop.\n');
 const commands = [
   ['scripts/test-smtp-sink.mjs'],
+  ['scripts/inbox-viewer.mjs'],
   ['--conditions=react-server', '--import', 'tsx', 'src/worker/index.ts'],
   ['node_modules/next/dist/bin/next', 'dev', '--hostname', '127.0.0.1', '--port', '3000'],
 ];
