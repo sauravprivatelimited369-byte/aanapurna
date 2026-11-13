@@ -699,3 +699,27 @@ select.form-control { appearance: auto; }
   .operations-toc a { min-height: 42px; font-size: 12px; }
   .operations-stack > .auth-error { align-items: flex-start; flex-direction: column; }
 }
+
+/* Registration and account-state additions */
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.password-strength { display: grid; gap: 6px; margin-top: -6px; }
+.password-strength-bar { height: 5px; border-radius: 999px; background: rgba(255,255,255,.09); overflow: hidden; }
+.password-strength-bar span { display: block; width: 0; height: 100%; background: var(--danger); transition: width .22s ease, background .22s ease; }
+.password-strength-bar span[data-score="1"] { width: 25%; }
+.password-strength-bar span[data-score="2"] { width: 50%; background: var(--warning); }
+.password-strength-bar span[data-score="3"] { width: 75%; background: var(--warning); }
+.password-strength-bar span[data-score="4"] { width: 100%; background: var(--success); }
+.password-strength p { margin: 0; }
+.account-state-panel { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.03); font-size: 13px; line-height: 1.6; }
+.account-state-panel strong { color: var(--text); overflow-wrap: anywhere; }
+.account-state-panel span { color: #b3b0b5; }
+.account-state-panel b { color: var(--warning); }
+.account-state-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.account-state-actions .button { flex: 1 1 auto; }
+.account-signout-wrap { width: 100%; }
+.account-signout-wrap .button { width: 100%; }
+@media (max-width: 760px) {
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .account-state-actions { flex-direction: column; }
+  .account-state-actions .button { width: 100%; }
+}

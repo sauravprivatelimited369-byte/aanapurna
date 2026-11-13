@@ -107,6 +107,8 @@ jobs:
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           node -e "const end=Date.now()+90000; (async function wait(){try{const r=await fetch('http://localhost:3000/api/health'); if(r.ok)return;}catch{} if(Date.now()>end)process.exit(1); setTimeout(wait,500);})()"
           npm run test:local-auth
+          RUN_AUTH_SECURITY_TEST=true LOCAL_SMTP_INBOX_PATH=.local-data/inbox.eml npm run test:auth-security
+          RUN_AUTH_ROLE_TEST=true npm run test:auth-roles
 
   browser-workflow:
     name: Disposable PostgreSQL browser workflow

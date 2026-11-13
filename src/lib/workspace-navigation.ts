@@ -22,9 +22,16 @@ export function getWorkspaceNavigation(identity: WorkspaceNavigationIdentity): {
   const hasReceiver = activeMemberships.some((membership) => membership.organizationType === "receiver");
   const hasHelper = identity.helperStatus === "active";
   const hasPlatformAccess = identity.platformRoles.length > 0;
+  const approvedMemberships = activeMemberships.filter((membership) => membership.organizationStatus === "verified");
+  const hasApprovedGenerator = approvedMemberships.some((membership) => membership.organizationType === "generator");
+  const hasApprovedReceiver = approvedMemberships.some((membership) => membership.organizationType === "receiver");
 
   const links: WorkspaceLink[] = [
     { href: "/app", label: "Overview", Icon: House, section: "Workspace" },
+    ...(hasApprovedGenerator ? [{ href: "/generator", label: "Generator dashboard", Icon: UtensilsCrossed, section: "Your dashboards" }] : []),
+    ...(hasApprovedReceiver ? [{ href: "/receiver", label: "Receiver dashboard", Icon: ChefHat, section: "Your dashboards" }] : []),
+    ...(hasHelper ? [{ href: "/helper", label: "Helper dashboard", Icon: Truck, section: "Your dashboards" }] : []),
+    ...(hasPlatformAccess ? [{ href: "/admin", label: "Admin console", Icon: ListChecks, section: "Restricted" }] : []),
     ...(hasGenerator ? [
       { href: "/app/listings", label: "Food listings", Icon: UtensilsCrossed, section: "Food coordination" },
       { href: "/app/listings/new", label: "Create a listing", Icon: ClipboardList, section: "Food coordination" },

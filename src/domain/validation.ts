@@ -2,6 +2,94 @@ import { z } from "zod";
 
 const safeText = (max: number) => z.string().trim().min(1).max(max);
 
+/** Public registration roles only. Admin is never accepted from a browser. */
+export const publicRegistrationRoles = ["generator", "receiver", "helper"] as const;
+export const organisationTypes = ["generator", "receiver"] as const;
+
+const weakPasswords = new Set([
+  "annapurna123456", "password123456", "password12345!", "qwerty1234567",
+  "1234567890123456", "welcome1234567", "letmein1234567", "administrator123",
+]);
+
+function passwordIssue(password: string): string | null {
+  if (password.length < 12 || password.length > 128) return "Use a password between 12 and 128 characters.";
+  const categories = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((pattern) => pattern.test(password)).length;
+  if (categories < 3) return "Mix upper-case letters, lower-case letters, numbers and symbols (at least three kinds).";
+  if (/(.)\1{5,}/.test(password)) return "Avoid long runs of the same character.";
+  if (weakPasswords.has(password.toLowerCase())) return "Choose a less common password.";
+  return null;
+}
+
+function refineRegistrationDetails(value: {
+  role: string;
+  organizationName?: string | null;
+  organizationType?: string | null;
+  addressLine: string;
+  cityOrDistrict: string;
+  profileNotes: string;
+}, context: z.RefinementCtx): void {
+  const isOrganisation = value.role === "generator" || value.role === "receiver";
+  if (isOrganisation && (!value.organizationName || value.organizationName.trim().length < 2)) {
+    context.addIssue({ code: "custom", path: ["organizationName"], message: "Enter your organisation's registered name." });
+  }
+  if (isOrganisation && value.organizationType !== value.role) {
+    context.addIssue({ code: "custom", path: ["organizationType"], message: "Organisation type must match the role you selected." });
+  }
+  if (!isOrganisation && value.organizationName?.trim()) {
+    context.addIssue({ code: "custom", path: ["organizationName"], message: "Helpers register as individuals; leave the organisation name empty." });
+  }
+  if (!isOrganisation && value.organizationType) {
+    context.addIssue({ code: "custom", path: ["organizationType"], message: "Helpers register as individuals; leave the organisation type empty." });
+  }
+  if (value.addressLine.trim().length < 5) {
+    context.addIssue({ code: "custom", path: ["addressLine"], message: "Enter a complete street address." });
+  }
+  if (value.cityOrDistrict.trim().length < 2) {
+    context.addIssue({ code: "custom", path: ["cityOrDistrict"], message: "Enter your city, district or operating area." });
+  }
+  if (value.profileNotes.trim().length < 10) {
+    context.addIssue({ code: "custom", path: ["profileNotes"], message: "Add a short description of your work or availability (at least 10 characters)." });
+  }
+}
+
+const registrationDetailsFields = {
+  role: z.enum(publicRegistrationRoles),
+  phone: z.string().trim().min(7).max(32).regex(/^[+0-9 ()-]+$/, "Use digits, spaces, +, ( ) and - only."),
+  organizationName: z.string().trim().max(160).optional().nullable(),
+  organizationType: z.enum(organisationTypes).optional().nullable(),
+  addressLine: z.string().trim().min(5).max(500),
+  cityOrDistrict: z.string().trim().min(2).max(120),
+  stateOrRegion: z.string().trim().max(120).optional().default(""),
+  postalCode: z.string().trim().max(20).optional().default(""),
+  profileNotes: z.string().trim().min(10).max(1_000),
+};
+
+/**
+ * Server-side validation of the profile fields Better Auth receives as extra
+ * user fields. Extra Better Auth internal keys are ignored here; the public
+ * `/api/register` route uses the strict `registrationSchema` instead.
+ */
+export const registrationDetailsSchema = z.object(registrationDetailsFields).superRefine(refineRegistrationDetails);
+
+/** Full public registration request. `.strict()` blocks privileged fields such as roles or status. */
+export const registrationSchema = z.object({
+  ...registrationDetailsFields,
+  name: z.string().trim().min(2).max(120),
+  email: z.email().max(254),
+  password: z.string().min(12).max(128),
+  acceptedTerms: z.literal(true),
+}).strict().superRefine((value, context) => {
+  refineRegistrationDetails(value, context);
+  const issue = passwordIssue(value.password);
+  if (issue) context.addIssue({ code: "custom", path: ["password"], message: issue });
+  const localPart = value.email.split("@")[0]?.toLowerCase();
+  if (localPart && localPart.length > 3 && value.password.toLowerCase().includes(localPart)) {
+    context.addIssue({ code: "custom", path: ["password"], message: "Do not include your email name in the password." });
+  }
+});
+
+export type RegistrationInput = z.infer<typeof registrationSchema>;
+
 export const onboardingSchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("generator"),

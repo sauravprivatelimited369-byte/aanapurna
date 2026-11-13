@@ -71,6 +71,13 @@
       "when": 1794555600000,
       "tag": "20261113074000_arrival_inspection_gate",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794567600000,
+      "tag": "20261113190000_auth_registration_and_guards",
+      "breakpoints": true
     }
   ]
 }

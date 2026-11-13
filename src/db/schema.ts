@@ -15,6 +15,17 @@ import {
 
 const instant = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
 export const requestedRoleEnum = pgEnum("requested_role", ["generator", "receiver", "helper"]);
+export const accountStatus = pgEnum("account_status", ["pending", "active", "suspended", "locked", "deactivated"]);
+export const platformRole = pgEnum("platform_role", ["operations_admin", "support_agent", "safety_officer", "security_admin"]);
+export const organizationType = pgEnum("organization_type", ["generator", "receiver"]);
+export const verificationStatus = pgEnum("verification_status", ["draft", "submitted", "under_review", "information_required", "verified", "rejected", "suspended", "expired"]);
+export const membershipRole = pgEnum("membership_role", ["owner", "manager", "operator", "viewer"]);
+export const membershipStatus = pgEnum("membership_status", ["pending", "active", "suspended", "removed"]);
+export const helperStatus = pgEnum("helper_status", ["pending", "active", "suspended", "rejected"]);
+export const donationStatus = pgEnum("donation_status", ["draft", "offered", "reserved", "assigned", "collected", "delivered", "expired", "cancelled", "refused", "on_hold", "recalled"]);
+export const offerStatus = pgEnum("offer_status", ["pending", "accepted", "rejected", "withdrawn", "expired"]);
+export const deliveryStatus = pgEnum("delivery_status", ["open", "assigned", "collected", "delivered", "cancelled", "refused", "on_hold"]);
+export const outboxStatus = pgEnum("outbox_status", ["pending", "processing", "sent", "failed"]);
 
 // Better Auth's core tables. Keep these names and fields aligned with its Drizzle adapter.
 export const user = pgTable("user", {
@@ -24,6 +35,17 @@ export const user = pgTable("user", {
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
   requestedRole: requestedRoleEnum("requested_role"),
+  // Transient registration intake fields. Better Auth writes them here, then a
+  // create hook moves them into the RLS-protected registration_profiles table
+  // and clears these columns. They are never returned to the browser.
+  registrationPhone: text("registration_phone"),
+  registrationOrganizationName: text("registration_organization_name"),
+  registrationOrganizationType: organizationType("registration_organization_type"),
+  registrationAddressLine: text("registration_address_line"),
+  registrationCityOrDistrict: text("registration_city_or_district"),
+  registrationStateOrRegion: text("registration_state_or_region"),
+  registrationPostalCode: text("registration_postal_code"),
+  registrationProfileNotes: text("registration_profile_notes"),
   createdAt: instant("created_at").notNull().defaultNow(),
   updatedAt: instant("updated_at").notNull().defaultNow(),
 });
@@ -83,18 +105,6 @@ export const rateLimit = pgTable("rate_limit", {
   lastRequest: bigint("last_request", { mode: "number" }).notNull(),
 });
 
-export const accountStatus = pgEnum("account_status", ["pending", "active", "suspended", "locked", "deactivated"]);
-export const platformRole = pgEnum("platform_role", ["operations_admin", "support_agent", "safety_officer", "security_admin"]);
-export const organizationType = pgEnum("organization_type", ["generator", "receiver"]);
-export const verificationStatus = pgEnum("verification_status", ["draft", "submitted", "under_review", "information_required", "verified", "rejected", "suspended", "expired"]);
-export const membershipRole = pgEnum("membership_role", ["owner", "manager", "operator", "viewer"]);
-export const membershipStatus = pgEnum("membership_status", ["pending", "active", "suspended", "removed"]);
-export const helperStatus = pgEnum("helper_status", ["pending", "active", "suspended", "rejected"]);
-export const donationStatus = pgEnum("donation_status", ["draft", "offered", "reserved", "assigned", "collected", "delivered", "expired", "cancelled", "refused", "on_hold", "recalled"]);
-export const offerStatus = pgEnum("offer_status", ["pending", "accepted", "rejected", "withdrawn", "expired"]);
-export const deliveryStatus = pgEnum("delivery_status", ["open", "assigned", "collected", "delivered", "cancelled", "refused", "on_hold"]);
-export const outboxStatus = pgEnum("outbox_status", ["pending", "processing", "sent", "failed"]);
-
 export const userProfiles = pgTable("user_profiles", {
   userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
   accountStatus: accountStatus("account_status").notNull().default("pending"),
@@ -104,6 +114,26 @@ export const userProfiles = pgTable("user_profiles", {
   createdAt: instant("created_at").notNull().defaultNow(),
   updatedAt: instant("updated_at").notNull().defaultNow(),
 });
+
+/**
+ * Registration intake details. Only the owning user and authorised platform
+ * staff can read them; the app role has no UPDATE or DELETE grant at all.
+ */
+export const registrationProfiles = pgTable("registration_profiles", {
+  userId: text("user_id").primaryKey().references(() => user.id, { onDelete: "cascade" }),
+  requestedRole: requestedRoleEnum("requested_role").notNull(),
+  phone: text("phone").notNull(),
+  organizationName: text("organization_name"),
+  organizationType: organizationType("organization_type"),
+  addressLine: text("address_line").notNull(),
+  cityOrDistrict: text("city_or_district").notNull(),
+  stateOrRegion: text("state_or_region"),
+  postalCode: text("postal_code"),
+  profileNotes: text("profile_notes").notNull(),
+  verificationStatus: verificationStatus("verification_status").notNull().default("submitted"),
+  createdAt: instant("created_at").notNull().defaultNow(),
+  updatedAt: instant("updated_at").notNull().defaultNow(),
+}, (table) => [index("registration_profiles_area_idx").on(table.cityOrDistrict)]);
 
 export const platformRoles = pgTable(
   "platform_roles",

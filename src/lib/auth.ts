@@ -1,11 +1,14 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { betterAuth } from "better-auth";
+import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { eq, sql } from "drizzle-orm";
+import { z } from "zod";
 import * as schema from "@/db/schema";
 import { authDb, withUserContext } from "@/db";
 import { enqueueAuthEmail } from "@/email/outbox";
+import { registrationDetailsSchema } from "@/domain/validation";
 
 const isProduction = process.env.NODE_ENV === "production";
 const configuredSecret = process.env.AUTH_SECRET;
@@ -23,6 +26,61 @@ const trustedOrigins = isProduction
   ? (appUrl ? [appUrl] : [])
   : ["http://localhost:3000", "http://127.0.0.1:3000", "https://*.e2b.app", ...(appUrl ? [appUrl] : [])];
 
+const optionalIntakeText = (max: number) => z.string().trim().max(max).nullable().optional();
+
+/** Validators run inside Better Auth before a user row is written, not only in the browser. */
+const intakeFields = {
+  requestedRole: { type: "string" as const, required: false, input: true, returned: true },
+
+  registrationPhone: {
+    type: "string" as const, required: true, input: true, returned: false,
+    validator: { input: z.string().trim().min(7).max(32).regex(/^[+0-9 ()-]+$/) },
+  },
+  registrationOrganizationName: {
+    type: "string" as const, required: false, input: true, returned: false,
+    validator: { input: optionalIntakeText(160) },
+  },
+  registrationOrganizationType: {
+    type: "string" as const, required: false, input: true, returned: false,
+    validator: { input: z.enum(["generator", "receiver"]).nullable().optional() },
+  },
+  registrationAddressLine: {
+    type: "string" as const, required: true, input: true, returned: false,
+    validator: { input: z.string().trim().min(5).max(500) },
+  },
+  registrationCityOrDistrict: {
+    type: "string" as const, required: true, input: true, returned: false,
+    validator: { input: z.string().trim().min(2).max(120) },
+  },
+  registrationStateOrRegion: {
+    type: "string" as const, required: false, input: true, returned: false,
+    validator: { input: optionalIntakeText(120) },
+  },
+  registrationPostalCode: {
+    type: "string" as const, required: false, input: true, returned: false,
+    validator: { input: optionalIntakeText(20) },
+  },
+  registrationProfileNotes: {
+    type: "string" as const, required: true, input: true, returned: false,
+    validator: { input: z.string().trim().min(10).max(1_000) },
+  },
+} as const;
+
+/** Read the transient intake columns from a raw Better Auth user record. */
+function intakeFromUser(record: Record<string, unknown>) {
+  return {
+    role: record.requestedRole,
+    phone: record.registrationPhone,
+    organizationName: record.registrationOrganizationName,
+    organizationType: record.registrationOrganizationType,
+    addressLine: record.registrationAddressLine,
+    cityOrDistrict: record.registrationCityOrDistrict,
+    stateOrRegion: record.registrationStateOrRegion,
+    postalCode: record.registrationPostalCode,
+    profileNotes: record.registrationProfileNotes,
+  };
+}
+
 export const auth = betterAuth({
   appName: "Annapurna Link",
   secret: authSecret,
@@ -34,9 +92,7 @@ export const auth = betterAuth({
     transaction: true,
   }),
   user: {
-    additionalFields: {
-      requestedRole: { type: "string", required: false, input: true, returned: true },
-    },
+    additionalFields: intakeFields,
   },
   emailAndPassword: {
     enabled: true,
@@ -67,7 +123,9 @@ export const auth = betterAuth({
     customRules: {
       "/sign-in/email": { window: 60, max: 8 },
       "/sign-up/email": { window: 60, max: 5 },
-      "/request-password-reset": { window: 60, max: 5 },
+      "/request-password-reset": { window: 300, max: 5 },
+      "/send-verification-email": { window: 300, max: 3 },
+      "/verify-email": { window: 60, max: 10 },
       "/reset-password/*": { window: 60, max: 5 },
     },
   },
@@ -85,13 +143,33 @@ export const auth = betterAuth({
     user: {
       create: {
         before: async (newUser) => {
-          const requested = newUser.requestedRole;
-          if (requested !== undefined && requested !== null && !["generator", "receiver", "helper"].includes(String(requested))) return false;
+          // Server-side allowlist: no public Admin signup, and no privileged
+          // status/role fields can be supplied by a browser.
+          const intake = intakeFromUser(newUser as Record<string, unknown>);
+          if (!registrationDetailsSchema.safeParse(intake).success) return false;
+          return true;
         },
         after: async (createdUser) => {
-          const candidate = createdUser.requestedRole;
+          const record = createdUser as Record<string, unknown>;
+          const intake = registrationDetailsSchema.safeParse(intakeFromUser(record));
+          const candidate = record.requestedRole;
           const role = candidate === "generator" || candidate === "receiver" || candidate === "helper" ? candidate : null;
           await withUserContext(createdUser.id, async (tx) => {
+            if (intake.success) {
+              await tx.insert(schema.registrationProfiles).values({
+                userId: createdUser.id,
+                requestedRole: intake.data.role,
+                phone: intake.data.phone,
+                organizationName: intake.data.organizationName || null,
+                organizationType: intake.data.organizationType ?? null,
+                addressLine: intake.data.addressLine,
+                cityOrDistrict: intake.data.cityOrDistrict,
+                stateOrRegion: intake.data.stateOrRegion || null,
+                postalCode: intake.data.postalCode || null,
+                profileNotes: intake.data.profileNotes,
+                verificationStatus: "submitted",
+              }).onConflictDoNothing();
+            }
             await tx.insert(schema.userProfiles).values({
               userId: createdUser.id,
               displayName: createdUser.name,
@@ -103,9 +181,21 @@ export const auth = betterAuth({
               action: "account.created",
               entityType: "user",
               entityId: createdUser.id,
-              details: { emailVerified: createdUser.emailVerified },
+              details: { emailVerified: createdUser.emailVerified, registrationProfileStored: intake.success },
             });
           });
+          // Intake details now live behind RLS. Remove the transient copies from
+          // the Better Auth-owned table so sensitive profile data is not duplicated.
+          await authDb.update(schema.user).set({
+            registrationPhone: null,
+            registrationOrganizationName: null,
+            registrationOrganizationType: null,
+            registrationAddressLine: null,
+            registrationCityOrDistrict: null,
+            registrationStateOrRegion: null,
+            registrationPostalCode: null,
+            registrationProfileNotes: null,
+          }).where(eq(schema.user.id, createdUser.id));
         },
       },
       update: {
@@ -126,7 +216,19 @@ export const auth = betterAuth({
               .where(eq(schema.userProfiles.userId, newSession.userId))
               .limit(1),
           );
-          return profile?.status === "active";
+          if (!profile) {
+            throw new APIError("FORBIDDEN", { code: "ACCOUNT_NOT_PROVISIONED", message: "This account is not provisioned. Contact support." });
+          }
+          if (profile.status !== "active") {
+            const disabled = ["suspended", "locked", "deactivated"].includes(profile.status);
+            throw new APIError("FORBIDDEN", {
+              code: disabled ? "ACCOUNT_SUSPENDED" : "EMAIL_NOT_VERIFIED",
+              message: disabled
+                ? "This account is suspended or disabled. Contact support."
+                : "Verify your email address before signing in.",
+            });
+          }
+          return true;
         },
         after: async (newSession) => {
           await withUserContext(newSession.userId, async (tx) => {

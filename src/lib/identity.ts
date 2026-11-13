@@ -78,6 +78,37 @@ export async function requireIdentity(requestHeaders?: Headers): Promise<Identit
   return identity;
 }
 
+/**
+ * Distinguish an expired session from a suspended or unverified account. This
+ * reads the real Better Auth session plus the profile row every time; it never
+ * trusts a browser-supplied role or status.
+ */
+export type AccountState = "anonymous" | "suspended" | "unverified" | "active";
+
+export async function getAccountState(requestHeaders?: Headers): Promise<{
+  state: AccountState;
+  userId: string | null;
+}> {
+  const request = requestHeaders ?? await headers();
+  const session = await auth.api.getSession({ headers: request });
+  if (!session) return { state: "anonymous", userId: null };
+
+  const [profile] = await withUserContext(session.user.id, (tx) =>
+    tx.select({ status: userProfiles.accountStatus })
+      .from(userProfiles)
+      .where(eq(userProfiles.userId, session.user.id))
+      .limit(1),
+  );
+
+  if (!profile || ["suspended", "locked", "deactivated"].includes(profile.status)) {
+    return { state: "suspended", userId: session.user.id };
+  }
+  if (!session.user.emailVerified || profile.status === "pending") {
+    return { state: "unverified", userId: session.user.id };
+  }
+  return { state: "active", userId: session.user.id };
+}
+
 export async function isPlatformRole(userId: string, role: PlatformRoleName): Promise<boolean> {
   return withUserContext(userId, async (tx) => {
     const [match] = await tx.select({ id: platformRoles.id })

@@ -15,9 +15,9 @@ test("fictional Generator to Receiver inspection and verified receipt", async ({
     const page = await context.newPage();
     await page.goto("http://localhost:3000/login");
     await page.getByLabel("Email address").fill(`${role}@example.test`);
-    await page.getByRole("textbox", { name: "Password", exact: true }).fill(password!);
+    await page.getByLabel("Password", { exact: true }).fill(password!);
     await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/app(?:\?|$)/, { timeout: 30_000 });
+    await expect(page).toHaveURL(/\/(?:app|generator|receiver|helper|admin)(?:\?|$)/, { timeout: 30_000 });
     return page;
   }
   const generator = await login("generator");

@@ -31,7 +31,8 @@ async function main(): Promise<void> {
             AND function_info.proname IN (
               'app_consume_delivery_code','app_mark_user_verified','app_find_receiver_candidates',
               'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
-              'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed'
+              'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
+              'app_guard_user_profile_status'
             )) AS required_functions,
         (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations
       FROM pg_roles role WHERE role.rolname = current_user
@@ -40,9 +41,9 @@ async function main(): Promise<void> {
     if (!row) throw new Error("The database role could not be identified.");
     const problems: string[] = [];
     if (row.bypass_rls) problems.push("runtime database role has BYPASSRLS");
-    if (row.rls_tables < 20) problems.push(`expected at least 20 RLS-protected tables, found ${row.rls_tables}`);
-    if (row.required_functions !== 9) problems.push(`expected required database functions, found ${row.required_functions}/9`);
-    if (row.migrations < 10) problems.push(`expected at least 10 applied migrations, found ${row.migrations}`);
+    if (row.rls_tables < 23) problems.push(`expected at least 23 RLS-protected tables, found ${row.rls_tables}`);
+    if (row.required_functions !== 10) problems.push(`expected required database functions, found ${row.required_functions}/10`);
+    if (row.migrations < 11) problems.push(`expected at least 11 applied migrations, found ${row.migrations}`);
     console.info(JSON.stringify({
       level: problems.length ? "error" : "info",
       event: "database.configuration_check",

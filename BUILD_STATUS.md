@@ -1,5 +1,18 @@
 # Build status
 
+## Real authentication implementation — 2026-11-13 (current working tree)
+
+The sections below are historical evidence from earlier commits; they do **not** verify the current authentication changes. This section records the checks actually run on this branch against a disposable embedded PostgreSQL 17 database, a loopback SMTP sink, the Graphile Worker, and the running Next.js app.
+
+- Preserved the existing Better Auth + PostgreSQL/Drizzle + Graphile Worker/Nodemailer stack. Added strict public registration, full intake fields, private `registration_profiles`, trusted role routing, pending/suspended account states, email-delivery truthfulness, account-status guards, and dedicated security/role test scripts. Details are in [`AUTHENTICATION_IMPLEMENTATION_REPORT.md`](AUTHENTICATION_IMPLEMENTATION_REPORT.md).
+- `npm run typecheck`, `npm run lint`, `npm test -- --reporter=dot`, `npm run build`, `npm audit --audit-level=moderate`, and `git diff --check` — PASS in this sandbox. The unit/migration suite includes PGlite checks for 11 migrations, 23 RLS-protected tables, 10 required functions, and registration-intake isolation.
+- `node --env-file=.env --import tsx scripts/check-db.ts` against the disposable real PostgreSQL instance — PASS: 11 applied migrations, 23 RLS tables, 10 required functions, no BYPASSRLS, no problems.
+- `RUN_LOCAL_AUTH_TEST=true npm run test:local-auth` — PASS: real account creation, duplicate/Admin rejection, verification email, verified login, trusted destination, logout/replay denial, reset email, reset replay denial, password change.
+- `RUN_AUTH_SECURITY_TEST=true LOCAL_SMTP_INBOX_PATH=.local-data/inbox.eml npm run test:auth-security` — PASS: 23/23 authentication/security checks, including suspended accounts, resend limits, session refresh, forged cookies, CSRF, direct DB restrictions, Admin denial, and no plaintext credentials.
+- `RUN_AUTH_ROLE_TEST=true npm run test:auth-roles` — PASS: 7/7 trusted role-routing checks, including restricted Admin bootstrap and Generator/Receiver/Helper/Admin/pending destinations.
+- Server-rendered auth pages were checked over HTTP for all required registration fields, the verification success state, the invalid reset-link state, the expired-session message, and the role-selection caveat. These are not browser-driven accessibility or interaction tests.
+- **NOT TESTED here:** Playwright/Chromium browser tests (browser download is blocked by this sandbox's network); production SMTP, HTTPS cookies, custom-domain callback URLs, Compose/Windows launchers, real-provider deliverability, full cross-tenant operational data, independent security review, and human launch approvals. CI definitions include the browser and real-PostgreSQL suites, but CI was not re-run on this commit here. Do not treat a passing compile as production readiness.
+
 ## Guided one-click launcher with explicit consent — 2026-11-13
 
 - Replaced the silent `start.bat` dependency step with a guided launcher (`scripts/launch-setup.mjs`, shared helpers in `scripts/launch-support.mjs`) that runs read-only preflight checks (Node.js/npm, dependency fingerprint, local database mode, free disk space, ports 3000/2526/2527/55432, and the npm registry only when a download is needed), prints a plain-English plan of every change, then asks `[Y/n]` before downloading anything. `n` exits with no `.env`, no `.local-data` and no install; a run without a keyboard exits with guidance instead of installing silently unless `--yes` is passed. `--check`, `--yes`, `--open`, `--no-open` and `--help` are supported. `start.sh` adds the same entry point for macOS/Linux, and a missing Node.js offers to open the official download page instead of installing anything.

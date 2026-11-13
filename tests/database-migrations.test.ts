@@ -13,6 +13,7 @@ const migrationFiles = [
   "20261112165901_public_impact_summary.sql",
   "20261113073000_fix_donation_helper_rls.sql",
   "20261113074000_arrival_inspection_gate.sql",
+  "20261113190000_auth_registration_and_guards.sql",
 ];
 
 let database: PGlite;
@@ -100,11 +101,12 @@ describe("PostgreSQL migration and authorization contracts", () => {
           WHERE namespace.nspname = 'public' AND function_info.proname IN (
             'app_consume_delivery_code','app_mark_user_verified','app_find_receiver_candidates',
             'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
-            'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed'
+            'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
+            'app_guard_user_profile_status'
           )) AS required_functions
     `);
-    expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(22);
-    expect(result.rows[0]?.required_functions).toBe(9);
+    expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(23);
+    expect(result.rows[0]?.required_functions).toBe(10);
   });
 
   it("limits an app-role session to its own profile and denies profile privilege escalation", async () => {
@@ -127,6 +129,42 @@ describe("PostgreSQL migration and authorization contracts", () => {
         SELECT rolbypassrls AS bypass_rls FROM pg_roles WHERE rolname = current_user
       `);
       expect(role.rows[0]?.bypass_rls).toBe(false);
+    });
+  });
+
+  it("keeps registration intake private, immutable to the app role, and prevents self-activation", async () => {
+    await database.exec(`
+      INSERT INTO public.registration_profiles
+        (user_id, requested_role, phone, organization_name, organization_type, address_line, city_or_district, profile_notes)
+      VALUES ('alice', 'generator', '+91 00000 00000', 'Fixture Generator', 'generator', '12 Test Street', 'Rourkela', 'Fixture registration profile');
+    `);
+
+    await withRole("annapurna_app", "alice", async () => {
+      const own = await database.query<{ user_id: string; phone: string }>(
+        "SELECT user_id, phone FROM public.registration_profiles",
+      );
+      expect(own.rows).toEqual([{ user_id: "alice", phone: "+91 00000 00000" }]);
+
+      await database.exec("SAVEPOINT registration_guards");
+      await expect(database.query("UPDATE public.registration_profiles SET phone = 'changed' WHERE user_id = 'alice'")).rejects.toThrow();
+      await database.exec("ROLLBACK TO SAVEPOINT registration_guards");
+
+      await database.exec("SAVEPOINT profile_status_guards");
+      await expect(database.query("UPDATE public.user_profiles SET account_status = 'suspended' WHERE user_id = 'alice'")).rejects.toThrow();
+      await database.exec("ROLLBACK TO SAVEPOINT profile_status_guards");
+
+      await database.exec("SAVEPOINT platform_role_guards");
+      await expect(database.query("INSERT INTO public.platform_roles (user_id, role, reason) VALUES ('alice','operations_admin','self-escalation attempt')")).rejects.toThrow();
+      await database.exec("ROLLBACK TO SAVEPOINT platform_role_guards");
+
+      await database.exec("SAVEPOINT other_profile_guards");
+      await expect(database.query("INSERT INTO public.registration_profiles (user_id, requested_role, phone, address_line, city_or_district, profile_notes) VALUES ('bob','helper','+91 11111 11111','13 Test Street','Rourkela','Cross-user attempt')")).rejects.toThrow();
+      await database.exec("ROLLBACK TO SAVEPOINT other_profile_guards");
+    });
+
+    await withRole("annapurna_app", "bob", async () => {
+      const visible = await database.query<{ user_id: string }>("SELECT user_id FROM public.registration_profiles");
+      expect(visible.rows).toEqual([]);
     });
   });
 

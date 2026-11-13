@@ -25,6 +25,8 @@
     "local:migrate": "node --env-file=.env --import tsx scripts/migrate.ts",
     "local:start": "node --env-file=.env scripts/local-start.mjs",
     "test:local-auth": "node scripts/test-local-auth.mjs",
+    "test:auth-security": "node --env-file=.env scripts/test-auth-security.mjs",
+    "test:auth-roles": "node --env-file=.env scripts/test-auth-roles.mjs",
     "test:local-domain": "node --env-file=.env --conditions=react-server --import tsx tests/integration/local-domain.ts",
     "test:local-workflow": "node --env-file=.env scripts/run-local-workflow.mjs",
     "test:local-backup": "node --env-file=.env scripts/test-local-backup.mjs",

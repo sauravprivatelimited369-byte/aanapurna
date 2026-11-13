@@ -43,12 +43,18 @@ test("real local signup, email verification, Helper request and permission denia
   const email = `local-ui-${randomBytes(8).toString("hex")}@example.test`;
   const password = randomBytes(24).toString("base64url");
   await page.goto("/signup?role=helper");
-  await page.getByLabel("Your name").fill("Local integration test account");
+  await page.getByLabel("Full name").fill("Local integration test account");
+  await expect(page.getByLabel("I am registering as")).toHaveValue("helper");
   await page.getByLabel("Email address").fill(email);
-  await page.getByRole("textbox", { name: "Password", exact: true }).fill(password);
-  await page.getByRole("textbox", { name: "Confirm password" }).fill(password);
+  await page.getByLabel("Phone number").fill("+91 90000 00001");
+  await page.getByLabel("Address").fill("12 Local Test Street");
+  await page.getByLabel("Location / area").fill("Rourkela");
+  await page.getByLabel("Profile information").fill("Fictional automated Helper account for local integration testing.");
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByLabel("Confirm password").fill(password);
+  await page.getByRole("checkbox", { name: /I have read the/ }).check();
   await page.getByRole("button", { name: /create account/i }).click();
-  await expect(page.getByRole("status")).toContainText(/account request is recorded/i);
+  await expect(page.getByRole("status")).toContainText(/account created/i);
 
   const verificationUrl = await waitForVerificationUrl(inboxPath!, email, 30_000);
   await page.goto(verificationUrl);
@@ -56,10 +62,11 @@ test("real local signup, email verification, Helper request and permission denia
 
   await page.goto("/login");
   await page.getByLabel("Email address").fill(email);
-  await page.getByRole("textbox", { name: "Password", exact: true }).fill(password);
+  await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/app(?:\?|$)/);
-  await expect(page.getByText(/real donation operations are paused/i)).toBeVisible();
+  // /auth/continue resolves the trusted backend role; a pending Helper has no approved role yet.
+  await expect(page).toHaveURL(/\/account\/pending(?:\?|$)/);
+  await expect(page.getByText(/waiting for review/i)).toBeVisible();
 
   await page.goto("/app/onboarding");
   await expect(page.getByLabel("I am requesting to join as")).toHaveValue("helper");
