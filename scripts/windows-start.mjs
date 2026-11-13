@@ -62,11 +62,14 @@ async function main() {
   }
   await freePort();
   if (stopping) throw new Error('Startup was interrupted.');
+  let startupLog = '';
+  let postgresReady = false;
   postgres = new EmbeddedPostgres({
     databaseDir: data, port, user: 'postgres', password: settings.password,
     authMethod: 'scram-sha-256', persistent: true, autoRehydrateSymlinks: true,
     postgresFlags: ['-h', '127.0.0.1'], initdbFlags: ['--encoding=UTF8'],
-    onLog: () => {}, onError: () => {},
+    onLog: (message) => { if (!postgresReady) startupLog = (startupLog + String(message)).slice(-6000); },
+    onError: (message) => { if (!postgresReady) startupLog = (startupLog + String(message)).slice(-6000); },
   });
   if (!existsSync(data)) {
     console.log('Preparing a private local PostgreSQL database (first launch only)...');
@@ -76,7 +79,14 @@ async function main() {
     throw new Error('The local PostgreSQL directory is incomplete. Inspect it; no data was removed or overwritten.');
   }
   console.log('Starting managed local PostgreSQL...');
-  await postgres.start();
+  try {
+    await postgres.start();
+    postgresReady = true;
+  } catch {
+    const diagnostic = startupLog.split(/\r?\n/).filter((line) => /fatal|error|could not|failed|permission denied/i.test(line))
+      .map((line) => line.replaceAll(settings.password, '[redacted]')).slice(-4).join(' ').slice(0, 1000);
+    throw new Error(`Managed PostgreSQL could not start.${diagnostic ? ` ${diagnostic}` : ''}`);
+  }
   if (stopping) throw new Error('Startup was interrupted.');
   const adminUrl = `postgres://postgres:${encodeURIComponent(settings.password)}@127.0.0.1:${port}/postgres`;
   const admin = new pg.Client({ connectionString: adminUrl, connectionTimeoutMillis: 5000 });
