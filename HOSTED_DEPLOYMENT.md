@@ -344,6 +344,17 @@ for form posts. A genuinely owner-controlled domain still requires buying one an
 pointing DNS at Vercel (`cname.vercel-dns.com`), then updating `APP_URL`,
 `APP_DOMAIN` and adding the old host to `APP_ADDITIONAL_ORIGINS`.
 
+Verified on the live deployment after the switch (one-shot GitHub Actions run,
+each check a separate recorded step): the canonical host serves
+`status: ok` / `database.status: ok` / `email.status: test_sink`; a Better Auth
+`POST` from the canonical origin is accepted; the same post from the previous
+alias is still accepted, which is what `APP_ADDITIONAL_ORIGINS` is for; and the
+same post from `https://not-our-site.example` is refused with `403`, so the
+trusted-origin list is enforced rather than decorative. Note that the app's own
+`/api/register` route does not inspect `Origin`; it is a JSON-only `POST`, which
+a browser cannot issue cross-origin without a preflight, and the framework's
+trusted-origin check covers the Better Auth endpoints.
+
 ### Serverless outbox drain (replaces the missing worker host)
 
 Vercel cannot run the Graphile Worker process, so queued authentication email had
