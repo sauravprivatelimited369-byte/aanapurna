@@ -4,9 +4,10 @@ import { NodePgTransaction } from "drizzle-orm/node-postgres";
 import { ExtractTablesWithRelations, sql } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "@/db/schema";
+import { databaseConnectionTimeoutMillis, databaseUrl } from "@/lib/database-config";
 
-const connectionString = process.env.DATABASE_URL;
-const authConnectionString = process.env.AUTH_DATABASE_URL ?? connectionString;
+const connectionString = databaseUrl("DATABASE_URL");
+const authConnectionString = databaseUrl("AUTH_DATABASE_URL") ?? connectionString;
 const isProduction = process.env.NODE_ENV === "production";
 if (isProduction && !connectionString) throw new Error("DATABASE_URL is required in production.");
 if (isProduction && !process.env.AUTH_DATABASE_URL) throw new Error("AUTH_DATABASE_URL must use a separate least-privilege database role in production.");
@@ -18,7 +19,7 @@ if (!Number.isInteger(poolMax) || poolMax < 1 || poolMax > 50) throw new Error("
 export const pool = new Pool({
   connectionString,
   max: poolMax,
-  connectionTimeoutMillis: 5_000,
+  connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
   idleTimeoutMillis: 30_000,
   application_name: "annapurna-link-web",
   ssl,
@@ -27,7 +28,7 @@ export const pool = new Pool({
 export const authPool = new Pool({
   connectionString: authConnectionString,
   max: Number(process.env.AUTH_DB_POOL_MAX ?? 5),
-  connectionTimeoutMillis: 5_000,
+  connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
   idleTimeoutMillis: 30_000,
   application_name: "annapurna-link-auth",
   ssl,

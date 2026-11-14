@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { emailOutbox } from "@/db/schema";
 import { db } from "@/db";
 import { encryptValue } from "@/security/crypto";
+import { databaseUrl } from "@/lib/database-config";
 
 export type AuthEmailKind = "verification" | "password_reset";
 
@@ -41,7 +42,7 @@ export async function enqueueAuthEmail(kind: AuthEmailKind, recipient: string, u
 
   // A durable outbox row is the source of truth. If the worker or its queue is unavailable,
   // the periodic worker scan will still deliver it. Do not log the link or the error payload.
-  const workerDatabaseUrl = process.env.WORKER_DATABASE_URL;
+  const workerDatabaseUrl = databaseUrl("WORKER_DATABASE_URL");
   if (workerDatabaseUrl) {
     try {
       const { quickAddJob } = await import("graphile-worker");

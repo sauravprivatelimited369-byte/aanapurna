@@ -1,7 +1,8 @@
 import { Pool } from "pg";
+import { databaseConnectionTimeoutMillis, databaseUrl } from "../src/lib/database-config";
 
 async function main(): Promise<void> {
-  const connectionString = process.env.MIGRATION_DATABASE_URL;
+  const connectionString = databaseUrl("MIGRATION_DATABASE_URL");
   const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
   const reason = process.env.BOOTSTRAP_ADMIN_REASON?.trim();
   if (!connectionString) throw new Error("MIGRATION_DATABASE_URL is required for one-time privileged bootstrap.");
@@ -14,7 +15,7 @@ async function main(): Promise<void> {
   const pool = new Pool({
     connectionString,
     max: 1,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     application_name: "annapurna-link-admin-bootstrap",
     ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
   });

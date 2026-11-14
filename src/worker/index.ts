@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { run } from "graphile-worker";
 import { decryptValue } from "@/security/crypto";
 import { getEmailSettingsStatus } from "../email/settings";
+import { databaseConnectionTimeoutMillis, databaseUrl } from "../lib/database-config";
 
 type OutboxRow = {
   id: string;
@@ -15,7 +16,7 @@ type OutboxRow = {
 };
 type EmailPayload = { url: string; heading: string; description: string; buttonLabel: string };
 
-const workerDatabaseUrl = process.env.WORKER_DATABASE_URL;
+const workerDatabaseUrl = databaseUrl("WORKER_DATABASE_URL");
 if (!workerDatabaseUrl) throw new Error("WORKER_DATABASE_URL is required to run the background worker.");
 if (process.env.NODE_ENV === "production" && !process.env.APP_URL) {
   throw new Error("APP_URL is required in production so action links can be origin-checked.");
@@ -23,7 +24,7 @@ if (process.env.NODE_ENV === "production" && !process.env.APP_URL) {
 const pool = new Pool({
   connectionString: workerDatabaseUrl,
   max: 4,
-  connectionTimeoutMillis: 5_000,
+  connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
   idleTimeoutMillis: 30_000,
   application_name: "annapurna-link-worker",
   ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,

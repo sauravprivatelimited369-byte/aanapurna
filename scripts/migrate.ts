@@ -3,13 +3,9 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "../src/db/schema";
+import { databaseConnectionTimeoutMillis, databaseUrl } from "../src/lib/database-config";
 
 
-function connectionTimeoutMillis(): number {
-  const raw = process.env.DATABASE_CONNECT_TIMEOUT_MS;
-  const value = raw ? Number(raw) : 30_000;
-  return Number.isFinite(value) && value >= 1_000 ? value : 30_000;
-}
 
 function describeError(error: unknown): string {
   if (!(error instanceof Error)) return "unknown";
@@ -22,15 +18,15 @@ function describeError(error: unknown): string {
 }
 
 async function main(): Promise<void> {
-  const connectionString = process.env.MIGRATION_DATABASE_URL;
-  const workerConnectionString = process.env.WORKER_DATABASE_URL;
+  const connectionString = databaseUrl("MIGRATION_DATABASE_URL");
+  const workerConnectionString = databaseUrl("WORKER_DATABASE_URL");
   if (!connectionString) throw new Error("MIGRATION_DATABASE_URL is required; never run production migrations with the app runtime role.");
   if (!workerConnectionString) throw new Error("WORKER_DATABASE_URL is required to install worker migrations using its least-privilege role.");
 
   const pool = new Pool({
     connectionString,
     max: 2,
-    connectionTimeoutMillis: connectionTimeoutMillis(),
+    connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     application_name: "annapurna-link-migrator",
     ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
   });
@@ -47,7 +43,7 @@ async function main(): Promise<void> {
       databaseRole: identity.rows[0]?.current_user,
       canCreateSchema: identity.rows[0]?.can_create,
       database: identity.rows[0]?.database,
-      connectionTimeoutMillis: connectionTimeoutMillis(),
+      connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     }));
     const migrationDb = drizzle(pool, { schema });
     await migrate(migrationDb, { migrationsFolder: "./drizzle" });

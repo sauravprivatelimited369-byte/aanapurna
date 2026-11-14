@@ -41,7 +41,7 @@ rows until that build succeeds.
 
 ## Environment variables
 
-Twenty-five Vercel project variables were set for `production`, `preview` and
+Thirty Vercel project variables were set for `production`, `preview` and
 `development`: the four database role URLs, `DATABASE_SSL=true`, `AUTH_SECRET`,
 three base64 32-byte keys, `APP_URL`, `APP_DOMAIN`, `NODE_ENV`,
 `OPERATIONS_ENABLED=false`, `FILE_SCAN_MODE=disabled`,
@@ -60,6 +60,19 @@ default Node `26.x` selection for new deployments; `.nvmrc` remains `22`. Vercel
 documents this override in [Supported Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions).
 The Vercel connector does not expose the project `nodeVersion` property, so the
 repository-level override is used instead.
+
+Supabase's direct `db.<ref>.supabase.co` endpoint is IPv6-only, while Vercel's
+build network has no IPv6 route; the third deployment's improved diagnostics
+showed `connect ENETUNREACH` to an IPv6 address. The repository keeps the four
+encrypted direct role URLs and rewrites them at runtime to Supabase's shared
+**session pooler** (`<role>.<ref>@<pooler-host>:5432`), which is IPv4 and
+supports migrations/prepared statements. Supabase documents the session pooler
+format in [Connect to your database](https://supabase.com/docs/guides/database/connecting-to-postgres).
+Five additional plain, non-secret Vercel variables enable this:
+`DATABASE_URL_REWRITE_TO_POOLER=true`, `SUPABASE_POOLER_HOST`,
+`SUPABASE_PROJECT_REF`, `DATABASE_POOLER_PORT=5432`, and
+`DATABASE_CONNECT_TIMEOUT_MS=30000`. No password is rewritten, logged or
+committed; `src/lib/database-config.ts` performs the URL transform.
 
 `SMTP_PASS` currently contains the deliberate placeholder name
 `REPLACE_WITH_GMAIL_APP_PASSWORD`, not a credential. The fail-closed preflight
@@ -115,11 +128,11 @@ that exact preview origin in addition to `APP_URL`.
   found the wrong hoisted binary version. Deployment
   `dpl_DnnnypMoh4bQoxHXxSDPsuPENuVt` **PASSed `npm ci`** with the global
   `esbuild@0.28.2` override, then **FAILED** in `db:migrate` at Drizzle's
-  `CREATE SCHEMA IF NOT EXISTS "drizzle"` wrapper. Drizzle hid the underlying
-  PostgreSQL cause; the migration scripts now log `error.cause`, SQLSTATE, and
-  connection identity, with a 30-second default timeout. Neither failed
-  deployment applied app DDL; a third deployment is needed to expose the real
-  cause.
+  `CREATE SCHEMA IF NOT EXISTS "drizzle"` wrapper. Deployment
+  `dpl_61rMtBmsNA3otoQkZRkd9fxesYwX` exposed the real cause with the improved
+  diagnostics: `connect ENETUNREACH` to the IPv6-only Supabase direct DB host.
+  The shared session-pooler URL rewrite was added for the fourth deployment;
+  none of the failed deployments applied app DDL.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.

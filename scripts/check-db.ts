@@ -1,11 +1,7 @@
 import { Pool } from "pg";
+import { databaseConnectionTimeoutMillis, databaseUrl } from "../src/lib/database-config";
 
 
-function connectionTimeoutMillis(): number {
-  const raw = process.env.DATABASE_CONNECT_TIMEOUT_MS;
-  const value = raw ? Number(raw) : 30_000;
-  return Number.isFinite(value) && value >= 1_000 ? value : 30_000;
-}
 
 function describeError(error: unknown): string {
   if (!(error instanceof Error)) return "unknown";
@@ -18,12 +14,12 @@ function describeError(error: unknown): string {
 }
 
 async function main(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL;
+  const connectionString = databaseUrl("DATABASE_URL");
   if (!connectionString) throw new Error("DATABASE_URL is required.");
   const pool = new Pool({
     connectionString,
     max: 1,
-    connectionTimeoutMillis: connectionTimeoutMillis(),
+    connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     application_name: "annapurna-link-db-check",
     ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
   });
