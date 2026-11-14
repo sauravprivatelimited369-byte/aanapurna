@@ -26,15 +26,33 @@ export async function GET() {
   const database = await checkDatabase();
   const email = getEmailDeliveryStatus();
   const worker = await readWorkerHealth();
+  const emailStatus = !email.configured
+    ? "not_configured"
+    : email.testSink || email.localOnly
+      ? "test_sink"
+      : "configured";
+  const realOperationsEnabled = process.env.OPERATIONS_ENABLED === "true";
+
+  const readinessReasons: string[] = [];
+  if (!database.ok) readinessReasons.push("database_unavailable");
+  if (emailStatus !== "configured") readinessReasons.push(`email_${emailStatus}`);
+  if (worker.status !== "ok") readinessReasons.push(`worker_${worker.status}`);
+  if (!realOperationsEnabled) readinessReasons.push("operations_disabled");
+
   const body = {
     status: database.ok ? "ok" : "degraded",
+    liveness: database.ok ? "ok" : "degraded",
+    readiness: {
+      status: readinessReasons.length === 0 ? "ready" : "not_ready",
+      reasons: readinessReasons,
+    },
     application: "annapurna-link",
     database: database.ok ? { status: "ok", latencyMs: database.latencyMs } : { status: "unavailable" },
     // Only setting NAMES are reported; no SMTP credential or URL is exposed.
     email: {
       // A capture service accepts SMTP traffic but delivers to a test inbox, so
       // it is reported separately and never as production-ready email.
-      status: !email.configured ? "not_configured" : email.testSink || email.localOnly ? "test_sink" : "configured",
+      status: emailStatus,
       localTestSink: email.localOnly,
       captureTestSink: email.testSink,
       missingSettings: email.missingSettings,
@@ -47,7 +65,7 @@ export async function GET() {
       lastEvent: typeof worker.details.event === "string" ? worker.details.event : null,
       lastError: typeof worker.details.lastError === "string" ? worker.details.lastError : null,
     },
-    realOperationsEnabled: process.env.OPERATIONS_ENABLED === "true",
+    realOperationsEnabled,
   };
   return NextResponse.json(body, {
     status: database.ok ? 200 : 503,
