@@ -302,9 +302,14 @@ Honest limits of this arrangement:
 
 - GitHub's shortest schedule interval is five minutes, and queued runs can start
   later than their slot; this is not the worker's one-second polling.
-- Scheduled workflows only run from the default branch, so the schedule starts
-  when this branch is merged. `gh workflow run worker-drain.yml --ref <branch>`
-  exercises it immediately.
+- Scheduled workflows only run from the default branch. GitHub also refuses to
+  dispatch, or even list, a workflow file that is absent from the default branch:
+  `gh workflow run worker-drain.yml --ref arena/5b937561-aanapurna` returned
+  `HTTP 404` and `actions/workflows` listed only `ci.yml`, `deploy-pages.yml` and
+  `diag.yml`. So the drain schedule and even a manual dispatch start working only
+  after this branch is merged to `main` — there is no way to trigger it from
+  this branch, and this session could not run it. Until then the route is
+  deployed and its authorization is unit-tested, but the scheduler is dormant.
 - GitHub disables scheduled workflows after 60 days without repository activity,
   so it needs the same monitoring any scheduler does.
 - With `SMTP_USER`/`SMTP_PASS` still unset the drain defers rows rather than
