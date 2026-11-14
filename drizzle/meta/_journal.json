@@ -71,6 +71,27 @@
       "when": 1794555600000,
       "tag": "20261113074000_arrival_inspection_gate",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794567600000,
+      "tag": "20261113190000_auth_registration_and_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "20261114120000_revoke_public_api_privileges",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794610800000,
+      "tag": "20261114150000_recall_records_and_worker_heartbeat",
+      "breakpoints": true
     }
   ]
 }

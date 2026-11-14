@@ -3,24 +3,74 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "../src/db/schema";
+import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../src/lib/database-config";
+
+
+
+function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown";
+  const parts = [error.message];
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message) parts.push(`cause: ${cause.message}`);
+  const code = (error as Error & { code?: unknown }).code;
+  if (typeof code === "string") parts.push(`code: ${code}`);
+  return parts.join(" | ");
+}
+
+function logPoolError(event: string, error: unknown): void {
+  console.error(JSON.stringify({
+    level: "error",
+    event,
+    message: error instanceof Error ? error.message : "unknown",
+  }));
+}
+
+// An idle-client error must not crash the migration step. Graphile Worker also
+// skips installing its own handlers when a shared pool already has them.
+function guardPool(pool: Pool, label: string): void {
+  pool.on("error", (error) => logPoolError(`${label}.database_pool_idle_error`, error));
+  pool.on("connect", (client) => {
+    client.on("error", (error) => logPoolError(`${label}.database_client_error`, error));
+  });
+}
 
 async function main(): Promise<void> {
-  const connectionString = process.env.MIGRATION_DATABASE_URL;
-  const workerConnectionString = process.env.WORKER_DATABASE_URL;
+  const connectionString = databaseUrl("MIGRATION_DATABASE_URL");
+  const workerConnectionString = databaseUrl("WORKER_DATABASE_URL");
   if (!connectionString) throw new Error("MIGRATION_DATABASE_URL is required; never run production migrations with the app runtime role.");
   if (!workerConnectionString) throw new Error("WORKER_DATABASE_URL is required to install worker migrations using its least-privilege role.");
 
   const pool = new Pool({
     connectionString,
     max: 2,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     application_name: "annapurna-link-migrator",
-    ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
+    ssl: databaseSslOptions(connectionString),
   });
+  const workerPool = new Pool({
+    connectionString: workerConnectionString,
+    max: 2,
+    connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
+    application_name: "annapurna-link-worker-migrator",
+    ssl: databaseSslOptions(workerConnectionString),
+  });
+  guardPool(pool, "database.migrator");
+  guardPool(workerPool, "worker.migrator");
   let temporaryWorkerCreateGrant = false;
   let databaseIdentifier: string | null = null;
 
   try {
+    const identity = await pool.query<{ current_user: string; can_create: boolean; database: string }>(
+      "SELECT current_user, has_database_privilege(current_user, current_database(), 'CREATE') AS can_create, current_database() AS database",
+    );
+    console.info(JSON.stringify({
+      level: "info",
+      event: "database.migration_identity",
+      databaseRole: identity.rows[0]?.current_user,
+      canCreateSchema: identity.rows[0]?.can_create,
+      database: identity.rows[0]?.database,
+      connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
+    }));
     const migrationDb = drizzle(pool, { schema });
     await migrate(migrationDb, { migrationsFolder: "./drizzle" });
 
@@ -38,10 +88,10 @@ async function main(): Promise<void> {
 
     // Graphile Worker normally migrates as the runtime role. Run its DDL here,
     // before app startup, so the worker never needs lasting database CREATE rights.
-    await runMigrations({ connectionString: workerConnectionString, schema: "graphile_worker" });
+    await runMigrations({ pgPool: workerPool, schema: "graphile_worker" });
     console.info(JSON.stringify({ level: "info", event: "database.migrations_applied", workerSchema: "graphile_worker" }));
   } catch (error) {
-    console.error(JSON.stringify({ level: "error", event: "database.migration_failed", message: error instanceof Error ? error.message : "unknown" }));
+    console.error(JSON.stringify({ level: "error", event: "database.migration_failed", message: describeError(error) }));
     process.exitCode = 1;
   } finally {
     if (temporaryWorkerCreateGrant && databaseIdentifier) {
@@ -52,11 +102,12 @@ async function main(): Promise<void> {
         process.exitCode = 1;
       }
     }
+    await workerPool.end();
     await pool.end();
   }
 }
 
 void main().catch((error: unknown) => {
-  console.error(JSON.stringify({ level: "error", event: "database.migration_failed", message: error instanceof Error ? error.message : "unknown" }));
+  console.error(JSON.stringify({ level: "error", event: "database.migration_failed", message: describeError(error) }));
   process.exitCode = 1;
 });

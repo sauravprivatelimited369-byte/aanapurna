@@ -33,6 +33,7 @@ export function PublicHeader({ active }: { active?: string }) {
             <NavigationLinks active={active} />
           </nav>
           <div className="header-actions">
+            <Link href="/preview" className="nav-login">Preview</Link>
             <Link href="/login" className="nav-login">Log in</Link>
             <Link href="/signup" className="button button--small button--primary header-join">
               <span className="header-join-full">Join Annapurna</span>
@@ -48,6 +49,7 @@ export function PublicHeader({ active }: { active?: string }) {
             </summary>
             <nav className="mobile-nav-panel" aria-label="Mobile navigation">
               <NavigationLinks active={active} mobile />
+              <Link className="mobile-nav-link" href="/preview">Preview the workspace</Link>
               <Link className="mobile-nav-link" href="/login">Log in</Link>
               <Link className="mobile-nav-join" href="/signup">Join Annapurna <ArrowUpRight size={17} aria-hidden="true" /></Link>
             </nav>
@@ -68,7 +70,7 @@ export function PublicFooter() {
           <p className="footer-launch-note"><ShieldCheck size={15} aria-hidden="true" /> Controlled launch · human approvals pending</p>
         </div>
         <div className="footer-links">
-          <div><span className="footer-heading">Explore</span><Link href="/">Home</Link><Link href="/how-it-works">How it works</Link><Link href="/#impact">Our impact</Link><Link href="/near-iim-calcutta">Local discovery</Link></div>
+          <div><span className="footer-heading">Explore</span><Link href="/">Home</Link><Link href="/how-it-works">How it works</Link><Link href="/#impact">Our impact</Link><Link href="/near-iim-calcutta">Local discovery</Link><Link href="/preview">Sample handover</Link></div>
           <div><span className="footer-heading">The work</span><Link href="/about">About us</Link><Link href="/food-safety">Food safety disclaimer</Link><Link href="/contact">Contact</Link><Link href="/login">Account support</Link></div>
           <div><span className="footer-heading">Policies</span><Link href="/privacy">Privacy <small>Draft</small></Link><Link href="/terms">Terms <small>Draft</small></Link><Link href="/accessibility">Accessibility</Link></div>
         </div>

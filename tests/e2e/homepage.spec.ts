@@ -71,7 +71,7 @@ test("homepage meets automated WCAG A/AA checks with verified figures unavailabl
 
 test("role-specific signup links preserve the selected request without granting approval", async ({ page }) => {
   await page.goto("/signup?role=helper");
-  await expect(page.getByLabel("I am here as")).toHaveValue("helper");
+  await expect(page.getByLabel("I am registering as")).toHaveValue("helper");
   await expect(page.getByText(/it does not approve your role/i)).toBeVisible();
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
@@ -82,7 +82,7 @@ test("role-specific signup links preserve the selected request without granting 
 test("expired-session messaging and password visibility are accessible", async ({ page }) => {
   await page.goto("/login?reason=session-expired");
   await expect(page.getByRole("status")).toContainText(/session may have expired/i);
-  const password = page.getByRole("textbox", { name: "Password" });
+  const password = page.getByLabel("Password", { exact: true });
   await expect(password).toHaveAttribute("type", "password");
   const showPassword = page.getByRole("button", { name: "Show password" });
   await showPassword.click();
