@@ -22,6 +22,8 @@ If this careful, auditable approach is useful, **[star the repository](https://g
 - Authentication architecture, security evidence, owner-only deployment steps and remaining gaps: [`AUTHENTICATION_IMPLEMENTATION_REPORT.md`](AUTHENTICATION_IMPLEMENTATION_REPORT.md).
 - Local public directory example: `/near-iim-calcutta` (attributed public record, not an Annapurna Link partner or offer).
 
+Design, safety, legal and operations documents: [`ARCHITECTURE.md`](ARCHITECTURE.md), [`PRODUCT_REQUIREMENTS.md`](PRODUCT_REQUIREMENTS.md), [`OPERATING_MODEL.md`](OPERATING_MODEL.md), [`FOOD_SAFETY_CONTROLS.md`](FOOD_SAFETY_CONTROLS.md) (draft, unverified), [`LEGAL_RESEARCH_REGISTER.md`](LEGAL_RESEARCH_REGISTER.md) (unverified), [`SECURITY_THREAT_MODEL.md`](SECURITY_THREAT_MODEL.md), [`PRIVACY_DATA_MAP.md`](PRIVACY_DATA_MAP.md), [`DATABASE.md`](DATABASE.md), [`TEST_PLAN.md`](TEST_PLAN.md), [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md), [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md), [`PARTNER_ONBOARDING.md`](PARTNER_ONBOARDING.md), and the section-by-section build review in [`MASTER_PROMPT_COMPLIANCE.md`](MASTER_PROMPT_COMPLIANCE.md).
+
 The audit and implementation tracker in [`UI_UX_AUDIT.md`](UI_UX_AUDIT.md) and [`UI_UX_IMPLEMENTATION_PLAN.md`](UI_UX_IMPLEMENTATION_PLAN.md), shared interface guidance in [`DESIGN_SYSTEM.md`](DESIGN_SYSTEM.md), and the latest evidence and blockers in [`UI_UX_TEST_REPORT.md`](UI_UX_TEST_REPORT.md) describe what is implemented and what remains unverified. Metrics, when shown, are sourced from the backend; the site must not fabricate meals, impact, partners or approvals.
 
 ## Stack
