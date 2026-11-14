@@ -74,6 +74,16 @@ Five additional plain, non-secret Vercel variables enable this:
 `DATABASE_CONNECT_TIMEOUT_MS=30000`. No password is rewritten, logged or
 committed; `src/lib/database-config.ts` performs the URL transform.
 
+The fourth deployment then reached the pooler but failed with
+`SELF_SIGNED_CERT_IN_CHAIN`: Supabase's pooler chain is rooted in its private
+`Supabase Root 2021 CA`, which is not in Node's default trust store. The public
+root certificate is reviewed at `certs/supabase-prod-ca-2021.crt`, embedded as
+a TypeScript constant in `src/lib/supabase-ca.ts`, and pinned with
+`rejectUnauthorized: true` for Supabase hosts only. Its SHA-256 fingerprint is
+`80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA`.
+URL SSL query parameters are stripped so `pg` cannot override that explicit,
+verifying TLS configuration. No certificate verification is disabled.
+
 `SMTP_PASS` currently contains the deliberate placeholder name
 `REPLACE_WITH_GMAIL_APP_PASSWORD`, not a credential. The fail-closed preflight
 and `/api/health` therefore report email `not_configured` until the owner
@@ -131,8 +141,10 @@ that exact preview origin in addition to `APP_URL`.
   `CREATE SCHEMA IF NOT EXISTS "drizzle"` wrapper. Deployment
   `dpl_61rMtBmsNA3otoQkZRkd9fxesYwX` exposed the real cause with the improved
   diagnostics: `connect ENETUNREACH` to the IPv6-only Supabase direct DB host.
-  The shared session-pooler URL rewrite was added for the fourth deployment;
-  none of the failed deployments applied app DDL.
+  Deployment `dpl_Dj5yktvKxvTnxfnABuHMe7Z8ky7Q` reached the IPv4 session
+  pooler but failed with `SELF_SIGNED_CERT_IN_CHAIN`; the reviewed public
+  Supabase root CA and strict TLS verification were added for the fifth
+  deployment. None of the failed deployments applied app DDL.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.

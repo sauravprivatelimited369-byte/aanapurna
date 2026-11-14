@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import { run } from "graphile-worker";
 import { decryptValue } from "@/security/crypto";
 import { getEmailSettingsStatus } from "../email/settings";
-import { databaseConnectionTimeoutMillis, databaseUrl } from "../lib/database-config";
+import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../lib/database-config";
 
 type OutboxRow = {
   id: string;
@@ -27,7 +27,7 @@ const pool = new Pool({
   connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
   idleTimeoutMillis: 30_000,
   application_name: "annapurna-link-worker",
-  ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
+  ssl: databaseSslOptions(workerDatabaseUrl),
 });
 
 let stopping = false;

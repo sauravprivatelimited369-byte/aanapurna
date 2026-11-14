@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { databaseConnectionTimeoutMillis, databaseUrl } from "../src/lib/database-config";
+import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../src/lib/database-config";
 
 async function main(): Promise<void> {
   const connectionString = databaseUrl("MIGRATION_DATABASE_URL");
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
     max: 1,
     connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     application_name: "annapurna-link-admin-bootstrap",
-    ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
+    ssl: databaseSslOptions(connectionString),
   });
 
   try {

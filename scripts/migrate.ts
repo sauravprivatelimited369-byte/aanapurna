@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import * as schema from "../src/db/schema";
-import { databaseConnectionTimeoutMillis, databaseUrl } from "../src/lib/database-config";
+import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../src/lib/database-config";
 
 
 
@@ -28,7 +28,14 @@ async function main(): Promise<void> {
     max: 2,
     connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
     application_name: "annapurna-link-migrator",
-    ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
+    ssl: databaseSslOptions(connectionString),
+  });
+  const workerPool = new Pool({
+    connectionString: workerConnectionString,
+    max: 2,
+    connectionTimeoutMillis: databaseConnectionTimeoutMillis(),
+    application_name: "annapurna-link-worker-migrator",
+    ssl: databaseSslOptions(workerConnectionString),
   });
   let temporaryWorkerCreateGrant = false;
   let databaseIdentifier: string | null = null;
@@ -62,7 +69,7 @@ async function main(): Promise<void> {
 
     // Graphile Worker normally migrates as the runtime role. Run its DDL here,
     // before app startup, so the worker never needs lasting database CREATE rights.
-    await runMigrations({ connectionString: workerConnectionString, schema: "graphile_worker" });
+    await runMigrations({ pgPool: workerPool, schema: "graphile_worker" });
     console.info(JSON.stringify({ level: "info", event: "database.migrations_applied", workerSchema: "graphile_worker" }));
   } catch (error) {
     console.error(JSON.stringify({ level: "error", event: "database.migration_failed", message: describeError(error) }));
@@ -76,6 +83,7 @@ async function main(): Promise<void> {
         process.exitCode = 1;
       }
     }
+    await workerPool.end();
     await pool.end();
   }
 }

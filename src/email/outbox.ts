@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { emailOutbox } from "@/db/schema";
 import { db } from "@/db";
 import { encryptValue } from "@/security/crypto";
-import { databaseUrl } from "@/lib/database-config";
+import { databaseSslOptions, databaseUrl } from "@/lib/database-config";
 
 export type AuthEmailKind = "verification" | "password_reset";
 
@@ -45,8 +45,21 @@ export async function enqueueAuthEmail(kind: AuthEmailKind, recipient: string, u
   const workerDatabaseUrl = databaseUrl("WORKER_DATABASE_URL");
   if (workerDatabaseUrl) {
     try {
-      const { quickAddJob } = await import("graphile-worker");
-      await quickAddJob({ connectionString: workerDatabaseUrl }, "drain-email-outbox", { requestedAt: new Date().toISOString() });
+      const [{ Pool }, { makeWorkerUtils }] = await Promise.all([import("pg"), import("graphile-worker")]);
+      const workerPool = new Pool({
+        connectionString: workerDatabaseUrl,
+        max: 1,
+        connectionTimeoutMillis: 30_000,
+        application_name: "annapurna-link-outbox-adhoc",
+        ssl: databaseSslOptions(workerDatabaseUrl),
+      });
+      const utils = await makeWorkerUtils({ pgPool: workerPool, schema: "graphile_worker" });
+      try {
+        await utils.addJob("drain-email-outbox", { requestedAt: new Date().toISOString() });
+      } finally {
+        await utils.release();
+        await workerPool.end();
+      }
     } catch {
       // Kept pending; the scheduled drain is the recovery path.
     }

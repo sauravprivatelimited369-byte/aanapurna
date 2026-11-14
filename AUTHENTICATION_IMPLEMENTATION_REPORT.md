@@ -261,10 +261,12 @@ then **PASSed all six jobs** in [run 43565517517](https://github.com/sauravpriva
 at `ff359c4`. The first hosted Vercel build failed at `npm ci` because of a
 nested esbuild binary mismatch; a global `esbuild@0.28.2` override was added
 and verified locally. The second hosted build passed `npm ci` but failed in
-`db:migrate` with a hidden PostgreSQL cause. The third build exposed an IPv6
-`ENETUNREACH` error; a side-effect-free URL rewrite to Supabase's IPv4 shared
-session pooler, unit tests, and a 30-second timeout were added. A fourth hosted
-deployment is still required. Hosted database migrations, real SMTP delivery,
+`db:migrate` with a hidden PostgreSQL cause. The third and fourth builds exposed
+an IPv6 `ENETUNREACH` error and then `SELF_SIGNED_CERT_IN_CHAIN`; a
+side-effect-free URL rewrite to Supabase's IPv4 shared session pooler, the
+reviewed public Supabase root CA with strict TLS verification, unit tests, and a
+30-second timeout were added. A fifth hosted deployment is still required.
+Hosted database migrations, real SMTP delivery,
 private uploads, backups, custom-domain cookies, independent security review
 and human launch approval remain **NOT TESTED**. `OPERATIONS_ENABLED=false`. No production readiness is claimed.
 

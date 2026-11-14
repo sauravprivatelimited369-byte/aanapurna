@@ -1,8 +1,26 @@
+import { SUPABASE_ROOT_CA_2021 } from "./supabase-ca";
+
 export type DatabaseUrlName =
   | "DATABASE_URL"
   | "AUTH_DATABASE_URL"
   | "WORKER_DATABASE_URL"
   | "MIGRATION_DATABASE_URL";
+
+const SSL_QUERY_PARAMS = [
+  "sslmode",
+  "ssl",
+  "sslcert",
+  "sslkey",
+  "sslrootcert",
+  "sslpassword",
+  "sslnegotiation",
+  "uselibpqcompat",
+];
+
+/** Remove URL SSL parameters so node-postgres keeps the explicit `ssl` option. */
+function stripSslParams(url: URL): void {
+  for (const name of SSL_QUERY_PARAMS) url.searchParams.delete(name);
+}
 
 /**
  * Optionally rewrite a Supabase direct (IPv6-only) PostgreSQL URL to the shared
@@ -32,11 +50,31 @@ export function databaseUrl(name: DatabaseUrlName): string | undefined {
     throw new Error(`${name} is not a valid PostgreSQL URL.`);
   }
   const role = decodeURIComponent(url.username);
-  if (!role || role.includes(".") || url.hostname === host) return raw;
+  if (!role || role.includes(".") || url.hostname === host) {
+    stripSslParams(url);
+    return url.toString();
+  }
   url.hostname = host;
   url.port = port;
   url.username = `${role}.${projectRef}`;
+  stripSslParams(url);
   return url.toString();
+}
+
+/** TLS settings for managed PostgreSQL, with strict verification against the Supabase root CA where needed. */
+export function databaseSslOptions(connectionString: string | undefined): { ca?: string; rejectUnauthorized: true } | undefined {
+  if (process.env.DATABASE_SSL !== "true") return undefined;
+  if (connectionString) {
+    try {
+      const host = new URL(connectionString).hostname.toLowerCase();
+      if (host.endsWith(".pooler.supabase.com") || host.endsWith(".supabase.co")) {
+        return { ca: SUPABASE_ROOT_CA_2021, rejectUnauthorized: true };
+      }
+    } catch {
+      // An invalid URL will be reported by pg with setting names only.
+    }
+  }
+  return { rejectUnauthorized: true };
 }
 
 export function databaseConnectionTimeoutMillis(): number {

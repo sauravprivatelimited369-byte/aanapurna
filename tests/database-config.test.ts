@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { databaseConnectionTimeoutMillis, databaseUrl } from "../src/lib/database-config";
+import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../src/lib/database-config";
+import { SUPABASE_ROOT_CA_2021 } from "../src/lib/supabase-ca";
 
 const original = { ...process.env };
 
@@ -44,6 +45,31 @@ describe("managed database URL rewrite", () => {
     delete process.env.SUPABASE_PROJECT_REF;
     process.env.DATABASE_URL = "postgres://annapurna_app:synthetic@db.example.test:5432/postgres";
     expect(() => databaseUrl("DATABASE_URL")).toThrow(/SUPABASE_POOLER_HOST/);
+  });
+
+  it("strips URL SSL parameters so the explicit TLS option is not overridden", () => {
+    setPoolerEnv();
+    process.env.DATABASE_URL = "postgres://annapurna_app:synthetic@db.synthetic-ref.supabase.co:5432/postgres?sslmode=require&uselibpqcompat=true";
+    const rewritten = new URL(databaseUrl("DATABASE_URL")!);
+    expect(rewritten.searchParams.has("sslmode")).toBe(false);
+    expect(rewritten.searchParams.has("uselibpqcompat")).toBe(false);
+    expect(rewritten.username).toBe("annapurna_app.synthetic-ref");
+  });
+});
+
+describe("managed database TLS", () => {
+  it("uses the reviewed public Supabase root CA for pooler hosts", () => {
+    process.env.DATABASE_SSL = "true";
+    const options = databaseSslOptions("postgres://role.ref:synthetic@aws-0-ap-south-1.pooler.supabase.com:5432/postgres");
+    expect(options).toMatchObject({ ca: SUPABASE_ROOT_CA_2021, rejectUnauthorized: true });
+    expect(SUPABASE_ROOT_CA_2021).toContain("BEGIN CERTIFICATE");
+  });
+
+  it("uses system roots for other managed hosts and no TLS for local development", () => {
+    process.env.DATABASE_SSL = "true";
+    expect(databaseSslOptions("postgres://role:synthetic@db.example.test:5432/postgres")).toEqual({ rejectUnauthorized: true });
+    process.env.DATABASE_SSL = "false";
+    expect(databaseSslOptions("postgres://role:synthetic@127.0.0.1:5432/postgres")).toBeUndefined();
   });
 });
 
