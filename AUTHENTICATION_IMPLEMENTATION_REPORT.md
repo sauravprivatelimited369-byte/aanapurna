@@ -241,6 +241,27 @@ All commands below were run in this sandbox on the final working tree. The integ
 
 ---
 
+## 8.1 Hosted preview update (2026-11-13)
+
+The authorized Supabase/Vercel preview resources are documented in
+[`HOSTED_DEPLOYMENT.md`](HOSTED_DEPLOYMENT.md). Supabase remains PostgreSQL-only;
+Better Auth is still the sole auth system. Web-only Vercel hosting is separate
+from the persistent Graphile Worker. Repository blockers addressed in this
+update: optional `SMTP_URL` or explicit SMTP fields, a managed-DB Compose
+overlay, exact `VERCEL_URL` trusted origin, guarded shared worker pool/shutdown,
+Vercel build-command configuration with Node `22.x` via `engines.node`,
+fail-closed placeholder checks, and a Windows CI port-ownership cleanup.
+
+Latest local evidence: typecheck PASS; lint PASS; **105 unit tests PASS**;
+production build PASS; `git diff --check` PASS; positive synthetic `SMTP_URL`,
+discrete SMTP, and Vercel-shape preflights PASS; negative missing/placeholder
+preflights correctly refused. CI at `2d270da` passed five of six jobs; the
+Windows launcher job failed on a port-cleanup race and has a targeted workflow
+patch pending fresh CI. Hosted database migrations, real SMTP delivery, private
+uploads, backups, custom-domain cookies, independent security review and human
+launch approval remain **NOT TESTED**. `OPERATIONS_ENABLED=false`. No production
+readiness is claimed.
+
 ## 9. Owner-only external configuration — exact simple instructions
 
 These are the only steps that genuinely require an account owner or hosting administrator. **Do not paste any real value into chat, GitHub, an issue, a committed file, or `.env.example`.** Use your host's **Environment variables / Secrets** page.

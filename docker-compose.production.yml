@@ -1,9 +1,10 @@
 # Production-style single-host deployment overlay.
 # Keep docker-compose.yml as the base so web, database, migrations, and worker
 # continue to run together. Caddy terminates HTTPS and routes the chosen domain.
-# This overlay is for the included self-hosted PostgreSQL, not a managed DB URL.
-# A managed-DB host should inject its four role URLs directly and run
-# `npm run check:production-config` before starting web/worker.
+# This overlay is for the included self-hosted PostgreSQL. For a managed DB
+# (for example Supabase Postgres), also apply docker-compose.managed-db.yml;
+# it injects the four role URLs directly and disables the local DB service.
+# Both modes run the fail-closed preflight before migrations, web or worker.
 
 x-production-environment: &production-environment
   NODE_ENV: production
@@ -21,10 +22,12 @@ x-production-environment: &production-environment
   OPERATIONS_ENABLED: ${OPERATIONS_ENABLED:-false}
   PRIVATE_STORAGE_DIR: /app/uploads/private
   FILE_SCAN_MODE: ${FILE_SCAN_MODE:-disabled}
-  SMTP_URL: ${SMTP_URL:?Set SMTP_URL to your transactional email provider}
+  # Either SMTP_URL or the explicit fields below must be supplied. The
+  # fail-closed preflight decides which form is usable; Compose does not.
+  SMTP_URL: ${SMTP_URL:-}
   SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM to a verified sender}
   SMTP_HOST: ${SMTP_HOST:-}
-  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_PORT: ${SMTP_PORT:-}
   SMTP_USER: ${SMTP_USER:-}
   SMTP_PASS: ${SMTP_PASS:-}
   SMTP_SECURE: ${SMTP_SECURE:-false}

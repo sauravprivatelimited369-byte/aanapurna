@@ -29,6 +29,31 @@ const pool = new Pool({
   ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
 });
 
+let stopping = false;
+let poolClosed = false;
+
+function logDatabaseError(event: string, error: unknown): void {
+  console.error(JSON.stringify({
+    level: "error",
+    event,
+    message: error instanceof Error ? error.message : "unknown",
+  }));
+}
+
+// A dropped PostgreSQL connection can otherwise surface as an unhandled
+// `error` event and crash the whole worker. Share one guarded pool with
+// Graphile Worker; it installs no duplicate handlers when these are present.
+pool.on("error", (error) => logDatabaseError("worker.database_pool_idle_error", error));
+pool.on("connect", (client) => {
+  client.on("error", (error) => logDatabaseError("worker.database_client_error", error));
+});
+
+async function closePool(): Promise<void> {
+  if (poolClosed) return;
+  poolClosed = true;
+  await pool.end().catch(() => undefined);
+}
+
 const MAX_ATTEMPTS = 8;
 const BATCH_SIZE = 20;
 const RETRY_INTERVAL_MS = 30_000;
@@ -47,7 +72,7 @@ function getTransporter(): Transporter {
     return transporter;
   }
   const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT ?? 587);
+  const port = Number(process.env.SMTP_PORT);
   if (!host || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SMTP is not configured.");
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
@@ -158,29 +183,35 @@ async function drainEmailOutbox() {
 
 async function startWorker() {
   const runner = await run({
-    connectionString: workerDatabaseUrl,
+    pgPool: pool,
     schema: "graphile_worker",
     concurrency: 2,
     pollInterval: 1_000,
+    noHandleSignals: true,
     taskList: { "drain-email-outbox": drainEmailOutbox },
     crontab: "* * * * * drain-email-outbox",
   });
 
   runner.promise.catch(async (error: unknown) => {
+    if (stopping) return;
     console.error(JSON.stringify({ level: "error", event: "worker.stopped_unexpectedly", message: error instanceof Error ? error.message : "unknown" }));
-    await pool.end().catch(() => undefined);
+    await closePool();
     process.exitCode = 1;
   });
 
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.once(signal, () => {
-      void runner.stop(signal).then(() => pool.end()).catch(() => { process.exitCode = 1; });
+      stopping = true;
+      void runner.stop(signal).then(closePool).catch(async () => {
+        await closePool();
+        process.exitCode = 1;
+      });
     });
   }
 }
 
 void startWorker().catch(async (error: unknown) => {
   console.error(JSON.stringify({ level: "error", event: "worker.startup_failed", message: error instanceof Error ? error.message : "unknown" }));
-  await pool.end().catch(() => undefined);
+  await closePool();
   process.exitCode = 1;
 });

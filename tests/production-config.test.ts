@@ -26,12 +26,41 @@ function baseEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   };
 }
 
+function explicitSmtpEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env = baseEnv();
+  delete env.SMTP_URL;
+  return {
+    ...env,
+    SMTP_HOST: "smtp.example.test",
+    SMTP_PORT: "465",
+    SMTP_USER: "not-a-real-user",
+    SMTP_PASS: "not-a-real-pass",
+    SMTP_SECURE: "true",
+    ...overrides,
+  };
+}
+
 describe("production configuration preflight", () => {
   it("accepts a complete synthetic production configuration", () => {
     const result = validateProductionConfig(baseEnv(), { allowTestDomains: true });
     expect(result.problems).toEqual([]);
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
+  });
+
+  it("accepts explicit SMTP settings without SMTP_URL", () => {
+    const result = validateProductionConfig(explicitSmtpEnv(), { allowTestDomains: true });
+    expect(result.problems).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a placeholder SMTP app password by name only", () => {
+    const result = validateProductionConfig(
+      explicitSmtpEnv({ SMTP_PASS: "REPLACE_WITH_GMAIL_APP_PASSWORD" }),
+      { allowTestDomains: true },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toContain("SMTP_USER and SMTP_PASS");
   });
 
   it("rejects placeholders, local URLs and a loopback SMTP sink without printing values", () => {
@@ -104,12 +133,27 @@ describe("shared email delivery status", () => {
 });
 
 describe("production Compose overlay", () => {
-  it("disables Mailpit and requires the fail-closed preflight before web/worker", () => {
+  it("disables Mailpit, allows either SMTP form and requires the fail-closed preflight", () => {
     const compose = readFileSync("docker-compose.production.yml", "utf8");
     expect(compose).toContain('profiles: ["local"]');
     expect(compose).toContain('command: ["npm", "run", "check:production-config"]');
     expect(compose).toContain("condition: service_completed_successfully");
-    expect(compose).toContain("${SMTP_URL:?");
+    expect(compose).toContain("${SMTP_URL:-}");
+    expect(compose).toContain("${SMTP_PORT:-}");
+    expect(compose).not.toContain("${SMTP_PORT:-587}");
     expect(compose).not.toContain("smtp://mailpit");
+  });
+});
+
+describe("managed database Compose overlay", () => {
+  it("uses direct role URLs, disables local services and gates on preflight", () => {
+    const compose = readFileSync("docker-compose.managed-db.yml", "utf8");
+    expect(compose).toContain("${DATABASE_URL:?");
+    expect(compose).toContain("${AUTH_DATABASE_URL:?");
+    expect(compose).toContain("DATABASE_SSL: ${DATABASE_SSL:-true}");
+    expect(compose).toContain('profiles: ["local"]');
+    expect(compose).toContain("required: false");
+    expect(compose).toContain('command: ["npm", "run", "check:production-config"]');
+    expect(compose).not.toContain("@db:5432");
   });
 });

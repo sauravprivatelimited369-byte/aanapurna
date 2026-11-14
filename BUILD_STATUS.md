@@ -165,6 +165,18 @@ Complete and verify the requested end-to-end donation/offer/concurrent assignmen
 - Actual local `/api/public/impact` — **HTTP 200**, `status: "empty"`, all five backend metrics zero. A separate PGlite migration test verifies positive synthetic fixture aggregation and keeps recorded units distinct; it does not turn fixtures into public data. `/api/health` — **HTTP 200**, database healthy, `realOperationsEnabled: false`. After integration testing the real local database is empty: users, organizations, donations and delivery receipts are all zero.
 - `git diff --check` — **PASS**.
 
+## Preview / deployment-readiness work (2026-11-13)
+
+- A fail-closed production configuration validator, shared email status helper, health endpoint (`ok` / `degraded`), and optional explicit SMTP fields were added. The validator uses setting names, never values, in its errors.
+- `docker-compose.production.yml` now disables Mailpit through a `local` profile, accepts either `SMTP_URL` or explicit SMTP fields, and gates migrations/web/worker on a preflight service. `docker-compose.managed-db.yml` supplies four direct managed-DB role URLs, `DATABASE_SSL=true`, and `required: false` local-service dependencies.
+- `src/worker/index.ts` uses one guarded `pg.Pool` with Graphile Worker's `run({ pgPool })`, `noHandleSignals`, `runner.promise.catch`, and explicit `runner.stop()` / pool shutdown on SIGTERM/SIGINT. Its outbox drain reserves/defer/marks batches and validates action URLs against the exact public origin.
+- `src/lib/auth.ts` trusts the exact automatically injected `VERCEL_URL` origin in production in addition to `APP_URL`; no wildcard is used.
+- `vercel.json` configures `npm ci` and `npm run db:migrate && npm run db:check && npm run build`. Both Compose overlays and all workflow YAML parse successfully with `js-yaml`.
+- Local checks after the hosted-preview edits: typecheck, lint, **105 unit tests**, production build, `git diff --check`, two positive synthetic preflights (`SMTP_URL` and discrete SMTP), Vercel-shape preflight with a synthetic app password, and negative missing/placeholder preflights — **PASS**.
+- CI run [43561700577](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43561700577) at commit `2d270da` had five jobs **PASS** and one Windows one-click **FAIL** (`Managed launcher ports did not close after stopping the process tree`). The workflow now force-kills surviving loopback-port owners in `Stop-Launcher` and its `finally` block. This is a targeted synthetic CI fix, not production validation.
+- Supabase/Vercel provisioning and remaining owner-only gates are recorded in [`HOSTED_DEPLOYMENT.md`](HOSTED_DEPLOYMENT.md). The hosted database and email delivery are **NOT TESTED** end-to-end at this stage; no real Gmail App Password was supplied and no production/custom domain was approved.
+- A fresh GitHub Actions run is required after this push; record its result here before relying on the Windows CI cleanup.
+
 ## Remaining unverified or blocked
 
 - Active/authorized Generator, Receiver, approved Helper and platform-staff workflows; privileged mutations and real operational records — **not tested**. Active/pending role navigation is covered by unit tests, and the local auth test verifies denial for a pending non-platform account. Non-empty aggregation is tested only with synthetic PGlite fixtures; no non-empty real-PostgreSQL data or public metric is claimed.

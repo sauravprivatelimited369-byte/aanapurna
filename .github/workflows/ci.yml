@@ -61,6 +61,30 @@ jobs:
           OPERATIONS_ENABLED: 'false'
         run: npm run check:production-config
 
+      - name: Production configuration with discrete SMTP (synthetic names only)
+        env:
+          NODE_ENV: production
+          ALLOW_TEST_DOMAINS: 'true'
+          DATABASE_URL: postgres://annapurna_app:not-a-real-password@db.example.test:5432/postgres
+          AUTH_DATABASE_URL: postgres://annapurna_auth:not-a-real-password@db.example.test:5432/postgres
+          WORKER_DATABASE_URL: postgres://annapurna_worker:not-a-real-password@db.example.test:5432/postgres
+          MIGRATION_DATABASE_URL: postgres://annapurna_migrator:not-a-real-password@db.example.test:5432/postgres
+          DATABASE_SSL: 'true'
+          AUTH_SECRET: not-a-real-secret-012345678901234567890123456789
+          OTP_HASH_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          OTP_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          EMAIL_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          APP_URL: https://app.example.test
+          APP_DOMAIN: app.example.test
+          SMTP_FROM: Annapurna Link <noreply@example.test>
+          SMTP_HOST: smtp.example.test
+          SMTP_PORT: '465'
+          SMTP_USER: not-a-real-user
+          SMTP_PASS: not-a-real-pass
+          SMTP_SECURE: 'true'
+          OPERATIONS_ENABLED: 'false'
+        run: npm run check:production-config
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
@@ -211,6 +235,26 @@ jobs:
         run: |
           docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
           docker compose -f docker-compose.yml -f docker-compose.production.yml run --rm preflight
+      - name: Managed database overlay config and fail-closed preflight
+        env:
+          APP_DOMAIN: app.example.test
+          APP_URL: https://app.example.test
+          SMTP_FROM: Annapurna Link <noreply@example.test>
+          SMTP_URL: ''
+          SMTP_HOST: smtp.example.test
+          SMTP_PORT: '465'
+          SMTP_USER: not-a-real-user
+          SMTP_PASS: not-a-real-pass
+          SMTP_SECURE: 'true'
+          DATABASE_URL: postgres://annapurna_app:not-a-real-password@db.example.test:5432/postgres
+          AUTH_DATABASE_URL: postgres://annapurna_auth:not-a-real-password@db.example.test:5432/postgres
+          WORKER_DATABASE_URL: postgres://annapurna_worker:not-a-real-password@db.example.test:5432/postgres
+          MIGRATION_DATABASE_URL: postgres://annapurna_migrator:not-a-real-password@db.example.test:5432/postgres
+          DATABASE_SSL: 'true'
+          ALLOW_TEST_DOMAINS: 'true'
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.production.yml -f docker-compose.managed-db.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.production.yml -f docker-compose.managed-db.yml run --rm preflight
       - name: Tear down disposable stack
         if: always()
         run: docker compose down -v
@@ -357,14 +401,25 @@ jobs:
             param([string]$Suffix)
             return Start-Process -FilePath cmd.exe -ArgumentList '/c','start.bat' -WorkingDirectory $PWD -PassThru -WindowStyle Hidden -Credential $credential -LoadUserProfile -RedirectStandardOutput "$env:RUNNER_TEMP\launch-$Suffix.out" -RedirectStandardError "$env:RUNNER_TEMP\launch-$Suffix.err"
           }
+          function Get-LauncherPortOwners {
+            @(Get-NetTCPConnection -State Listen -LocalPort 3000,55432,2526,2527 -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty OwningProcess -Unique |
+              Where-Object { $_ -and $_ -ne 0 -and $_ -ne 4 -and $_ -ne $PID })
+          }
           function Stop-Launcher {
             param($Server)
             if ($Server -and !$Server.HasExited) { & taskkill /PID $Server.Id /T /F 2>$null | Out-Null }
             for ($i = 0; $i -lt 30; $i++) {
-              if (!(Get-NetTCPConnection -State Listen -LocalPort 3000,55432 -ErrorAction SilentlyContinue)) { return }
+              $owners = Get-LauncherPortOwners
+              if ($owners.Count -eq 0) { return }
+              # Force-killing the cmd.exe tree can leave detached grandchildren
+              # on Windows CI. Release the dedicated loopback ports explicitly.
+              if ($i -ge 2) {
+                foreach ($owner in $owners) { & taskkill /PID $owner /T /F 2>$null | Out-Null }
+              }
               Start-Sleep -Seconds 1
             }
-            throw 'Managed launcher ports did not close after stopping the process tree.'
+            throw 'Managed launcher ports did not close after explicit cleanup.'
           }
           $server = $null
           try {
@@ -372,13 +427,15 @@ jobs:
             Wait-Ready
             npm run test:local-auth
             if ($LASTEXITCODE -ne 0) { throw 'Managed local authentication smoke failed.' }
-            Stop-Launcher $server
-            $server = Start-Launcher 'restart'
-            Wait-Ready
             @'
           const {Client} = require('pg');
           (async () => { const c = new Client({connectionString:process.env.MIGRATION_DATABASE_URL}); await c.connect(); const r = await c.query('SELECT count(*)::int AS count FROM public."user"'); await c.end(); if (r.rows[0].count < 1) throw Error('Fictional account missing after restart.'); console.log('PASS: fictional account persisted after restart.'); })().catch(() => { console.error('Persistence check failed.'); process.exit(1); });
           '@ | Set-Content -Path '.local-data/check-persistence.cjs' -Encoding utf8
+            # A restart must start from closed local ports; stopping the whole
+            # launcher tree here is the persistence boundary under test.
+            Stop-Launcher $server
+            $server = Start-Launcher 'restart'
+            Wait-Ready
             node --env-file=.env .local-data/check-persistence.cjs
             if ($LASTEXITCODE -ne 0) { throw 'Managed database persistence check failed.' }
           } catch {
@@ -390,6 +447,7 @@ jobs:
             throw
           } finally {
             if ($server -and !$server.HasExited) { & taskkill /PID $server.Id /T /F 2>$null | Out-Null }
+            foreach ($owner in (Get-LauncherPortOwners)) { & taskkill /PID $owner /T /F 2>$null | Out-Null }
           }
           # Every check above passed. taskkill reports a non-zero code when part of
           # the process tree has already gone; do not let that fail the step.

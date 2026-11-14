@@ -1,0 +1,111 @@
+# Managed PostgreSQL overlay, applied AFTER docker-compose.production.yml.
+# Use: docker compose -f docker-compose.yml -f docker-compose.production.yml \
+#        -f docker-compose.managed-db.yml up -d --build
+# Supply the four least-privilege role URLs in the host's secure settings.
+# The local db and Mailpit services are profiled out; the preflight still gates
+# every stateful service. Supabase Auth is not used: these are ordinary
+# PostgreSQL role URLs consumed by Better Auth / Drizzle / Graphile Worker.
+
+x-managed-environment: &managed-environment
+  NODE_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the managed app-role URL}
+  AUTH_DATABASE_URL: ${AUTH_DATABASE_URL:?Set AUTH_DATABASE_URL to the managed auth-role URL}
+  WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:?Set WORKER_DATABASE_URL to the managed worker-role URL}
+  MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Set MIGRATION_DATABASE_URL to the managed migrator-role URL}
+  DATABASE_SSL: ${DATABASE_SSL:-true}
+  DB_POOL_MAX: ${DB_POOL_MAX:-5}
+  AUTH_DB_POOL_MAX: ${AUTH_DB_POOL_MAX:-3}
+  AUTH_SECRET: ${AUTH_SECRET:?Generate AUTH_SECRET in secure deployment settings}
+  OTP_HASH_KEY: ${OTP_HASH_KEY:?Generate a base64 32-byte key}
+  OTP_ENCRYPTION_KEY: ${OTP_ENCRYPTION_KEY:?Generate a base64 32-byte key}
+  EMAIL_ENCRYPTION_KEY: ${EMAIL_ENCRYPTION_KEY:?Generate a base64 32-byte key}
+  APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS URL}
+  APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN to a domain you control}
+  OPERATIONS_ENABLED: ${OPERATIONS_ENABLED:-false}
+  PRIVATE_STORAGE_DIR: /app/uploads/private
+  FILE_SCAN_MODE: ${FILE_SCAN_MODE:-disabled}
+  # Either SMTP_URL or the explicit fields below must be supplied. The
+  # fail-closed preflight decides which form is usable; Compose does not.
+  SMTP_URL: ${SMTP_URL:-}
+  SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM to a verified sender}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASS: ${SMTP_PASS:-}
+  SMTP_SECURE: ${SMTP_SECURE:-false}
+  # Synthetic CI only. Never set true in a real deployment.
+  ALLOW_TEST_DOMAINS: ${ALLOW_TEST_DOMAINS:-false}
+
+services:
+  # A managed DB replaces the bundled PostgreSQL. required:false below stops
+  # Compose from auto-starting these profiled services as dependencies.
+  db:
+    profiles: ["local"]
+
+  mailpit:
+    profiles: ["local"]
+
+  preflight:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "check:production-config"]
+    environment: *managed-environment
+    restart: "no"
+
+  migrate:
+    environment: *managed-environment
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+        required: false
+
+  web:
+    environment:
+      <<: *managed-environment
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+        required: false
+
+  worker:
+    environment: *managed-environment
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+        required: false
+      mailpit:
+        condition: service_started
+        required: false
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN to a domain you control}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:

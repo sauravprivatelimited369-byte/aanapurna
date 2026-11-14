@@ -22,8 +22,12 @@ if (isProduction && !configuredSecret) {
 }
 
 const appUrl = process.env.APP_URL;
+// Vercel previews are reached through a per-deployment host rather than the
+// project's canonical alias. Trust that exact HTTPS origin in addition to
+// APP_URL; never trust a wildcard or a user-supplied host.
+const vercelPreviewOrigin = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null;
 const trustedOrigins = isProduction
-  ? (appUrl ? [appUrl] : [])
+  ? [appUrl, vercelPreviewOrigin].filter((origin): origin is string => Boolean(origin))
   : ["http://localhost:3000", "http://127.0.0.1:3000", "https://*.e2b.app", ...(appUrl ? [appUrl] : [])];
 
 const optionalIntakeText = (max: number) => z.string().trim().max(max).nullable().optional();
