@@ -13,7 +13,11 @@ export async function GET() {
     application: "annapurna-link",
     database: database.ok ? { status: "ok", latencyMs: database.latencyMs } : { status: "unavailable" },
     // Only setting NAMES are reported; no SMTP credential or URL is exposed.
-    email: { status: email.configured ? "configured" : "not_configured", missingSettings: email.missingSettings },
+    email: {
+      status: email.configured ? "configured" : "not_configured",
+      localTestSink: email.localOnly,
+      missingSettings: email.missingSettings,
+    },
     realOperationsEnabled: process.env.OPERATIONS_ENABLED === "true",
   };
   return NextResponse.json(body, {

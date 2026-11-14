@@ -30,7 +30,8 @@
     "test:local-domain": "node --env-file=.env --conditions=react-server --import tsx tests/integration/local-domain.ts",
     "test:local-workflow": "node --env-file=.env scripts/run-local-workflow.mjs",
     "test:local-backup": "node --env-file=.env scripts/test-local-backup.mjs",
-    "smtp:verify": "node --env-file=.env scripts/verify-smtp.mjs"
+    "smtp:verify": "node --env-file=.env scripts/verify-smtp.mjs",
+    "check:production-config": "tsx scripts/check-production-config.ts"
   },
   "dependencies": {
     "@tailwindcss/postcss": "4.3.5",

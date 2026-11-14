@@ -41,6 +41,26 @@ jobs:
       - name: Unit and migration tests
         run: npm test -- --reporter=dot
 
+      - name: Production configuration fail-closed preflight (synthetic names only)
+        env:
+          NODE_ENV: production
+          ALLOW_TEST_DOMAINS: 'true'
+          DATABASE_URL: postgres://annapurna_app:not-a-real-password@db.example.test:5432/annapurna_link
+          AUTH_DATABASE_URL: postgres://annapurna_auth:not-a-real-password@db.example.test:5432/annapurna_link
+          WORKER_DATABASE_URL: postgres://annapurna_worker:not-a-real-password@db.example.test:5432/annapurna_link
+          MIGRATION_DATABASE_URL: postgres://annapurna_migrator:not-a-real-password@db.example.test:5432/annapurna_link
+          DATABASE_SSL: 'true'
+          AUTH_SECRET: not-a-real-secret-012345678901234567890123456789
+          OTP_HASH_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          OTP_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          EMAIL_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          APP_URL: https://app.example.test
+          APP_DOMAIN: app.example.test
+          SMTP_FROM: Annapurna Link <noreply@example.test>
+          SMTP_URL: smtps://not-a-real-user:not-a-real-pass@smtp.example.test:465
+          OPERATIONS_ENABLED: 'false'
+        run: npm run check:production-config
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
@@ -181,6 +201,16 @@ jobs:
           docker compose run --rm web npm run db:check
           curl --fail --silent http://127.0.0.1:3000/api/health
           curl --fail --silent --output /dev/null http://127.0.0.1:8025/
+      - name: Production overlay config and fail-closed preflight
+        env:
+          APP_DOMAIN: app.example.test
+          APP_URL: https://app.example.test
+          SMTP_FROM: Annapurna Link <noreply@example.test>
+          SMTP_URL: smtps://not-a-real-user:not-a-real-pass@smtp.example.test:465
+          ALLOW_TEST_DOMAINS: 'true'
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.production.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.production.yml run --rm preflight
       - name: Tear down disposable stack
         if: always()
         run: docker compose down -v

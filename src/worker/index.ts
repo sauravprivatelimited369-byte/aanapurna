@@ -3,6 +3,7 @@ import { createTransport, type Transporter } from "nodemailer";
 import { Pool } from "pg";
 import { run } from "graphile-worker";
 import { decryptValue } from "@/security/crypto";
+import { getEmailSettingsStatus } from "../email/settings";
 
 type OutboxRow = {
   id: string;
@@ -34,7 +35,9 @@ const RETRY_INTERVAL_MS = 30_000;
 let transporter: Transporter | null = null;
 
 function smtpConfigured() {
-  return Boolean(process.env.SMTP_FROM && (process.env.SMTP_URL || process.env.SMTP_HOST));
+  // In production this rejects loopback sinks, placeholder URLs and incomplete
+  // explicit SMTP settings instead of pretending a delivery attempt was made.
+  return getEmailSettingsStatus().configured;
 }
 
 function getTransporter(): Transporter {

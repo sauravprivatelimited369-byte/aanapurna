@@ -130,24 +130,18 @@ The Pages workflow deploys the content in `github-pages/` on pushes to `main` or
 The same application can run at `localhost` for development or behind a public domain. A short `.io` address is **not** created automatically: you must own/register the domain and point its DNS to a server you control. This repository includes a Docker Compose + Caddy deployment overlay for a single Linux host; Caddy obtains and renews HTTPS certificates automatically once DNS is correct and ports 80/443 reach that host.
 
 1. Provision a supported Linux host with Docker Compose, a persistent disk, and ports 80/443 open. Register the short domain you want (for example, a name you own under `.io`) and set its DNS A/AAAA records to the host. Do not use a domain you do not control.
-2. Clone this repository on the host and generate fresh secrets with `npm run setup:env` (Node.js 22 is required). Edit `.env` privately and set:
+2. Clone this repository on the host. Use `.env.production.example` as a **name-only checklist** and enter the real values in the private, ignored `.env` file on that host (or in your host's secure settings). `npm run setup:env` generates local-only values; do not use those unchanged in production. At minimum set `APP_DOMAIN`, `APP_URL=https://your-short-domain.io`, `SMTP_URL` or the explicit `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_SECURE` values, `SMTP_FROM`, `AUTH_SECRET`, the three base64 encryption/HMAC keys, and the four independent database-role passwords. Keep `OPERATIONS_ENABLED=false` and `FILE_SCAN_MODE=disabled`.
 
-   ```dotenv
-   APP_DOMAIN=your-short-domain.io
-   APP_URL=https://your-short-domain.io
-   SMTP_URL=smtps://...your-provider-credentials...
-   SMTP_FROM="Annapurna Link <verified-sender@your-domain>"
-   OPERATIONS_ENABLED=false
-   FILE_SCAN_MODE=disabled
-   ```
-
-   Use the exact provider URL format documented by your SMTP service, keep `.env` private, and never commit it. Use a real transactional mail provider; the local Mailpit default is for development only. For an authenticated external `smtp://` (STARTTLS required) or `smtps://` provider URL, run `RUN_SMTP_VERIFY=true npm run smtp:verify` on the intended host (PowerShell: `$env:RUN_SMTP_VERIFY='true'; npm run smtp:verify; Remove-Item Env:RUN_SMTP_VERIFY`). The explicit probe checks TLS and authentication without sending mail by default or logging credentials; it does not establish sender-domain verification, inbox delivery, retries or provider compliance. To request exactly one test message to your own inbox, set `RUN_SMTP_SEND_TEST=true` and `SMTP_TEST_TO` to that single operator-controlled address in addition to `RUN_SMTP_VERIFY=true`. Provider acceptance is not proof of inbox delivery; check the inbox and spam folder separately. Verify worker/outbox delivery and retries separately before launch. The probe requires hostname, credentials and no URL query options; it does not support every provider configuration.
-3. Start the complete stack (web, PostgreSQL, migrations, mail worker, and HTTPS proxy):
+   The production overlay **does not use Mailpit**: its local-only service is disabled by a Compose profile. Before migrations, web or worker start, a `preflight` service runs `npm run check:production-config` and refuses placeholder values, a loopback SMTP sink, a non-HTTPS `APP_URL`, weak secrets, one shared admin database role, or a missing sender. You can also run that command manually on a managed-DB host. It prints setting names only, never values. For an authenticated external `smtp://` (STARTTLS required) or `smtps://` provider URL, run `RUN_SMTP_VERIFY=true npm run smtp:verify` on the intended host (PowerShell: `$env:RUN_SMTP_VERIFY='true'; npm run smtp:verify; Remove-Item Env:RUN_SMTP_VERIFY`). The explicit probe checks TLS and authentication without sending mail by default or logging credentials; it does not establish sender-domain verification, inbox delivery, retries or provider compliance. To request exactly one test message to your own inbox, set `RUN_SMTP_SEND_TEST=true` and `SMTP_TEST_TO` to that single operator-controlled address in addition to `RUN_SMTP_VERIFY=true`. Provider acceptance is not proof of inbox delivery; check the inbox and spam folder separately. Verify worker/outbox delivery and retries separately before launch. The probe requires hostname, credentials and no URL query options; it does not support every provider configuration.
+3. Start the complete stack (fail-closed preflight, web, PostgreSQL, migrations, mail worker, and HTTPS proxy):
 
    ```sh
+   npm run check:production-config
    docker compose -f docker-compose.yml -f docker-compose.production.yml up -d --build
-   docker compose -f docker-compose.yml -f docker-compose.production.yml logs -f web caddy worker
+   docker compose -f docker-compose.yml -f docker-compose.production.yml logs -f preflight web caddy worker
    ```
+
+   If preflight fails, fix only the named settings in the host's private configuration; do not bypass the check. For a host with an externally managed PostgreSQL database, use the four direct role URLs from `.env.production.example` Mode A and run the same preflight before starting web and worker.
 
 4. Visit `https://your-short-domain.io`. The local workflow remains unchanged at `http://localhost:3000`; choose either local run or hosted run against the same codebase. Use `docker compose down` to stop services without removing data. Back up PostgreSQL and private-upload volumes using an off-host, tested restore procedure.
 

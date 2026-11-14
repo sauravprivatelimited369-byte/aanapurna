@@ -1,18 +1,85 @@
 # Production-style single-host deployment overlay.
 # Keep docker-compose.yml as the base so web, database, migrations, and worker
 # continue to run together. Caddy terminates HTTPS and routes the chosen domain.
+# This overlay is for the included self-hosted PostgreSQL, not a managed DB URL.
+# A managed-DB host should inject its four role URLs directly and run
+# `npm run check:production-config` before starting web/worker.
+
+x-production-environment: &production-environment
+  NODE_ENV: production
+  DATABASE_URL: postgres://annapurna_app:${APP_DB_PASSWORD:?Generate a unique app-role password}@db:5432/${POSTGRES_DB:-annapurna_link}
+  AUTH_DATABASE_URL: postgres://annapurna_auth:${AUTH_DB_PASSWORD:?Generate a unique auth-role password}@db:5432/${POSTGRES_DB:-annapurna_link}
+  WORKER_DATABASE_URL: postgres://annapurna_worker:${WORKER_DB_PASSWORD:?Generate a unique worker-role password}@db:5432/${POSTGRES_DB:-annapurna_link}
+  MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER:-annapurna_migrator}:${POSTGRES_PASSWORD:?Generate a unique database-owner password}@db:5432/${POSTGRES_DB:-annapurna_link}
+  AUTH_SECRET: ${AUTH_SECRET:?Generate AUTH_SECRET in secure deployment settings}
+  OTP_HASH_KEY: ${OTP_HASH_KEY:?Generate a base64 32-byte key}
+  OTP_ENCRYPTION_KEY: ${OTP_ENCRYPTION_KEY:?Generate a base64 32-byte key}
+  EMAIL_ENCRYPTION_KEY: ${EMAIL_ENCRYPTION_KEY:?Generate a base64 32-byte key}
+  APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS URL}
+  APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN to a domain you control}
+  DATABASE_SSL: ${DATABASE_SSL:-false}
+  OPERATIONS_ENABLED: ${OPERATIONS_ENABLED:-false}
+  PRIVATE_STORAGE_DIR: /app/uploads/private
+  FILE_SCAN_MODE: ${FILE_SCAN_MODE:-disabled}
+  SMTP_URL: ${SMTP_URL:?Set SMTP_URL to your transactional email provider}
+  SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM to a verified sender}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASS: ${SMTP_PASS:-}
+  SMTP_SECURE: ${SMTP_SECURE:-false}
+  # Synthetic CI only. Never set true in a real deployment.
+  ALLOW_TEST_DOMAINS: ${ALLOW_TEST_DOMAINS:-false}
+
 services:
+  # The local Mailpit sink must never be reachable or used in production.
+  # Assigning a profile excludes it unless an operator explicitly asks for it.
+  mailpit:
+    profiles: ["local"]
+
+  # Fail closed before migrations, web or worker start. It reports setting
+  # NAMES only and refuses placeholders, local sinks and single admin DB roles.
+  preflight:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "check:production-config"]
+    environment: *production-environment
+    restart: "no"
+
+  migrate:
+    environment: *production-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      preflight:
+        condition: service_completed_successfully
+
   web:
     environment:
-      APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS URL}
-      SMTP_URL: ${SMTP_URL:?Set SMTP_URL to your transactional email provider}
-      SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM to a verified sender}
+      <<: *production-environment
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      preflight:
+        condition: service_completed_successfully
 
   worker:
-    environment:
-      APP_URL: ${APP_URL:?Set APP_URL to the public HTTPS URL}
-      SMTP_URL: ${SMTP_URL:?Set SMTP_URL to your transactional email provider}
-      SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM to a verified sender}
+    environment: *production-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      preflight:
+        condition: service_completed_successfully
+      # Optional in production: the local sink is disabled by its profile.
+      mailpit:
+        condition: service_started
+        required: false
 
   caddy:
     image: caddy:2-alpine
