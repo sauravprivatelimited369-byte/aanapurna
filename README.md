@@ -11,6 +11,7 @@ If this careful, auditable approach is useful, **[star the repository](https://g
 ## Product experience
 
 - Public overview: `/` (purpose, process, verified impact when recorded, and role-specific entry points).
+- **Sign-in is optional for reading.** `/preview` walks one fictional handover end to end — listing, partial acceptance, dispatch conflict, custody timeline, the delivery code's shape only, receipt and clearly-labelled sample totals — with no account, no database access and no JavaScript required. It is statically rendered and marked `noindex`. Sample content lives in `src/domain/demo-workspace.ts` and is never counted with real records. Signing in is required only to act: create a listing, accept an offer, claim a job or confirm a delivery.
 - How it works: `/how-it-works`.
 - Food-safety scope: `/food-safety` (draft; requires qualified review).
 - About, contact and accessibility: `/about`, `/contact`, `/accessibility` (no official email/phone is invented).

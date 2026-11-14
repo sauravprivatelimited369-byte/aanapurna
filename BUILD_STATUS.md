@@ -1,5 +1,14 @@
 # Build status
 
+## Optional sign-in walkthrough and prompt compliance review — 2026-11-14 (current working tree)
+
+- Added a public, statically rendered walkthrough at `/preview` so reading the product no longer requires an account: one fictional handover end to end (listing, partial acceptance, dispatch conflict, custody timeline, the delivery code's shape only, receipt, sample totals), badged as sample data and set to `noindex, follow`. Data lives in `src/domain/demo-workspace.ts` and never touches PostgreSQL. Entry points added to the header, mobile menu, footer, landing hero and the sign-in page; `/login` now states that signing in is optional for reading and required only for acting.
+- Added `demoWorkspaceProblems()` and `tests/demo-workspace.test.ts` (8 tests) holding the fixture to the same record rules as production data: quantity ordering, exactly one winning Helper, custody events in order, unique references, reserved `example.org` contacts, no phone numbers and no delivery-code material.
+- Moved response security headers into the application (`next.config.ts` `headers()`): nosniff, `X-Frame-Options: DENY`, referrer policy, permissions policy, COOP, a report-only CSP, and `no-store` on `/api/auth/*`. Before this, those headers existed only in the Caddyfile, so the hosted deployment served responses without them. Added `tests/security-headers.test.ts` (4 tests), including a check that the public impact endpoint keeps its own cache policy.
+- Wrote `MASTER_PROMPT_COMPLIANCE.md`: every section of the master build prompt mapped to Done / Partial / Missing / Blocked (owner) with file evidence and the concrete remaining gap, plus the next five work items. The honest summary is that the core lifecycle is implemented and tested locally, while documentation set, worker heartbeat, account/session screens, recall records and browser evidence remain open.
+- Verified in this sandbox: `tsc --noEmit` clean, `eslint .` clean, `vitest run` 19 files / 146 tests passing, `next build` succeeding with `/preview` prerendered as static, and `GET /preview` over HTTP returning 200 with the sample notice and `noindex`.
+- **Not tested here:** Playwright/Chromium (download blocked in this sandbox), the new headers on the hosted deployment before redeploy, real SMTP delivery, and any real-world operation.
+
 ## Real authentication implementation — 2026-11-13 (current working tree)
 
 The sections below are historical evidence from earlier commits; they do **not** verify the current authentication changes. This section records the checks actually run on this branch against a disposable embedded PostgreSQL 17 database, a loopback SMTP sink, the Graphile Worker, and the running Next.js app.

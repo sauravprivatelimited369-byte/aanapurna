@@ -116,6 +116,8 @@ img, svg { max-width: 100%; }
 .hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 31px; }
 .hero-tertiary-link, .text-link { display: inline-flex; align-items: center; gap: 9px; color: #f2d179; font-size: 14px; font-weight: 680; text-underline-offset: 4px; }
 .hero-tertiary-link { margin-top: 17px; }
+.hero-tertiary-row { display: grid; justify-items: start; gap: 2px; }
+.hero-tertiary-row .hero-tertiary-link + .hero-tertiary-link { margin-top: 6px; }
 .hero-tertiary-link:hover, .text-link:hover { color: #ffe4a0; text-decoration: underline; }
 .hero-note { display: flex; align-items: flex-start; gap: 11px; max-width: 500px; margin-top: 28px; color: #b8b6b5; font-size: 13px; line-height: 1.6; }
 .hero-note-mark { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; border: 1px solid rgba(255,183,3,.22); border-radius: 50%; color: var(--saffron); }
@@ -723,3 +725,60 @@ select.form-control { appearance: auto; }
   .account-state-actions { flex-direction: column; }
   .account-state-actions .button { width: 100%; }
 }
+
+/* ---------------------------------------------------------------------------
+   Public sample walkthrough (/preview). Read-only rendering of fictional data;
+   no interactive controls, so it stays usable on low-bandwidth Android phones.
+--------------------------------------------------------------------------- */
+.section--preview { padding: 56px 0 96px; }
+.demo-ribbon {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 8px 13px;
+  border: 1px solid rgba(157,183,255,.3);
+  border-radius: 999px;
+  color: #cbd5ff;
+  background: rgba(157,183,255,.07);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.demo-ribbon strong { color: #f5f1e8; }
+.demo-list { display: grid; gap: 10px; margin: 0 0 14px; padding: 0 0 0 18px; color: #cfcbd0; font-size: 13px; line-height: 1.65; }
+.demo-list li::marker { color: var(--saffron); }
+.demo-facts { display: grid; gap: 0; margin: 0; }
+.demo-facts > div { display: grid; grid-template-columns: minmax(0,132px) minmax(0,1fr); gap: 12px; padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+.demo-facts > div:last-child { border-bottom: 0; }
+.demo-facts dt { color: #a9a5ac; font-size: 12px; font-weight: 650; letter-spacing: .01em; }
+.demo-facts dd { margin: 0; color: #ece7dd; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.demo-footnote { margin: 14px 0 0; color: #a9a5ac; font-size: 12px; line-height: 1.65; }
+.demo-quote { margin: 14px 0 0; padding: 12px 14px; border-left: 2px solid rgba(255,183,3,.5); color: #ded6c6; font-size: 13px; line-height: 1.65; }
+.demo-arrow { color: #8c8790; font-size: 15px; }
+.demo-code { display: grid; gap: 6px; justify-items: start; margin: 0 0 16px; padding: 16px; border: 1px dashed rgba(157,183,255,.34); border-radius: 13px; background: rgba(157,183,255,.05); }
+.demo-code span { font-family: var(--serif); font-size: 30px; letter-spacing: .22em; color: #dbe3ff; line-height: 1; }
+.demo-code small { color: #a9a5ac; font-size: 11px; line-height: 1.5; }
+.demo-timeline { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.demo-timeline > li { position: relative; display: grid; grid-template-columns: 20px minmax(0,1fr); gap: 14px; padding-bottom: 20px; }
+.demo-timeline > li:last-child { padding-bottom: 0; }
+.demo-timeline-mark { position: relative; width: 11px; height: 11px; margin-top: 6px; border-radius: 50%; background: var(--saffron); box-shadow: 0 0 0 4px rgba(255,183,3,.12); }
+.demo-timeline > li:not(:last-child) .demo-timeline-mark::after { position: absolute; top: 15px; left: 5px; width: 1px; height: calc(100% + 9px); background: rgba(255,255,255,.13); content: ""; }
+.demo-timeline-head { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin: 0; color: var(--text); font-size: 14px; }
+.demo-timeline-meta { margin: 4px 0 0; color: #9d99a2; font-size: 12px; }
+.demo-timeline-detail { margin: 6px 0 0; color: #cbc6cc; font-size: 13px; line-height: 1.65; }
+
+@media (max-width: 760px) {
+  .section--preview { padding: 36px 0 72px; }
+  .demo-facts > div { grid-template-columns: minmax(0,1fr); gap: 3px; }
+  .demo-timeline-head { align-items: flex-start; }
+  .app-card--span-4, .app-card--span-5, .app-card--span-6, .app-card--span-7, .app-card--span-8 { grid-column: 1/-1; }
+}
+
+/* Guest note under the sign-in card: reading is optional, acting is not. */
+.auth-guest-note { max-width: 520px; margin: 22px auto 64px; color: #a9a5ac; font-size: 12px; line-height: 1.7; text-align: center; }
+.auth-guest-note strong { color: #ded6c6; }
+.auth-guest-note a { color: #f2d179; font-weight: 650; }
+@media (max-width: 980px) { .auth-guest-note { padding-inline: 20px; } }

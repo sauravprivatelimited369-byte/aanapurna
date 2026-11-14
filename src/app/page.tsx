@@ -93,7 +93,10 @@ export default function HomePage() {
               <Link className="button button--primary" href="/signup?role=generator">Donate surplus food <ArrowUpRight size={17} aria-hidden="true" /></Link>
               <Link className="button button--secondary" href="/signup?role=helper">Become a Helper</Link>
             </div>
-            <Link className="hero-tertiary-link" href="/signup?role=receiver">Register your organisation <ArrowRight size={16} aria-hidden="true" /></Link>
+            <div className="hero-tertiary-row">
+              <Link className="hero-tertiary-link" href="/signup?role=receiver">Register your organisation <ArrowRight size={16} aria-hidden="true" /></Link>
+              <Link className="hero-tertiary-link" href="/preview">Walk through a sample handover — no account needed <ArrowRight size={16} aria-hidden="true" /></Link>
+            </div>
             <div className="hero-note">
               <span className="hero-note-mark" aria-hidden="true"><ShieldCheck size={15} /></span>
               <span><strong>Requests are reviewed by people.</strong> Food operations remain paused until launch approvals are recorded.</span>
