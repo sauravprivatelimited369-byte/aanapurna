@@ -113,6 +113,20 @@ the project's install command. Reproduced in a clean copy of the repository:
 production-mode `npm ci` plus `npm run typecheck` fails with the same 18 errors,
 and production-mode `npm ci --include=dev` plus typecheck passes.
 
+The seventh deployment `dpl_BA9tbdWyPLDT6y592b9WgKGPd848` at `f00719a` reached
+**`READY`**, the first successful hosted build: it installed 480 packages,
+re-applied the migrations as a no-op, re-passed `db:check` as `annapurna_app`,
+completed `next build`, and received the branch alias
+`aanapurna-link-preview-git-arena-5b937561-5bd0c4-writer-nation.vercel.app`.
+Requesting `/api/health` on the preview host returns Vercel's Deployment
+Protection sign-in page, so hosted HTTP rendering, session cookies, hosted
+authentication and the runtime health payload are **NOT TESTED** through an
+unauthenticated client. The owner must either use the deployment's shareable
+link/bypass token while signed in, or decide whether to disable Deployment
+Protection for this preview, before those runtime checks can be recorded.
+Database connectivity from Vercel's own network is covered: the build's
+`db:check` connected with the least-privilege `annapurna_app` role.
+
 `SMTP_PASS` currently contains the deliberate placeholder name
 `REPLACE_WITH_GMAIL_APP_PASSWORD`, not a credential. The fail-closed preflight
 and `/api/health` therefore report email `not_configured` until the owner
@@ -126,16 +140,21 @@ that exact preview origin in addition to `APP_URL`.
    `sauravprivatelimited369@gmail.com`. Do not paste it in chat, commit it, or
    put it in a public variable. Keep `SMTP_HOST=smtp.gmail.com`,
    `SMTP_PORT=465`, `SMTP_SECURE=true`.
-2. Provision a long-running worker host with the same encrypted environment and
+2. Decide how the hosted runtime may be verified while **Deployment
+   Protection** is on: sign in to Vercel and use the deployment's shareable
+   link, generate a protection-bypass token for automation, or explicitly
+   approve turning protection off for this preview. Until then the hosted
+   HTTP/auth surface stays untested.
+3. Provision a long-running worker host with the same encrypted environment and
    run `npm run worker`. The Vercel web preview does not drain the outbox.
-3. Add a custom domain in Vercel, configure DNS, and update `APP_URL` and
+4. Add a custom domain in Vercel, configure DNS, and update `APP_URL` and
    `APP_DOMAIN` to that domain. The current `.vercel.app` alias is a preview
    hostname, not an owner-controlled production domain.
-4. Run `npm run check:production-config`, then opt-in
+5. Run `npm run check:production-config`, then opt-in
    `RUN_SMTP_VERIFY=true npm run smtp:verify` on the intended host. Verify a
    real signup, email verification, password reset, session revocation and
    worker retry/recovery before any pilot.
-5. Complete backup/restore, monitoring, independent security review, and the
+6. Complete backup/restore, monitoring, independent security review, and the
    human food-safety, legal, privacy and launch approvals in
    `LAUNCH_CHECKLIST.md`. Keep `OPERATIONS_ENABLED=false` until then.
 
@@ -146,21 +165,33 @@ that exact preview origin in addition to `APP_URL`.
   `can_create_db=true`, `can_create_role=true`, `public_create=true`.
 - Supabase `execute_query` bootstrap: three least-privilege roles, schema
   grants, `drizzle.__drizzle_migrations` and eleven rows. The full migration SQL
-  is applied by the Vercel build, not by a committed secret.
+  was then applied by the Vercel build, not by a committed secret. A read-only
+  connector query afterwards reports `migration_rows: 11`, `public_tables: 30`,
+  `rls_tables: 23`, and `worker_tables: 6` in `graphile_worker`.
 - Vercel `create_project`, `list_project_domains`, `list_env_vars`: project,
   alias and variables confirmed. `SMTP_PASS` placeholder is intentionally
   rejected by the preflight until replaced.
-- Local checks: `npm run typecheck`, `npm run lint`, `npm test` (105 tests),
+- Local checks: `npm run typecheck`, `npm run lint`, `npm test` (114 tests),
   `npm run build`, `git diff --check`, positive `SMTP_URL` preflight, positive
   discrete-SMTP preflight, Vercel-shape preflight with a synthetic app password,
-  and negative missing/placeholder preflights — **PASS**.
+  and negative missing/placeholder preflights — **PASS**. A clean-copy
+  reproduction showed the Vercel install path: production-mode `npm ci` leaves
+  `@axe-core/playwright` out and `npm run typecheck` fails with 18 errors, while
+  production-mode `npm ci --include=dev` type-checks cleanly.
 - CI history: [run 43502286365](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43502286365)
   and [run 43559912589](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43559912589)
   passed all six synthetic jobs. [Run 43561700577](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43561700577)
   failed only the Windows one-click job with the known managed-launcher port
   race; the other five jobs passed. [Run 43565517517](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43565517517)
   passed all six jobs after the workflow began killing surviving loopback port
-  owners explicitly.
+  owners explicitly. Runs
+  [43565984748](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43565984748),
+  [43566495914](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43566495914),
+  [43567135738](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43567135738),
+  [43567754152](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43567754152)
+  and [43569803627](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43569803627)
+  also passed all six jobs; their only annotations are non-blocking notices that
+  some GitHub Actions are still on Node 20.
 - Vercel deployment `dpl_Cmy8iuLunrJBTQjMyLu5PC9AhkAy` was created from the
   active branch with `nodeVersion: 22.x` and the configured build command, but
   **FAILED** at `npm ci` because a deprecated nested esbuild install script
@@ -179,8 +210,10 @@ that exact preview origin in addition to `APP_URL`.
   `dpl_8hb33FC4GP2eLbqn8fPSNgawPWZK` applied all eleven migrations and passed
   `db:check` (`23` RLS tables, `10` functions, `11` migrations, no problems)
   before failing its TypeScript step because production-mode `npm ci` omitted
-  dev-only test dependencies. The install command is now `npm ci --include=dev`;
-  no deployment has reached `READY` yet.
+  dev-only test dependencies. The install command is now `npm ci --include=dev`,
+  and deployment `dpl_BA9tbdWyPLDT6y592b9WgKGPd848` at `f00719a` is the first
+  to reach **`READY`** (480 packages, migrations no-op, `db:check` pass, full
+  `next build`). It is a protected preview, not a production release.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.
