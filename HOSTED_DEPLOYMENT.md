@@ -118,14 +118,54 @@ The seventh deployment `dpl_BA9tbdWyPLDT6y592b9WgKGPd848` at `f00719a` reached
 re-applied the migrations as a no-op, re-passed `db:check` as `annapurna_app`,
 completed `next build`, and received the branch alias
 `aanapurna-link-preview-git-arena-5b937561-5bd0c4-writer-nation.vercel.app`.
-Requesting `/api/health` on the preview host returns Vercel's Deployment
-Protection sign-in page, so hosted HTTP rendering, session cookies, hosted
-authentication and the runtime health payload are **NOT TESTED** through an
-unauthenticated client. The owner must either use the deployment's shareable
-link/bypass token while signed in, or decide whether to disable Deployment
-Protection for this preview, before those runtime checks can be recorded.
-Database connectivity from Vercel's own network is covered: the build's
-`db:check` connected with the least-privilege `annapurna_app` role.
+That deployment was a *preview*, so Vercel's Deployment Protection answered
+unauthenticated requests with an SSO sign-in page.
+
+## Live production deployment
+
+Deployment `dpl_4UFgqDJu6EuhKc3HzebVYncY9JYj` at `d7bbb2f` was then created with
+`target: production`. It reached **`READY`** with `readySubstate: PROMOTED`, and
+Vercel assigned the project aliases, including the live URL
+**https://aanapurna-link-preview.vercel.app**. Production deployments of this
+Hobby project are not behind Deployment Protection, so the hosted runtime could
+finally be exercised over HTTPS:
+
+| Request | Result |
+| --- | --- |
+| `GET /` | **200**, full landing page rendered (hero, role cards, impact section, directory link) |
+| `GET /api/health` | **200** `{"status":"ok","application":"annapurna-link","database":{"status":"ok","latencyMs":1337},"email":{"status":"not_configured","localTestSink":false,"missingSettings":["SMTP_USER/SMTP_PASS"]},"realOperationsEnabled":false}` |
+| `GET /api/public/impact` | **200** `{"status":"empty","metrics":{"verifiedServings":0,"verifiedDeliveries":0,"verifiedOrganizations":0,"activeHelpers":0,"verifiedGenerators":0}}` |
+| `GET /admin` | **307** → `/login?reason=session-expired` (anonymous visitor refused) |
+| `GET /app` (via authenticated-area redirect) | redirects to `/login` |
+| `GET /signup?role=helper` | **200**, registration form renders with role-request wording and "Admin registration is not public" |
+
+The hosted runtime therefore connects to Supabase through the session pooler
+with strict TLS as the least-privilege `annapurna_app` role and serves real
+database-backed responses. A read-only query of the same database reports
+`users: 0`, `organizations: 0`, `donations: 0`, `sessions: 0`, `accounts: 0`,
+`email_outbox: 0` and `migrations: 11`, which matches the `status: "empty"`
+impact payload — the live site contains no real records and no fabricated
+figures.
+
+### Repeatable hosted smoke check
+
+`npm run smoke:hosted` (new `scripts/hosted-smoke.mjs`) re-runs those checks from
+any machine with normal internet access:
+
+```bash
+HOSTED_SMOKE_BASE_URL=https://aanapurna-link-preview.vercel.app npm run smoke:hosted
+```
+
+It refuses a non-HTTPS target, only issues GET requests by default, and prints
+`PASS`/`FAIL` per check plus a summary, exiting non-zero on failure. The optional
+`-- --register` mode additionally POSTs one fictional registration
+(`HOSTED_SMOKE_EMAIL`/`HOSTED_SMOKE_PASSWORD`), confirms the account is created
+as unverified, confirms an unverified account cannot obtain a usable session, and
+prints the SQL needed to delete the test row; it never prints the password or
+cookie value. The script was validated against a mock server covering passing,
+failing, non-HTTPS and missing-URL cases. It cannot be run from this build
+sandbox because sandbox egress to `*.vercel.app` is TLS-reset; the live results
+above were obtained through an HTTP fetch tool instead.
 
 `SMTP_PASS` currently contains the deliberate placeholder name
 `REPLACE_WITH_GMAIL_APP_PASSWORD`, not a credential. The fail-closed preflight
@@ -140,13 +180,15 @@ that exact preview origin in addition to `APP_URL`.
    `sauravprivatelimited369@gmail.com`. Do not paste it in chat, commit it, or
    put it in a public variable. Keep `SMTP_HOST=smtp.gmail.com`,
    `SMTP_PORT=465`, `SMTP_SECURE=true`.
-2. Decide how the hosted runtime may be verified while **Deployment
-   Protection** is on: sign in to Vercel and use the deployment's shareable
-   link, generate a protection-bypass token for automation, or explicitly
-   approve turning protection off for this preview. Until then the hosted
-   HTTP/auth surface stays untested.
+2. Run `HOSTED_SMOKE_BASE_URL=https://aanapurna-link-preview.vercel.app npm run smoke:hosted`
+   from a network that can reach the site, then re-run it with `-- --register`
+   and a disposable address. Registration and sign-in are `POST` requests, which
+   this sandbox cannot send because its egress to `*.vercel.app` is TLS-reset, so
+   the authenticated flows and cookie flags still need that owner-side run.
 3. Provision a long-running worker host with the same encrypted environment and
-   run `npm run worker`. The Vercel web preview does not drain the outbox.
+   run `npm run worker` (the committed `docker-compose.production.yml` already
+   defines the `worker` service). The Vercel deployment does not drain the
+   outbox: `email_outbox` rows are written but stay pending.
 4. Add a custom domain in Vercel, configure DNS, and update `APP_URL` and
    `APP_DOMAIN` to that domain. The current `.vercel.app` alias is a preview
    hostname, not an owner-controlled production domain.
@@ -217,7 +259,9 @@ that exact preview origin in addition to `APP_URL`.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.
-- Synthetic CI, a preview deployment, and a fail-closed preflight are **not**
-  production validation. No custom domain, real SMTP delivery, independent
-  security review, backup/restore exercise, real-operations readiness, or human
-  launch approval is claimed.
+- Synthetic CI, and a fail-closed preflight are **not** production validation.
+  The hosted deployment is live and its GET surface plus database connectivity
+  are verified, but no real SMTP delivery, worker run, custom domain, hosted
+  registration/sign-in round trip, file-scanning path, backup/restore exercise,
+  independent security review, real-operations readiness or human launch
+  approval is claimed.
