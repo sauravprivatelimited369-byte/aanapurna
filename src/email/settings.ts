@@ -9,6 +9,13 @@ export type EmailSettingsStatus = {
   provider: "smtp" | null;
   missingSettings: string[];
   localOnly: boolean;
+  /**
+   * True when the transport is a capture service (Ethereal, Mailtrap, Mailpit,
+   * MailHog, smtp4dev) rather than a real provider. Such a transport genuinely
+   * accepts SMTP delivery, but the message lands in a test inbox instead of a
+   * person's, so it must never be reported as production-ready email.
+   */
+  testSink: boolean;
 };
 
 const PLACEHOLDER = /REPLACE_WITH|GENERATED_BY_SCRIPT|build-only|ci-only|placeholder/i;
@@ -19,6 +26,21 @@ export function isLocalDeliveryHost(host: string): boolean {
   if (value === "localhost" || value === "127.0.0.1" || value === "::1" || value === "mailpit") return true;
   if (value.startsWith("127.") || value.endsWith(".localhost") || value.endsWith(".local")) return true;
   return false;
+}
+
+const TEST_CAPTURE_HOSTS = [
+  "ethereal.email",
+  "mailtrap.io",
+  "mailpit",
+  "mailhog",
+  "smtp4dev",
+];
+
+/** A capture service that accepts SMTP delivery but delivers to a test inbox. */
+export function isTestCaptureHost(host: string): boolean {
+  const value = host.trim().toLowerCase();
+  if (!value) return false;
+  return TEST_CAPTURE_HOSTS.some((candidate) => value === candidate || value.endsWith(`.${candidate}`));
 }
 
 export function isPlaceholderValue(value: string | undefined): boolean {
@@ -52,6 +74,7 @@ function appUrlProblem(env: NodeJS.ProcessEnv): { missing: string[]; local: bool
 export function getEmailSettingsStatus(env: NodeJS.ProcessEnv = process.env): EmailSettingsStatus {
   const missingSettings: string[] = [];
   let localOnly = false;
+  let testSink = false;
 
   if (isPlaceholderValue(env.SMTP_FROM)) missingSettings.push("SMTP_FROM");
 
@@ -66,12 +89,15 @@ export function getEmailSettingsStatus(env: NodeJS.ProcessEnv = process.env): Em
         missingSettings.push("SMTP_URL");
       } else if (isLocalDeliveryHost(url.hostname)) {
         localOnly = true;
+      } else if (isTestCaptureHost(url.hostname)) {
+        testSink = true;
       }
     } catch {
       missingSettings.push("SMTP_URL");
     }
   } else {
     if (isLocalDeliveryHost(smtpHost!)) localOnly = true;
+    else if (isTestCaptureHost(smtpHost!)) testSink = true;
     if (!validPort(env.SMTP_PORT)) missingSettings.push("SMTP_PORT");
     if (Boolean(env.SMTP_USER) !== Boolean(env.SMTP_PASS)) missingSettings.push("SMTP_USER/SMTP_PASS");
     if ((env.SMTP_USER || env.SMTP_PASS) && (isPlaceholderValue(env.SMTP_USER) || isPlaceholderValue(env.SMTP_PASS))) {
@@ -93,5 +119,6 @@ export function getEmailSettingsStatus(env: NodeJS.ProcessEnv = process.env): Em
     provider: configured ? "smtp" : null,
     missingSettings: uniqueMissingSettings,
     localOnly,
+    testSink: testSink && configured,
   };
 }

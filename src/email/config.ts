@@ -10,6 +10,7 @@ export function getEmailDeliveryStatus(): {
   provider: "smtp" | null;
   missingSettings: string[];
   localOnly: boolean;
+  testSink: boolean;
 } {
   return getEmailSettingsStatus();
 }

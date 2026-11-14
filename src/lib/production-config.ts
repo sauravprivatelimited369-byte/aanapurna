@@ -5,7 +5,7 @@
  * at a local test sink. It reports setting NAMES only, never values.
  */
 
-import { isLocalDeliveryHost, isPlaceholderValue } from "../email/settings";
+import { isLocalDeliveryHost, isPlaceholderValue, isTestCaptureHost } from "../email/settings";
 
 export type ProductionConfigResult = {
   ok: boolean;
@@ -163,6 +163,7 @@ export function validateProductionConfig(
     }
   } else if (smtpHost) {
     if (isUnusablePublicHost(smtpHost.toLowerCase(), allowTestDomains)) problems.push("SMTP_HOST must be a real provider host, not a loopback test sink");
+    if (isTestCaptureHost(smtpHost)) problems.push("SMTP_HOST must be a real mail provider, not a capture service (message capture is for verification only and never reaches a recipient)");
     const port = Number(env.SMTP_PORT);
     if (!Number.isInteger(port) || port < 1 || port > 65_535) problems.push("SMTP_PORT must be a valid TCP port");
     if (isPlaceholderValue(env.SMTP_USER) || isPlaceholderValue(env.SMTP_PASS)) {

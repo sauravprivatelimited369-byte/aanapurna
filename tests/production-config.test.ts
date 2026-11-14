@@ -119,6 +119,46 @@ describe("shared email delivery status", () => {
     expect(getEmailSettingsStatus({ ...local, NODE_ENV: "production" })).toMatchObject({ configured: false, localOnly: true });
   });
 
+  it("flags a capture service as a working transport that is not production delivery", () => {
+    const status = getEmailSettingsStatus({
+      NODE_ENV: "production",
+      SMTP_FROM: "Annapurna Link <capture@ethereal.email>",
+      SMTP_HOST: "smtp.ethereal.email",
+      SMTP_PORT: "587",
+      SMTP_USER: "capture-user",
+      SMTP_PASS: "capture-pass",
+      APP_URL: "https://app.example.test",
+    } as NodeJS.ProcessEnv);
+    // The transport really is usable, so delivery attempts are made...
+    expect(status.configured).toBe(true);
+    // ...but it must never be presented as production-ready email.
+    expect(status.testSink).toBe(true);
+    expect(status.localOnly).toBe(false);
+
+    const urlForm = getEmailSettingsStatus({
+      NODE_ENV: "production",
+      SMTP_FROM: "Annapurna Link <capture@ethereal.email>",
+      SMTP_URL: "smtp://capture-user:capture-pass@smtp.ethereal.email:587",
+      APP_URL: "https://app.example.test",
+    } as NodeJS.ProcessEnv);
+    expect(urlForm.testSink).toBe(true);
+  });
+
+  it("does not flag a real provider as a capture service", () => {
+    const status = getEmailSettingsStatus(explicitSmtpEnv());
+    expect(status.configured).toBe(true);
+    expect(status.testSink).toBe(false);
+  });
+
+  it("rejects a capture service in the production preflight", () => {
+    const result = validateProductionConfig(explicitSmtpEnv({
+      SMTP_HOST: "smtp.ethereal.email",
+      SMTP_FROM: "Annapurna Link <capture@ethereal.email>",
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.problems.join(" ")).toContain("capture service");
+  });
+
   it("rejects incomplete explicit SMTP settings by name only", () => {
     const result = getEmailSettingsStatus({
       NODE_ENV: "development",
