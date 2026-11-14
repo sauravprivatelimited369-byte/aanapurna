@@ -3,5 +3,11 @@
   "framework": "nextjs",
   "installCommand": "npm ci --include=dev",
   "buildCommand": "npm run db:migrate && npm run db:check && npm run build",
-  "regions": ["iad1"]
+  "regions": ["iad1"],
+  "crons": [
+    {
+      "path": "/api/worker/drain",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }
