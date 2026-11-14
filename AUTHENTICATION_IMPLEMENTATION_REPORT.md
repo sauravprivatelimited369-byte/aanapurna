@@ -154,6 +154,7 @@ All commands below were run in this sandbox on the final working tree. The integ
 | 23-point security suite | `RUN_AUTH_SECURITY_TEST=true LOCAL_SMTP_INBOX_PATH=.local-data/inbox.eml npm run test:auth-security` | **PASS — 23/23** |
 | Trusted role routing | `RUN_AUTH_ROLE_TEST=true npm run test:auth-roles` | **PASS — 7/7** |
 | Server-rendered auth pages | HTTP checks of `/signup`, `/login`, `/verify-email`, `/reset-password`, `/account/pending` | **PASS** — all required fields and verified/invalid-link/expired-session/role-caveat states present |
+| GitHub Actions on this exact code commit | [run 43502286365](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43502286365), commit `7408cbe` | **PASS — all six jobs**: Verify application, Native PostgreSQL/auth smoke, disposable PostgreSQL browser workflow, Compose smoke, Windows native auth, Windows one-click start. Verify job's browser suite: 11 passed, 3 opt-in skips; only Node.js 20 action-runtime deprecation warnings. |
 
 ### 23-point security suite detail
 
@@ -228,11 +229,11 @@ All commands below were run in this sandbox on the final working tree. The integ
 | No secret exposure / no plaintext credentials | **PASS** | Security checks 20 and 23; `.gitignore` verified |
 | App builds | **PASS** | `npm run build` |
 | Auth tests actually executed | **PASS** | 94 unit/migration + 23 security + 7 role + local auth smoke |
-| Browser-driven Playwright/axe/responsive interaction tests | **NOT TESTED here** | Chromium download from `cdn.playwright.dev` is blocked by this sandbox's outbound network. CI workflow installs and runs them; server-rendered HTML states were checked over HTTP. |
+| Browser-driven Playwright/axe/responsive interaction tests | **PASS in CI; NOT TESTED in local sandbox** | GitHub Actions run 43502286365 installed Chromium and passed the public browser suite (11 passed, 3 opt-in skips) plus the disposable PostgreSQL browser workflow. Local Chromium download was blocked by sandbox network; server-rendered HTML states were checked over HTTP. |
 | Production HTTPS cookies / production `APP_URL` callbacks | **NOT TESTED** | Config verified in source; requires owner domain/host |
 | Production SMTP provider, sender-domain verification, deliverability, worker retries | **NOT TESTED** | Requires owner account and provider |
-| Compose, Windows launcher, managed PostgreSQL, backup/restore on this commit | **NOT TESTED** | Existing CI jobs are defined but not re-run here |
-| GitHub Actions checks on this commit | **NOT TESTED / owner action** | Workflow updated; run CI after push |
+| Compose, Windows launcher, managed PostgreSQL, backup/restore on this commit | **PASS in CI; NOT TESTED in local sandbox** | All corresponding jobs passed in run 43502286365 |
+| GitHub Actions checks on this commit | **PASS** | Run 43502286365, commit `7408cbe`, all six jobs successful |
 | Full cross-tenant operational data, load/race testing, independent security review, food-safety/legal/privacy approval, live operations | **NOT TESTED / not authorised** | Keep `OPERATIONS_ENABLED=false` |
 
 **FAIL in the final executed suites: none.** Items marked NOT TESTED are honest gaps, not implied passes.
@@ -313,7 +314,7 @@ Use a reason of 20–500 characters. Remove `ALLOW_ADMIN_BOOTSTRAP` from the env
 
 ### 9.7 Run CI and deployment checks
 
-Push this branch and let `.github/workflows/ci.yml` run on the exact deployment commit. It now includes typecheck, lint, unit/migration tests, browser tests, dependency audit, production build, real-PostgreSQL auth smoke, `test:auth-security`, and `test:auth-roles`. Investigate every failure before exposing the app publicly.
+The workflow has been run on this implementation commit: [run 43502286365](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43502286365) passed all six jobs. It includes typecheck, lint, unit/migration tests, browser tests, dependency audit, production build, real-PostgreSQL auth smoke, `test:auth-security`, and `test:auth-roles`. Re-run CI after any further code or configuration change, and investigate every failure before exposing the app publicly.
 
 ---
 
@@ -349,4 +350,4 @@ Push this branch and let `.github/workflows/ci.yml` run on the exact deployment 
 
 A real user can now register through the app, a real PostgreSQL-backed Better Auth account is created, a verification email is genuinely delivered when the mail service is configured, the verified user can log in, sessions persist and refresh, logout revokes them, password recovery works, and the server sends each approved role to its correct dashboard while denying unauthorised roles. This was exercised locally with real PostgreSQL and SMTP delivery to a test sink; 94 unit/migration tests, 23 security checks, 7 role-routing checks and the core auth smoke all passed, and the app builds.
 
-**Production readiness is not claimed.** The owner must still provide the persistent database, real SMTP credentials, HTTPS domain, secure secrets, a running worker, a passing CI run on this commit, browser-test results, independent security review, and the human launch approvals. Do not enable real food operations until those are complete.
+**Production readiness is not claimed.** CI passing on this commit is evidence for the synthetic test suites, not a production certification. The owner must still provide the persistent database, real SMTP credentials, HTTPS domain, secure secrets, a running worker, independent security review, and the human launch approvals. Do not enable real food operations until those are complete.
