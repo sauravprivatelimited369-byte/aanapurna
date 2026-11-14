@@ -35,8 +35,9 @@ jobs:
           mkdir -p _site/fonts
           cp github-pages/index.html github-pages/styles.css github-pages/site.js _site/
           cp public/fonts/manrope-latin-variable.woff2 public/fonts/playfair-display-latin-variable.woff2 _site/fonts/
+          cp github-pages/config.js _site/config.js
           touch _site/.nojekyll
-          node -e 'const fs=require("node:fs"); const value=(process.env.ANNAPURNA_BACKEND_URL||"").trim(); fs.writeFileSync("_site/config.js", "window.ANNAPURNA_BACKEND_URL = "+JSON.stringify(value)+";\n");'
+          node -e 'const fs=require("node:fs"); const value=(process.env.ANNAPURNA_BACKEND_URL||"").trim(); if (value) { fs.writeFileSync("_site/config.js", "window.ANNAPURNA_BACKEND_URL = "+JSON.stringify(value)+";\n"); } console.log("Pages backend URL:", value || "(from committed github-pages/config.js)");'
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
