@@ -1,7 +1,7 @@
 name: Canonical host origin check (temporary)
 
-# One-shot check that the new canonical hostname accepts form posts and that an
-# untrusted origin is still rejected. Removed in the next commit.
+# One-shot check that Better Auth accepts posts from the canonical hostname and
+# the previous alias, and still refuses a stranger's origin. Removed next commit.
 on:
   push:
     paths:
@@ -21,19 +21,35 @@ jobs:
           cat health.json
           jq -e '.status == "ok" and .database.status == "ok" and .email.status == "test_sink"' health.json > /dev/null
 
-      - name: Form posts are accepted from the canonical host and the old alias, and refused from a stranger
+      - name: Canonical origin is trusted
         run: |
           set -euo pipefail
-          probe() {
-            curl -sS -o /dev/null -w '%{http_code}' -X POST "$1/api/register" \
-              -H 'Content-Type: application/json' -H "Origin: $2" -d '{}'
-          }
-          canonical=$(probe https://annapurna-link.vercel.app https://annapurna-link.vercel.app)
-          alias=$(probe https://annapurna-link.vercel.app https://aanapurna-link-preview.vercel.app)
-          stranger=$(probe https://annapurna-link.vercel.app https://not-our-site.example)
-          echo "canonical=$canonical alias=$alias stranger=$stranger"
-          # A trusted origin reaches request validation; an untrusted origin is
-          # rejected before it. 400 = accepted origin, 4xx-not-400 = refused.
-          test "$canonical" != "403"
-          test "$alias" != "403"
-          test "$stranger" = "403"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            https://annapurna-link.vercel.app/api/auth/sign-in/email \
+            -H 'Content-Type: application/json' \
+            -H 'Origin: https://annapurna-link.vercel.app' \
+            -d '{"email":"nobody@example.com","password":"not-a-real-password"}')
+          echo "canonical origin status: $code"
+          test "$code" != "403"
+
+      - name: Previous alias origin stays trusted
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            https://annapurna-link.vercel.app/api/auth/sign-in/email \
+            -H 'Content-Type: application/json' \
+            -H 'Origin: https://aanapurna-link-preview.vercel.app' \
+            -d '{"email":"nobody@example.com","password":"not-a-real-password"}')
+          echo "alias origin status: $code"
+          test "$code" != "403"
+
+      - name: A stranger origin is refused
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            https://annapurna-link.vercel.app/api/auth/sign-in/email \
+            -H 'Content-Type: application/json' \
+            -H 'Origin: https://not-our-site.example' \
+            -d '{"email":"nobody@example.com","password":"not-a-real-password"}')
+          echo "stranger origin status: $code"
+          test "$code" = "403"
