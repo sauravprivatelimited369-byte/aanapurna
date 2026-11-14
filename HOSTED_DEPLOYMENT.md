@@ -145,6 +145,45 @@ Later branch-tip commits are promoted the same way: deployment
 ids in this document are evidence of the runs that produced those results; the
 project's production alias always serves the newest promoted deployment.
 
+### Critical exposure found on the live database, and fixed
+
+Auditing the hosted database rather than assuming the local checks carried over
+found a serious defect. Supabase's defaults grant `anon` and `authenticated`
+(the roles behind its public PostgREST/REST API, reachable with the publishable
+API key) `SELECT`, `INSERT`, `UPDATE` and `DELETE` on every table created by
+`postgres`, plus `EXECUTE` on every function. Measured on the hosted project:
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Public tables readable, writable and deletable by `anon`/`authenticated` | **30 of 30** | **0** |
+| Public functions executable by `anon`/`authenticated` | **36 of 36** (including `SECURITY DEFINER` helpers) | **0** |
+| `annapurna_app` function grants preserved | 23 | 23 |
+
+Because `user`, `session`, `account`, `verification`, `rate_limit`,
+`api_rate_limits` and `service_health` are the seven tables that intentionally do
+**not** use row-level security, those roles could have read session tokens and
+password hashes, inserted their own session rows for an existing user, and called
+helpers such as `app_mark_user_verified` and `app_worker_reserve_outbox_batch`.
+That is an authentication bypass and credential-disclosure path that exists only
+on the hosted database, because plain PostgreSQL has no `anon` role.
+
+Remediation applied to the project: `REVOKE ALL` on tables, sequences and
+functions in `public`, `drizzle` and `graphile_worker` for `anon` and
+`authenticated`, plus `ALTER DEFAULT PRIVILEGES FOR ROLE postgres ... REVOKE ALL`
+so the next migration cannot recreate the grant. The same statements are now
+committed as migration `20261114120000_revoke_public_api_privileges.sql`, so the
+Vercel build re-applies them on every deployment and a fresh Supabase project is
+hardened automatically. `scripts/check-db.ts` now fails closed with
+`publicApiExposedTables`/`publicApiExposedFunctions` when either count is above
+zero. The live site was re-checked after the revocation: `/api/health` still
+reports `database.status: "ok"` and `/api/public/impact` still returns its
+metrics, proving the application roles kept the access they need.
+
+The seven non-RLS tables remain deliberate: they hold authentication and internal
+throttling state that the application reaches through its own roles, and the
+PostgREST roles can no longer touch them. An independent reviewer should still
+confirm this design and the RLS policy set.
+
 The hosted runtime therefore connects to Supabase through the session pooler
 with strict TLS as the least-privilege `annapurna_app` role and serves real
 database-backed responses. A read-only query of the same database reports

@@ -14,6 +14,7 @@ const migrationFiles = [
   "20261113073000_fix_donation_helper_rls.sql",
   "20261113074000_arrival_inspection_gate.sql",
   "20261113190000_auth_registration_and_guards.sql",
+  "20261114120000_revoke_public_api_privileges.sql",
 ];
 
 let database: PGlite;
@@ -344,5 +345,50 @@ describe("PostgreSQL migration and authorization contracts", () => {
         (SELECT rolbypassrls FROM pg_roles WHERE rolname = 'annapurna_worker') AS bypass_rls
     `);
     expect(access.rows[0]).toEqual({ can_select: false, can_execute: true, bypass_rls: false });
+  });
+});
+
+describe("Supabase PostgREST roles", () => {
+  it("lose every table and function privilege when the hardening migration runs", async () => {
+    await database.exec(`
+      CREATE ROLE anon NOLOGIN;
+      CREATE ROLE authenticated NOLOGIN;
+      GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
+      GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
+      GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated;
+    `);
+    const before = await database.query<{ tables: number; functions: number }>(`
+      SELECT
+        (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relacl IS NOT NULL
+            AND EXISTS (SELECT 1 FROM aclexplode(c.relacl) a JOIN pg_roles r ON r.oid = a.grantee
+                        WHERE r.rolname IN ('anon', 'authenticated'))) AS tables,
+        (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proacl IS NOT NULL
+            AND EXISTS (SELECT 1 FROM aclexplode(p.proacl) a JOIN pg_roles r ON r.oid = a.grantee
+                        WHERE r.rolname IN ('anon', 'authenticated'))) AS functions
+    `);
+    expect(before.rows[0]!.tables).toBeGreaterThan(0);
+    expect(before.rows[0]!.functions).toBeGreaterThan(0);
+
+    const hardening = await readFile(
+      new URL("../drizzle/20261114120000_revoke_public_api_privileges.sql", import.meta.url),
+      "utf8",
+    );
+    await database.exec(hardening.replaceAll("--> statement-breakpoint", "\n"));
+
+    const after = await database.query<{ tables: number; functions: number; app_can_read: boolean }>(`
+      SELECT
+        (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relacl IS NOT NULL
+            AND EXISTS (SELECT 1 FROM aclexplode(c.relacl) a JOIN pg_roles r ON r.oid = a.grantee
+                        WHERE r.rolname IN ('anon', 'authenticated'))) AS tables,
+        (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public' AND p.proacl IS NOT NULL
+            AND EXISTS (SELECT 1 FROM aclexplode(p.proacl) a JOIN pg_roles r ON r.oid = a.grantee
+                        WHERE r.rolname IN ('anon', 'authenticated'))) AS functions,
+        has_table_privilege('annapurna_app', 'public.donations', 'SELECT') AS app_can_read
+    `);
+    expect(after.rows[0]).toEqual({ tables: 0, functions: 0, app_can_read: true });
   });
 });
