@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getAccountState } from "@/lib/identity";
+import { getAccountState, hadSessionCookie } from "@/lib/identity";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const state = await getAccountState();
-  if (state.state === "anonymous") redirect("/login?reason=session-expired");
+  if (state.state === "anonymous") redirect(await hadSessionCookie() ? "/login?reason=session-expired" : "/login");
   if (state.state === "suspended") redirect("/account/suspended");
   if (state.state === "unverified") redirect("/verify-email");
   return <>{children}</>;

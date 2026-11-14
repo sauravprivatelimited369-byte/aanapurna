@@ -109,6 +109,21 @@ export async function getAccountState(requestHeaders?: Headers): Promise<{
   return { state: "active", userId: session.user.id };
 }
 
+/**
+ * Whether the request carried a session cookie at all.
+ *
+ * This exists so a first-time visitor is not told "your session may have
+ * expired": an absent cookie means "not signed in", a present-but-rejected one
+ * means the session really did end.
+ */
+export async function hadSessionCookie(requestHeaders?: Headers): Promise<boolean> {
+  const request = requestHeaders ?? await headers();
+  const cookie = request.get("cookie") ?? "";
+  return itsPattern.test(cookie);
+}
+
+const itsPattern = /(?:^|;\s*)annapurna\.session_token=/;
+
 export async function isPlatformRole(userId: string, role: PlatformRoleName): Promise<boolean> {
   return withUserContext(userId, async (tx) => {
     const [match] = await tx.select({ id: platformRoles.id })

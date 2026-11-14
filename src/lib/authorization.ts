@@ -1,6 +1,6 @@
 import "server-only";
 import { redirect } from "next/navigation";
-import { getAccountState, getIdentity, type Identity } from "@/lib/identity";
+import { getAccountState, getIdentity, hadSessionCookie, type Identity } from "@/lib/identity";
 
 /** Trusted, server-derived dashboard destinations. Never derived from a URL or browser state. */
 export type DashboardRole = "admin" | "generator" | "receiver" | "helper" | "pending";
@@ -52,7 +52,7 @@ export function hasDashboardRole(identity: Identity, required: Exclude<Dashboard
 /** Server-side gate for every protected page. Redirects are safe, fixed paths. */
 export async function requireDashboardRole(required: Exclude<DashboardRole, "pending">): Promise<Identity> {
   const state = await getAccountState();
-  if (state.state === "anonymous") redirect("/login?reason=session-expired");
+  if (state.state === "anonymous") redirect(await hadSessionCookie() ? "/login?reason=session-expired" : "/login");
   if (state.state === "suspended") redirect("/account/suspended");
   if (state.state === "unverified") redirect("/verify-email");
 
@@ -66,7 +66,7 @@ export async function requireDashboardRole(required: Exclude<DashboardRole, "pen
 /** Used by /auth/continue after login to send the user to the correct dashboard. */
 export async function resolvePostLoginDestination(): Promise<string> {
   const state = await getAccountState();
-  if (state.state === "anonymous") return "/login?reason=session-expired";
+  if (state.state === "anonymous") return await hadSessionCookie() ? "/login?reason=session-expired" : "/login";
   if (state.state === "suspended") return "/account/suspended";
   if (state.state === "unverified") return "/verify-email";
   const identity = await getIdentity();
