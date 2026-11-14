@@ -92,6 +92,36 @@ function validBase64Key(value: string | undefined): boolean {
   }
 }
 
+/**
+ * Parse `APP_ADDITIONAL_ORIGINS`, a comma-separated list of extra HTTPS origins
+ * that may submit forms (for example a previous deployment alias that must keep
+ * working after the canonical domain changes). Wildcards, paths, credentials and
+ * non-HTTPS entries are rejected rather than silently trusted.
+ */
+export function parseAdditionalOrigins(value: string | undefined): { origins: string[]; problems: string[] } {
+  const problems: string[] = [];
+  const origins: string[] = [];
+  if (!value || isPlaceholderValue(value)) return { origins, problems };
+
+  for (const raw of value.split(",")) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    let url: URL;
+    try {
+      url = new URL(entry);
+    } catch {
+      problems.push("APP_ADDITIONAL_ORIGINS entries must be absolute HTTPS origins");
+      continue;
+    }
+    if (url.protocol !== "https:") problems.push("APP_ADDITIONAL_ORIGINS entries must use HTTPS");
+    else if (url.username || url.password || url.search || url.hash) problems.push("APP_ADDITIONAL_ORIGINS entries must be clean origins without credentials or a query");
+    else if (entry.includes("*")) problems.push("APP_ADDITIONAL_ORIGINS entries must not use wildcards");
+    else if (url.pathname !== "/" && url.pathname !== "") problems.push("APP_ADDITIONAL_ORIGINS entries must be origins without a path");
+    else origins.push(url.origin);
+  }
+  return { origins: [...new Set(origins)], problems };
+}
+
 export function validateProductionConfig(
   env: NodeJS.ProcessEnv,
   options: ProductionConfigOptions = {},
@@ -138,6 +168,11 @@ export function validateProductionConfig(
       problems.push("APP_URL must be a valid HTTPS URL");
     }
   }
+  if (env.APP_ADDITIONAL_ORIGINS) {
+    const additional = parseAdditionalOrigins(env.APP_ADDITIONAL_ORIGINS);
+    problems.push(...additional.problems);
+  }
+
   if (env.APP_DOMAIN) {
     const domain = env.APP_DOMAIN.trim().toLowerCase();
     if (isUnusablePublicHost(domain, allowTestDomains)) problems.push("APP_DOMAIN must be a public domain owned by the operator");

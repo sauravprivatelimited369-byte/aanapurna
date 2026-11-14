@@ -1,117 +1,29 @@
-name: Email path verification (temporary)
+name: Close temporary tracking issues
 
-# Temporary helper. It proves, against the live production deployment, that the
-# deployment authenticates to a real SMTP server, that a hosted registration
-# really queues an email, and that the drain delivers it. Every check records its
-# outcome on a tracking issue, because this environment can read api.github.com
-# but not the Actions log endpoint.
+# One-shot cleanup: closes the temporary tracking issues created while proving
+# the live email path. Removed in the next commit.
 on:
   push:
     paths:
       - ".github/workflows/email-verification.yml"
 
 permissions:
-  contents: read
-  id-token: write
   issues: write
 
-env:
-  BASE: https://aanapurna-link-preview.vercel.app
-  TRACKING_ISSUE: "8"
-
 jobs:
-  verify:
+  close:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - id: health
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          curl -sS "$BASE/api/health?probe=verify" -o health.json
-          cat health.json
-          jq -e '.email.status == "test_sink" and .email.captureTestSink == true' health.json > /dev/null
-
-      - id: register
-        continue-on-error: true
-        env:
-          SMOKE_EMAIL: capture-check-${{ github.run_id }}@example.com
-        run: |
-          set -euo pipefail
-          echo "email=$SMOKE_EMAIL" > smoke-email.txt
-          HOSTED_SMOKE_BASE_URL="$BASE" \
-          HOSTED_SMOKE_EMAIL="$SMOKE_EMAIL" \
-          HOSTED_SMOKE_PASSWORD='CaptureCheck-2026-11-14-a9f3' \
-            node scripts/hosted-smoke.mjs --register 2>&1 | tee smoke.log
-
-      - id: oidc
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          response=$(curl -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=annapurna-link-worker")
-          token=$(printf '%s' "$response" | jq -r '.value // empty')
-          test -n "$token"
-          echo "::add-mask::$token"
-          printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
-
-      - id: anon
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          status=$(curl -sS -o anonymous.json -w '%{http_code}' -X POST "$BASE/api/worker/drain")
-          echo "anonymous status: $status" | tee anonymous.txt
-          test "$status" = "401"
-
-      - id: drain
-        continue-on-error: true
-        env:
-          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
-        run: |
-          set -euo pipefail
-          test -n "$OIDC_TOKEN"
-          for attempt in 1 2 3 4 5; do
-            status=$(curl -sS -o drain.json -w '%{http_code}' -X POST \
-              -H "Authorization: Bearer $OIDC_TOKEN" "$BASE/api/worker/drain")
-            echo "attempt $attempt status: $status"
-            cat drain.json; echo
-            test "$status" = "200"
-            if jq -e '.sent >= 1' drain.json > /dev/null; then
-              jq -e '.via == "github-oidc"' drain.json > /dev/null
-              break
-            fi
-            sleep 8
-          done
-          jq -e '.sent >= 1 and .via == "github-oidc"' drain.json > /dev/null
-
-      - name: Record the evidence on the tracking issue
-        if: always()
+      - name: Close the temporary tracking issues
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OUTCOMES: >-
-            health=${{ steps.health.outcome }} register=${{ steps.register.outcome }}
-            oidc=${{ steps.oidc.outcome }} anon=${{ steps.anon.outcome }} drain=${{ steps.drain.outcome }}
         run: |
           set -euo pipefail
-          payload=$(jq -n -r \
-            --arg outcomes "$OUTCOMES" \
-            --arg email "$(cat smoke-email.txt 2>/dev/null || echo '(none)')" \
-            --arg health "$(cat health.json 2>/dev/null)" \
-            --arg smoke "$(cat smoke.log 2>/dev/null)" \
-            --arg anon "$(cat anonymous.txt 2>/dev/null)" \
-            --arg drain "$(cat drain.json 2>/dev/null)" '
-              "outcomes: " + $outcomes + "\n" + $email
-              + "\n\nhealth:\n" + (if $health == "" then "(missing)" else $health end)
-              + "\n\nhosted smoke:\n" + (if $smoke == "" then "(missing)" else $smoke end)
-              + "\n\nanonymous drain:\n" + (if $anon == "" then "(missing)" else $anon end)
-              + "\n\nauthorized drain:\n" + (if $drain == "" then "(missing)" else $drain end)')
-          body=$(jq -n --arg p "$payload" '{body: ("```\n" + $p + "\n```")}')
-          curl -sS -X POST "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$TRACKING_ISSUE/comments" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Content-Type: application/json' -d "$body" > /dev/null
+          for number in 7 8; do
+            curl -sS -X PATCH "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$number" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H 'Content-Type: application/json' \
+              -d '{"state":"closed","body":"Closed: this temporary record was consumed by the verification run recorded in HOSTED_DEPLOYMENT.md."}' \
+              | jq -r '"#" + (.number|tostring) + " " + .state'
+          done

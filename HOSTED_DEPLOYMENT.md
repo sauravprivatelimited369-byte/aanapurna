@@ -274,6 +274,76 @@ that exact preview origin in addition to `APP_URL`.
    human food-safety, legal, privacy and launch approvals in
    `LAUNCH_CHECKLIST.md`. Keep `OPERATIONS_ENABLED=false` until then.
 
+### The email path is now proven on the live deployment
+
+Two things blocked email: no consumer for the queue (fixed by the drain below)
+and no SMTP credential. The credential problem was attacked from a different
+direction instead of waiting for a Gmail App Password. **Any** authenticated SMTP
+provider works — the app only needs `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`,
+`SMTP_USER`, `SMTP_PASS` and `SMTP_FROM`, or a single `SMTP_URL` — and for
+verification a disposable capture transport was provisioned programmatically and
+configured on the production project. A GitHub Actions run then drove the real
+deployment and recorded this, verbatim from the run:
+
+```
+health:  {"status":"ok","database":{"status":"ok","latencyMs":1530},
+          "email":{"status":"test_sink","captureTestSink":true,"missingSettings":[]},
+          "realOperationsEnabled":false}
+smoke:   9/9 checks passed, including
+         PASS  registration creates a pending, unverified account — HTTP 201, status=created
+         PASS  unverified account cannot obtain a usable session — HTTP 403
+anonymous drain: 401
+authorized drain: {"status":"ok","schedule":"one-batch","via":"github-oidc",
+                   "delivered":true,"reserved":1,"sent":1,"failed":0}
+```
+
+and the database row it produced:
+
+```
+recipient=capture-check-…@example.com kind=verification status=sent attempts=1
+last_error=null sent_at=2026-11-14 09:43:27.71725+00
+```
+
+So the whole chain — hosted registration, outbox enqueue, reservation, a real
+SMTP transaction, and the sent marker — is now demonstrated on production, and
+the hosted `POST` flows plus their session behaviour have been exercised for the
+first time.
+
+What this does **not** do is put a verification email in a real person's inbox: a
+capture service accepts delivery and keeps the message in a test inbox. That is
+why `getEmailSettingsStatus` reports `testSink`, `/api/health` says
+`status: "test_sink"` rather than `configured`, and `npm run check:production-config`
+fails outright on a capture host. Replacing three values — `SMTP_HOST`,
+`SMTP_USER` and `SMTP_PASS` (plus `SMTP_PORT`/`SMTP_SECURE`/`SMTP_FROM` for the
+provider) — with a real provider is the only remaining email step, and it no
+longer requires Gmail specifically. Brevo, Mailgun, Resend, Postmark, Amazon SES
+and Gmail with an App Password are all supported by the same code path.
+
+### Finding: a user with audit history cannot be deleted
+
+The fictional smoke-test account could not be removed. `audit_events.actor_user_id`
+is `ON DELETE SET NULL`, and the append-only guard trigger rejects that update, so
+`DELETE FROM "user"` fails with `append-only records cannot be changed or deleted`
+once the account has any audit event. The record staying immutable is correct, but
+the consequence is real: **there is currently no account-deletion path**, which
+matters for data-subject erasure requests. The unverified fictional account
+`capture-check-…@example.com` therefore remains in the database, and the owner
+needs to settle a retention/erasure design (for example, anonymising the user row
+while keeping audit events) before real signups. `scripts/hosted-smoke.mjs` now
+says this instead of suggesting a plain `DELETE`.
+
+### Canonical hostname
+
+`annapurna-link.vercel.app` is now attached to the project (`verified: true`) and
+serves the app over HTTPS, so the site no longer has to be shared under a
+`-preview` name. It is still a `vercel.app` hostname — Vercel owns that domain, not
+the operator — so it is a better URL, not an owned production domain. `APP_URL`
+and `APP_DOMAIN` point at it, and `APP_ADDITIONAL_ORIGINS` keeps the previous
+alias (`aanapurna-link-preview.vercel.app`) trusted so existing links keep working
+for form posts. A genuinely owner-controlled domain still requires buying one and
+pointing DNS at Vercel (`cname.vercel-dns.com`), then updating `APP_URL`,
+`APP_DOMAIN` and adding the old host to `APP_ADDITIONAL_ORIGINS`.
+
 ### Serverless outbox drain (replaces the missing worker host)
 
 Vercel cannot run the Graphile Worker process, so queued authentication email had

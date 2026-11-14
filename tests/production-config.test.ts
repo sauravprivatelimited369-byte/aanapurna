@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { validateProductionConfig } from "../src/lib/production-config";
+import { parseAdditionalOrigins, validateProductionConfig } from "../src/lib/production-config";
 import { getEmailSettingsStatus } from "../src/email/settings";
 
 const key = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=";
@@ -169,6 +169,34 @@ describe("shared email delivery status", () => {
     expect(result.configured).toBe(false);
     expect(result.missingSettings.join(" ")).toContain("SMTP_PORT");
     expect(result.missingSettings.join(" ")).toContain("SMTP_USER/SMTP_PASS");
+  });
+});
+
+describe("additional trusted origins", () => {
+  it("accepts clean HTTPS origins and de-duplicates them", () => {
+    const result = parseAdditionalOrigins(
+      "https://old.example.test, https://annapurna-link.vercel.app ,https://old.example.test",
+    );
+    expect(result.problems).toEqual([]);
+    expect(result.origins).toEqual(["https://old.example.test", "https://annapurna-link.vercel.app"]);
+  });
+
+  it("treats an unset or placeholder value as no extra origins", () => {
+    expect(parseAdditionalOrigins(undefined)).toEqual({ origins: [], problems: [] });
+    expect(parseAdditionalOrigins("REPLACE_WITH_ORIGINS")).toEqual({ origins: [], problems: [] });
+  });
+
+  it("rejects wildcards, plain HTTP, credentials and paths", () => {
+    expect(parseAdditionalOrigins("https://*.example.test").problems.join(" ")).toContain("wildcards");
+    expect(parseAdditionalOrigins("http://old.example.test").problems.join(" ")).toContain("HTTPS");
+    expect(parseAdditionalOrigins("https://user:pass@old.example.test").problems.join(" ")).toContain("clean origins");
+    expect(parseAdditionalOrigins("https://old.example.test/account").problems.join(" ")).toContain("without a path");
+    expect(parseAdditionalOrigins("not a url").problems.join(" ")).toContain("absolute HTTPS origins");
+  });
+
+  it("surfaces extra-origin problems through the production preflight", () => {
+    const result = validateProductionConfig(baseEnv({ APP_ADDITIONAL_ORIGINS: "http://old.example.test" }));
+    expect(result.problems.join(" ")).toContain("APP_ADDITIONAL_ORIGINS");
   });
 });
 

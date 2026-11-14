@@ -9,6 +9,7 @@ import * as schema from "@/db/schema";
 import { authDb, withUserContext } from "@/db";
 import { enqueueAuthEmail } from "@/email/outbox";
 import { registrationDetailsSchema } from "@/domain/validation";
+import { parseAdditionalOrigins } from "@/lib/production-config";
 
 const isProduction = process.env.NODE_ENV === "production";
 const configuredSecret = process.env.AUTH_SECRET;
@@ -26,8 +27,13 @@ const appUrl = process.env.APP_URL;
 // project's canonical alias. Trust that exact HTTPS origin in addition to
 // APP_URL; never trust a wildcard or a user-supplied host.
 const vercelPreviewOrigin = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null;
+// Operators can list additional HTTPS origins that must keep accepting form
+// posts, for example the previous deployment alias after a domain change.
+const additionalOrigins = isProduction
+  ? parseAdditionalOrigins(process.env.APP_ADDITIONAL_ORIGINS).origins
+  : [];
 const trustedOrigins = isProduction
-  ? [appUrl, vercelPreviewOrigin].filter((origin): origin is string => Boolean(origin))
+  ? [appUrl, vercelPreviewOrigin, ...additionalOrigins].filter((origin): origin is string => Boolean(origin))
   : ["http://localhost:3000", "http://127.0.0.1:3000", "https://*.e2b.app", ...(appUrl ? [appUrl] : [])];
 
 const optionalIntakeText = (max: number) => z.string().trim().max(max).nullable().optional();

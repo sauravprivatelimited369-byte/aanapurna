@@ -152,7 +152,9 @@ async function checkRegistration() {
   );
   if (created) {
     console.log(`NOTE  remove the test account with: DELETE FROM "user" WHERE email = '${body.email}';`);
-    console.log("NOTE  related account/session rows cascade or must be removed by the owner.");
+    console.log("NOTE  related account/session rows cascade, but the append-only audit guard rejects that");
+    console.log("NOTE  delete once the account has audit events, so deletion needs the owner's documented");
+    console.log("NOTE  retention procedure (see HOSTED_DEPLOYMENT.md), not an ad-hoc DELETE.");
   }
 
   const signIn = await postJson("/api/auth/sign-in/email", { email, password });
