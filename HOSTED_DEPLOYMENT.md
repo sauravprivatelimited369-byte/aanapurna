@@ -184,6 +184,31 @@ throttling state that the application reaches through its own roles, and the
 PostgREST roles can no longer touch them. An independent reviewer should still
 confirm this design and the RLS policy set.
 
+Re-measured on the deployed database after the hardened migration ran a second
+time through the build (`dpl_53VqwP4hCafWnD1HemvaXFeXnjkC`, commit
+`b7de262b566a13115cc0d0f69d94f3476c9719fb`): 12 applied migrations, 0 of 30 public
+tables reachable, 0 of 36 public functions executable, 23 application-role
+function grants intact, and `/api/health` still reporting the database as ok.
+
+Residual, platform-controlled item: 24 default-privilege rows still grant `anon`
+and `authenticated` rights on objects that `supabase_admin` creates in `public`.
+Those rows can only be altered by `supabase_admin`, and the project's `postgres`
+role is not a member of it (`pg_has_role(current_user, 'supabase_admin', 'MEMBER')`
+is false), so the migration attempts the revocation, catches
+`insufficient_privilege` and skips it. They do not affect the application's own
+objects — every table and function in `public` is owned by `postgres`, whose
+defaults are now empty — and `npm run db:check` verifies actual object privileges
+on every build, so a regression would fail the deployment rather than pass
+silently. Removing those rows needs a `supabase_admin` session (for example the
+dashboard's own connection), which this project does not expose.
+
+One deployment during this work failed with
+`(EMAXCONNSESSION) max clients reached in session mode - max clients are limited to pool_size: 15`
+while another build held pooler sessions. It was transient: the migrations had
+already applied, and re-running the deployment succeeded. Builds that share a
+session-mode pooler can hit this; it is a connection-budget symptom, not a defect
+in the application.
+
 The hosted runtime therefore connects to Supabase through the session pooler
 with strict TLS as the least-privilege `annapurna_app` role and serves real
 database-backed responses. A read-only query of the same database reports

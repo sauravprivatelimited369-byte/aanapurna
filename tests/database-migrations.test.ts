@@ -353,9 +353,14 @@ describe("Supabase PostgREST roles", () => {
     await database.exec(`
       CREATE ROLE anon NOLOGIN;
       CREATE ROLE authenticated NOLOGIN;
+      CREATE ROLE supabase_admin NOLOGIN;
       GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated;
       GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated;
       GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO anon, authenticated;
+      ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
+        GRANT ALL ON TABLES TO anon, authenticated;
+      ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
+        GRANT ALL ON FUNCTIONS TO anon, authenticated;
     `);
     const before = await database.query<{ tables: number; functions: number }>(`
       SELECT
@@ -377,7 +382,12 @@ describe("Supabase PostgREST roles", () => {
     );
     await database.exec(hardening.replaceAll("--> statement-breakpoint", "\n"));
 
-    const after = await database.query<{ tables: number; functions: number; app_can_read: boolean }>(`
+    const after = await database.query<{
+      tables: number;
+      functions: number;
+      defaults: number;
+      app_can_read: boolean;
+    }>(`
       SELECT
         (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
           WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relacl IS NOT NULL
@@ -387,8 +397,13 @@ describe("Supabase PostgREST roles", () => {
           WHERE n.nspname = 'public' AND p.proacl IS NOT NULL
             AND EXISTS (SELECT 1 FROM aclexplode(p.proacl) a JOIN pg_roles r ON r.oid = a.grantee
                         WHERE r.rolname IN ('anon', 'authenticated'))) AS functions,
+        (SELECT count(*)::int FROM pg_default_acl d
+          CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+          JOIN pg_roles g ON g.oid = a.grantee
+          JOIN pg_namespace n ON n.oid = d.defaclnamespace
+          WHERE n.nspname = 'public' AND g.rolname IN ('anon', 'authenticated')) AS defaults,
         has_table_privilege('annapurna_app', 'public.donations', 'SELECT') AS app_can_read
     `);
-    expect(after.rows[0]).toEqual({ tables: 0, functions: 0, app_can_read: true });
+    expect(after.rows[0]).toEqual({ tables: 0, functions: 0, defaults: 0, app_can_read: true });
   });
 });
