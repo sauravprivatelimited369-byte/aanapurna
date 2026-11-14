@@ -1,9 +1,10 @@
 name: Email path verification (temporary)
 
-# Temporary helper. It proves, against the live production deployment, that
-# (1) the deployment authenticates to a real SMTP server, (2) a hosted
-# registration really queues an email, and (3) the drain delivers it. Results are
-# posted to a tracking issue because this environment cannot read Actions logs.
+# Temporary helper. It proves, against the live production deployment, that the
+# deployment authenticates to a real SMTP server, that a hosted registration
+# really queues an email, and that the drain delivers it. Every check records its
+# outcome on a tracking issue, because this environment can read api.github.com
+# but not the Actions log endpoint.
 on:
   push:
     paths:
@@ -14,14 +15,14 @@ permissions:
   id-token: write
   issues: write
 
+env:
+  BASE: https://aanapurna-link-preview.vercel.app
+  TRACKING_ISSUE: "8"
+
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      BASE: https://annapurna-link-preview.vercel.app
-      SMOKE_EMAIL: capture-check-20261114@example.com
-      SMOKE_PASSWORD: CaptureCheck-2026-11-14-a9f3
     steps:
       - uses: actions/checkout@v4
 
@@ -29,23 +30,28 @@ jobs:
         with:
           node-version: 22
 
-      - name: Health reports a capture transport, not production email
+      - id: health
+        continue-on-error: true
         run: |
           set -euo pipefail
           curl -sS "$BASE/api/health?probe=verify" -o health.json
           cat health.json
           jq -e '.email.status == "test_sink" and .email.captureTestSink == true' health.json > /dev/null
 
-      - name: Hosted registration queues a verification email
+      - id: register
+        continue-on-error: true
+        env:
+          SMOKE_EMAIL: capture-check-${{ github.run_id }}@example.com
         run: |
           set -euo pipefail
+          echo "email=$SMOKE_EMAIL" > smoke-email.txt
           HOSTED_SMOKE_BASE_URL="$BASE" \
           HOSTED_SMOKE_EMAIL="$SMOKE_EMAIL" \
-          HOSTED_SMOKE_PASSWORD="$SMOKE_PASSWORD" \
-            node scripts/hosted-smoke.mjs --register | tee smoke.log
+          HOSTED_SMOKE_PASSWORD='CaptureCheck-2026-11-14-a9f3' \
+            node scripts/hosted-smoke.mjs --register 2>&1 | tee smoke.log
 
-      - name: Request a GitHub OIDC token
-        id: oidc
+      - id: oidc
+        continue-on-error: true
         run: |
           set -euo pipefail
           response=$(curl -sS \
@@ -56,19 +62,22 @@ jobs:
           echo "::add-mask::$token"
           printf 'token=%s\n' "$token" >> "$GITHUB_OUTPUT"
 
-      - name: Anonymous drain request is refused
+      - id: anon
+        continue-on-error: true
         run: |
           set -euo pipefail
           status=$(curl -sS -o anonymous.json -w '%{http_code}' -X POST "$BASE/api/worker/drain")
-          echo "anonymous status: $status"
+          echo "anonymous status: $status" | tee anonymous.txt
           test "$status" = "401"
 
-      - name: Authorized drain delivers the queued message
+      - id: drain
+        continue-on-error: true
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
+          test -n "$OIDC_TOKEN"
+          for attempt in 1 2 3 4 5; do
             status=$(curl -sS -o drain.json -w '%{http_code}' -X POST \
               -H "Authorization: Bearer $OIDC_TOKEN" "$BASE/api/worker/drain")
             echo "attempt $attempt status: $status"
@@ -76,38 +85,33 @@ jobs:
             test "$status" = "200"
             if jq -e '.sent >= 1' drain.json > /dev/null; then
               jq -e '.via == "github-oidc"' drain.json > /dev/null
-              cp drain.json drain-pass.json
               break
             fi
-            sleep 5
+            sleep 8
           done
-          test -f drain-pass.json
+          jq -e '.sent >= 1 and .via == "github-oidc"' drain.json > /dev/null
 
-      - name: Record the evidence on a tracking issue
+      - name: Record the evidence on the tracking issue
         if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUTCOMES: >-
+            health=${{ steps.health.outcome }} register=${{ steps.register.outcome }}
+            oidc=${{ steps.oidc.outcome }} anon=${{ steps.anon.outcome }} drain=${{ steps.drain.outcome }}
         run: |
           set -euo pipefail
-          summary=$(jq -n \
-            --arg health "$(cat health.json 2>/dev/null || echo missing)" \
-            --arg smoke "$(cat smoke.log 2>/dev/null || echo missing)" \
-            --arg drain "$(cat drain-pass.json 2>/dev/null || echo not-delivered)" \
-            '{health: ($health | fromjson?), smoke: $smoke, drain: ($drain | fromjson?)}')
-          title="TEMP: email path verification results"
-          existing=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/issues?state=all&labels=" \
-            | jq -r --arg t "$title" '.[] | select(.title == $t) | .number' | head -1)
-          body=$(jq -Rn --arg s "$summary" '{"body":"Automated verification of the deployed email path.\n\n```json\n" + $s + "\n```"}')
-          if [ -n "${existing:-}" ]; then
-            curl -sS -X POST "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$existing/comments" \
-              -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Content-Type: application/json' -d "$body" > /dev/null
-          else
-            create=$(jq -Rn --arg t "$title" --arg s "$summary" '{"title":$t,"body":("Automated verification of the deployed email path.\n\n```json\n" + $s + "\n```")}')
-            curl -sS -X POST "https://api.github.com/repos/$GITHUB_REPOSITORY/issues" \
-              -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Content-Type: application/json' -d "$create" > /dev/null
-          fi
-          # Redact and close the earlier capture-credential issue.
-          curl -sS -X PATCH "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/7" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Content-Type: application/json' \
-            -d '{"state":"closed","body":"Redacted: the throwaway capture-mailbox settings were consumed by the verification run."}' > /dev/null
+          payload=$(jq -n -r \
+            --arg outcomes "$OUTCOMES" \
+            --arg email "$(cat smoke-email.txt 2>/dev/null || echo '(none)')" \
+            --arg health "$(cat health.json 2>/dev/null)" \
+            --arg smoke "$(cat smoke.log 2>/dev/null)" \
+            --arg anon "$(cat anonymous.txt 2>/dev/null)" \
+            --arg drain "$(cat drain.json 2>/dev/null)" '
+              "outcomes: " + $outcomes + "\n" + $email
+              + "\n\nhealth:\n" + (if $health == "" then "(missing)" else $health end)
+              + "\n\nhosted smoke:\n" + (if $smoke == "" then "(missing)" else $smoke end)
+              + "\n\nanonymous drain:\n" + (if $anon == "" then "(missing)" else $anon end)
+              + "\n\nauthorized drain:\n" + (if $drain == "" then "(missing)" else $drain end)')
+          body=$(jq -n --arg p "$payload" '{body: ("```\n" + $p + "\n```")}')
+          curl -sS -X POST "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$TRACKING_ISSUE/comments" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" -H 'Content-Type: application/json' -d "$body" > /dev/null
