@@ -15,6 +15,7 @@ const migrationFiles = [
   "20261113074000_arrival_inspection_gate.sql",
   "20261113190000_auth_registration_and_guards.sql",
   "20261114120000_revoke_public_api_privileges.sql",
+  "20261114150000_recall_records_and_worker_heartbeat.sql",
 ];
 
 let database: PGlite;
@@ -108,6 +109,75 @@ describe("PostgreSQL migration and authorization contracts", () => {
     `);
     expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(23);
     expect(result.rows[0]?.required_functions).toBe(10);
+  });
+
+  it("adds recall records as append-only, policy-protected evidence with one open recall per donation", async () => {
+    const catalog = await database.query<{
+      rls_enabled: boolean;
+      policies: number;
+      has_delete_policy: boolean;
+      unique_open_index: boolean;
+      check_constraints: number;
+      app_can_insert: boolean;
+      app_can_delete: boolean;
+    }>(`
+      SELECT
+        cls.relrowsecurity AS rls_enabled,
+        (SELECT count(*)::int FROM pg_policy policy WHERE policy.polrelid = 'public.recall_records'::regclass) AS policies,
+        EXISTS (SELECT 1 FROM pg_policy policy
+          WHERE policy.polrelid = 'public.recall_records'::regclass AND policy.polcmd = 'd') AS has_delete_policy,
+        EXISTS (SELECT 1 FROM pg_indexes
+          WHERE schemaname = 'public' AND indexname = 'recall_records_one_open_per_donation'
+            AND indexdef LIKE '%UNIQUE%' AND indexdef LIKE '%status = %') AS unique_open_index,
+        (SELECT count(*)::int FROM pg_constraint
+          WHERE conrelid = 'public.recall_records'::regclass AND contype = 'c') AS check_constraints,
+        has_table_privilege('annapurna_app', 'public.recall_records', 'INSERT') AS app_can_insert,
+        has_table_privilege('annapurna_app', 'public.recall_records', 'DELETE') AS app_can_delete
+      FROM pg_class cls WHERE cls.oid = 'public.recall_records'::regclass
+    `);
+    expect(catalog.rows[0]).toMatchObject({
+      rls_enabled: true,
+      policies: 3,
+      has_delete_policy: false,
+      unique_open_index: true,
+      app_can_insert: true,
+      app_can_delete: false,
+    });
+    expect(catalog.rows[0]?.check_constraints).toBeGreaterThanOrEqual(4);
+  });
+
+  it("lets the worker publish a heartbeat but keeps the table out of public reach", async () => {
+    const privileges = await database.query<{
+      app_select: boolean;
+      app_insert: boolean;
+      worker_insert: boolean;
+      worker_update: boolean;
+      public_select: boolean;
+    }>(`
+      SELECT
+        has_table_privilege('annapurna_app', 'public.service_health', 'SELECT') AS app_select,
+        has_table_privilege('annapurna_app', 'public.service_health', 'INSERT') AS app_insert,
+        has_table_privilege('annapurna_worker', 'public.service_health', 'INSERT') AS worker_insert,
+        has_table_privilege('annapurna_worker', 'public.service_health', 'UPDATE') AS worker_update,
+        has_table_privilege('public', 'public.service_health', 'SELECT') AS public_select
+    `);
+    expect(privileges.rows[0]).toMatchObject({
+      app_select: true,
+      app_insert: false,
+      worker_insert: true,
+      worker_update: true,
+      public_select: false,
+    });
+
+    await withRole("annapurna_worker", null, async () => {
+      await database.query(
+        "INSERT INTO public.service_health (service, status, details) VALUES ('worker', 'ok', '{\"event\":\"started\"}'::jsonb)",
+      );
+      const row = await database.query<{ service: string; status: string }>(
+        "SELECT service, status FROM public.service_health WHERE service = 'worker'",
+      );
+      expect(row.rows).toEqual([{ service: "worker", status: "ok" }]);
+    });
   });
 
   it("limits an app-role session to its own profile and denies profile privilege escalation", async () => {

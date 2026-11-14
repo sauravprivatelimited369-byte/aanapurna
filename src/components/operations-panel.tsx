@@ -11,6 +11,8 @@ type Policy = { id: string; version: string; status: string; rules: unknown; cre
 type SupportCase = { id: string; reference: string; subject: string; description: string; status: string; organizationId: string | null; createdBy: string; createdByName: string | null; assignedTo: string | null; createdAt: string; updatedAt: string };
 type DataRequest = { id: string; userId: string; userName: string | null; requestType: string; description: string | null; status: string; resolution: string | null; assignedTo: string | null; reviewedBy: string | null; completedAt: string | null; createdAt: string };
 type Overview = { pendingOrganizations: number; openIncidents: number; verifiedDeliveries: number; emailOutbox: { pending: number; failed: number } };
+type RecallableDonation = { id: string; name: string; status: string; category: string; quantity: string; unit: string; generatedAt: string };
+type Recall = { id: string; donationId: string; donationName: string; status: string; reason: string; affectedReceiptCount: number; recalledStatus: string; initiatedAt: string; closedAt: string | null; closureNote: string | null };
 
 function formatDate(value: string | null) {
   return value ? new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(value)) : "—";
@@ -36,6 +38,8 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [supportCases, setSupportCases] = useState<SupportCase[]>([]);
   const [dataRequests, setDataRequests] = useState<DataRequest[]>([]);
+  const [recalls, setRecalls] = useState<Recall[]>([]);
+  const [recallable, setRecallable] = useState<RecallableDonation[]>([]);
   const [overview, setOverview] = useState<Overview | null>(initialOverview);
   const [loading, setLoading] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -53,6 +57,8 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
     if (canReviewSafety) {
       work.push(loadJson<Incident[]>("/api/admin/incidents").then(setIncidents));
       work.push(loadJson<Policy[]>("/api/admin/policies").then(setPolicies));
+      work.push(loadJson<{ recalls: Recall[] }>("/api/admin/recalls").then((data) => setRecalls(data.recalls)));
+      work.push(loadJson<{ donations: RecallableDonation[] }>("/api/admin/donations").then((data) => setRecallable(data.donations)));
       if (!isOperations) work.push(loadJson<ServiceArea[]>("/api/admin/service-areas").then(setAreas));
     }
     if (isOperations || isSupport) work.push(loadJson<SupportCase[]>("/api/support").then(setSupportCases));
@@ -109,7 +115,7 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
     {loading && <div className="skeleton" style={{ height: 60 }} aria-busy="true" role="status" aria-label="Loading operations data" />}
     {(isOperations || canReviewSafety || isSupport || isSecurity) && <nav className="operations-toc" aria-label="Operations review sections">
       {isOperations && <><a href="#organization-reviews">Organisation reviews</a><a href="#helper-reviews">Helper reviews</a></>}
-      {canReviewSafety && <><a href="#safety-incidents">Safety incidents</a><a href="#food-policies">Food policies</a></>}
+      {canReviewSafety && <><a href="#safety-incidents">Safety incidents</a><a href="#recalls">Recalls</a><a href="#food-policies">Food policies</a></>}
       {isOperations && <a href="#service-areas">Service areas</a>}
       {(isOperations || isSupport) && <a href="#support-cases">Support queue</a>}
       {(isOperations || isSupport || isSecurity) && <a href="#privacy-requests">Privacy requests</a>}
@@ -159,6 +165,31 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
           <button className="button button--secondary button--small" type="submit" disabled={busyId === incident.id}>{busyId === incident.id ? "Saving…" : "Close incident record"}</button>
         </form> : incident.resolution && <p className="form-hint">Reviewer note: {incident.resolution}</p>}
       </article>)}</div> : <div className="empty-state"><div><strong>No safety incidents recorded</strong><p>Incident reports will be visible to authorised safety staff.</p></div></div>}
+    </section>}
+
+    {canReviewSafety && <section id="recalls" className="app-card app-card--full">
+      <div className="app-card-title"><div><h2>Recall register</h2><p>A recall stops the donation, records why, and names every receipt already issued for that batch. Closing a recall is a record-keeping decision: the donation stays recalled and does not return to distribution on its own.</p></div><span className="status-pill status-pill--pending">{recalls.filter((recall) => recall.status === "open").length} open</span></div>
+      <form className="form-stack" onSubmit={(event) => submitForm(event, "recall-new", `/api/admin/donations/${String(new FormData(event.currentTarget).get("donationId"))}/recall`, (form) => ({ reason: form.get("reason") }), "Recall recorded. The donation is stopped and the parties notified.")}>
+        <div className="app-grid">
+          <div className="form-field app-card--span-6">
+            <label htmlFor="recall-donation">Donation</label>
+            <select className="form-control" id="recall-donation" name="donationId" required defaultValue="">
+              <option value="" disabled>Select a recent donation</option>
+              {recallable.map((donation) => <option key={donation.id} value={donation.id}>{donation.name} · {donation.status.replaceAll("_", " ")} · {donation.quantity} {donation.unit}</option>)}
+            </select>
+            <span className="form-hint">Only donations that still hold food can be recalled: offered, reserved, assigned, collected, delivered, expired or on hold.</span>
+          </div>
+          <div className="form-field app-card--span-6"><label htmlFor="recall-reason">Recall reason (sent to the parties)</label><textarea className="form-control" id="recall-reason" name="reason" required minLength={10} maxLength={1000} rows={3} placeholder="What was found, when, and what must not happen to this batch" /></div>
+        </div>
+        <button className="button button--secondary button--small" type="submit" disabled={busyId === "recall-new" || !recallable.length}>{busyId === "recall-new" ? "Recording…" : "Issue recall"}</button>
+      </form>
+      {recalls.length ? <div className="data-list">{recalls.map((recall) => <article className="operation-record" key={recall.id}>
+        <div className="operation-record-head"><div><strong>{recall.donationName}</strong><small>recalled from {recall.recalledStatus.replaceAll("_", " ")} · issued {formatDate(recall.initiatedAt)} · {recall.affectedReceiptCount} receipt{recall.affectedReceiptCount === 1 ? "" : "s"} affected</small><small>{recall.reason}</small></div><span className={`status-pill status-pill--${recall.status === "open" ? "on_hold" : "completed"}`}>{recall.status}</span></div>
+        {recall.status === "open" ? <form className="form-stack" onSubmit={(event) => submitForm(event, recall.id, `/api/admin/recalls/${recall.id}/close`, (form) => ({ closureNote: form.get("closureNote") }), "Recall closed. The donation stays recalled.")}>
+          <div className="form-field"><label htmlFor={`recall-close-${recall.id}`}>Closure note</label><textarea className="form-control" id={`recall-close-${recall.id}`} name="closureNote" required minLength={10} maxLength={1000} rows={2} /></div>
+          <button className="button button--secondary button--small" type="submit" disabled={busyId === recall.id}>{busyId === recall.id ? "Saving…" : "Close recall record"}</button>
+        </form> : recall.closureNote && <p className="form-hint">Closure note: {recall.closureNote}</p>}
+      </article>)}</div> : <div className="empty-state"><div><strong>No recalls recorded</strong><p>A recall can be issued for any donation that still holds food. Every recall keeps its reason, its author and the receipts it affected.</p></div></div>}
     </section>}
 
     {canReviewSafety && <section id="food-policies" className="app-card app-card--full">

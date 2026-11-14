@@ -18,6 +18,7 @@ import {
   policyVersions,
   privateDocuments,
   receipts,
+  recallRecords,
   safetyIncidents,
   serviceAreas,
   supportCases,
@@ -39,6 +40,8 @@ import {
   type helperDecisionSchema,
   type incidentResolutionSchema,
   type incidentSchema,
+  type recallClosureSchema,
+  type recallRequestSchema,
   type offerResponseSchema,
   type onboardingSchema,
   type pickupSchema,
@@ -58,6 +61,8 @@ type DonationInput = z.infer<typeof donationCreateSchema>;
 type OfferResponse = z.infer<typeof offerResponseSchema>;
 type PickupInput = z.infer<typeof pickupSchema>;
 type IncidentInput = z.infer<typeof incidentSchema>;
+type RecallRequest = z.infer<typeof recallRequestSchema>;
+type RecallClosure = z.infer<typeof recallClosureSchema>;
 type IncidentResolution = z.infer<typeof incidentResolutionSchema>;
 type AdminDecision = z.infer<typeof adminDecisionSchema>;
 type HelperDecision = z.infer<typeof helperDecisionSchema>;
@@ -1435,6 +1440,212 @@ export async function resolveSafetyIncident(identity: Identity, incidentId: stri
       holdReleased: false,
     });
     return { id: incident.id, status: "resolved" as const, holdReleased: false };
+  });
+}
+
+/**
+ * Recall a donation: stop it, record why, and name every receipt already issued
+ * for it.
+ *
+ * Before this existed, a recall was a status change and an incident row, which
+ * could not answer "who received food from this batch?". The record written here
+ * is append-only evidence: it is closed with a note, never deleted, and the
+ * affected receipt count is snapshotted so a later correction cannot rewrite what
+ * the notice claimed at the time.
+ */
+export async function recallDonation(identity: Identity, donationId: string, input: RecallRequest) {
+  if (!hasAnyRole(identity, ["operations_admin", "safety_officer"])) {
+    throw new HttpError(403, "Recall access is required.", "RECALL_ACCESS_REQUIRED");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const [donation] = await tx.select({
+      id: donations.id,
+      name: donations.name,
+      status: donations.status,
+      generatorOrganizationId: donations.generatorOrganizationId,
+      receiverOrganizationId: donations.receiverOrganizationId,
+    }).from(donations).where(eq(donations.id, donationId)).for("update");
+    if (!donation) throw new HttpError(404, "Donation not found.", "DONATION_NOT_FOUND");
+    if (donation.status === "recalled") {
+      throw new HttpError(409, "This donation already has an active recall.", "RECALL_ALREADY_ACTIVE");
+    }
+    const recallable: Array<typeof donation.status> = ["offered", "reserved", "assigned", "collected", "delivered", "expired", "on_hold"];
+    if (!recallable.includes(donation.status)) {
+      throw new HttpError(409, `A donation in state ${donation.status} holds no food to recall.`, "RECALL_NOT_APPLICABLE");
+    }
+
+    const affectedReceipts = await tx.select({
+      reference: receipts.reference,
+      quantity: receipts.quantity,
+      unit: receipts.unit,
+      deliveredAt: receipts.deliveredAt,
+      receiverOrganizationId: receipts.receiverOrganizationId,
+    }).from(receipts).where(eq(receipts.donationId, donation.id)).orderBy(receipts.deliveredAt);
+
+    const now = new Date();
+    await tx.update(donations).set({ status: "recalled", updatedAt: now }).where(eq(donations.id, donation.id));
+    const [recall] = await tx.insert(recallRecords).values({
+      donationId: donation.id,
+      reason: input.reason,
+      affectedReceiptCount: affectedReceipts.length,
+      recalledStatus: donation.status,
+      initiatedBy: identity.id,
+      initiatedAt: now,
+      updatedAt: now,
+    }).returning({ id: recallRecords.id, initiatedAt: recallRecords.initiatedAt });
+
+    await tx.insert(custodyEvents).values({
+      donationId: donation.id,
+      actorUserId: identity.id,
+      eventType: "donation.recalled",
+      occurredAt: now,
+      details: {
+        recallId: recall.id,
+        previousStatus: donation.status,
+        reason: input.reason,
+        affectedReceiptCount: affectedReceipts.length,
+      },
+    });
+
+    const notice = `${donation.name} has been recalled. Do not distribute any part of this batch. Reason recorded by operations: ${input.reason}`;
+    await notifyOrganization(tx, donation.generatorOrganizationId, donation.id, "safety.donation_recalled", "Donation recalled", notice, "/app/listings");
+    if (donation.receiverOrganizationId) {
+      await notifyOrganization(tx, donation.receiverOrganizationId, donation.id, "safety.donation_recalled", "Donation recalled", notice, "/app/offers");
+    }
+    const jobRows = await tx.select({ helperUserId: deliveryJobs.helperUserId })
+      .from(deliveryJobs).where(eq(deliveryJobs.donationId, donation.id));
+    for (const job of jobRows) {
+      if (!job.helperUserId) continue;
+      await notifyUser(tx, job.helperUserId, null, "safety.donation_recalled", "Delivery recalled", notice, "/app/deliveries");
+    }
+
+    await audit(tx, identity, "donation.recalled", "donation", donation.id, input.reason, {
+      recallId: recall.id,
+      previousStatus: donation.status,
+      affectedReceiptCount: affectedReceipts.length,
+    });
+
+    return {
+      id: recall.id,
+      donationId: donation.id,
+      status: "open" as const,
+      previousStatus: donation.status,
+      initiatedAt: recall.initiatedAt,
+      affectedReceiptCount: affectedReceipts.length,
+      affectedReceipts: affectedReceipts.map((receipt) => ({
+        reference: receipt.reference,
+        quantity: receipt.quantity,
+        unit: receipt.unit,
+        deliveredAt: receipt.deliveredAt,
+      })),
+    };
+  });
+}
+
+/**
+ * Recent donations for the recall picker. Operations and safety staff need to
+ * identify a batch by name and status, not by pasting a UUID they obtained
+ * somewhere else.
+ */
+export async function listRecentDonationsForOperations(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "safety_officer"])) {
+    throw new HttpError(403, "Recall access is required.", "RECALL_ACCESS_REQUIRED");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const rows = await tx.select({
+      id: donations.id,
+      name: donations.name,
+      status: donations.status,
+      category: donations.category,
+      quantity: donations.quantity,
+      unit: donations.unit,
+      generatorOrganizationId: donations.generatorOrganizationId,
+      generatedAt: donations.createdAt,
+    }).from(donations).orderBy(desc(donations.createdAt)).limit(50);
+    return { donations: rows };
+  });
+}
+
+export async function listRecalls(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "support_agent", "safety_officer", "security_admin"])) {
+    throw new HttpError(403, "Recall review access is required.", "RECALL_ACCESS_REQUIRED");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const rows = await tx.select({
+      id: recallRecords.id,
+      donationId: recallRecords.donationId,
+      donationName: donations.name,
+      status: recallRecords.status,
+      reason: recallRecords.reason,
+      affectedReceiptCount: recallRecords.affectedReceiptCount,
+      recalledStatus: recallRecords.recalledStatus,
+      initiatedBy: recallRecords.initiatedBy,
+      initiatedAt: recallRecords.initiatedAt,
+      closedAt: recallRecords.closedAt,
+      closureNote: recallRecords.closureNote,
+    }).from(recallRecords)
+      .innerJoin(donations, eq(donations.id, recallRecords.donationId))
+      .orderBy(desc(recallRecords.initiatedAt))
+      .limit(100);
+    return { recalls: rows };
+  });
+}
+
+/**
+ * Close a recall. The donation stays in the recalled state: lifting a recall is a
+ * record-keeping decision, and re-listing recalled food needs a new listing a
+ * human can see and review.
+ */
+export async function closeRecall(identity: Identity, recallId: string, input: RecallClosure) {
+  if (!hasAnyRole(identity, ["operations_admin", "safety_officer"])) {
+    throw new HttpError(403, "Recall access is required.", "RECALL_ACCESS_REQUIRED");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const [recall] = await tx.select({
+      id: recallRecords.id,
+      donationId: recallRecords.donationId,
+      status: recallRecords.status,
+    }).from(recallRecords).where(eq(recallRecords.id, recallId)).for("update");
+    if (!recall) throw new HttpError(404, "Recall not found.", "RECALL_NOT_FOUND");
+    if (recall.status !== "open") throw new HttpError(409, "This recall is already closed.", "RECALL_ALREADY_CLOSED");
+    const now = new Date();
+    await tx.update(recallRecords).set({
+      status: "closed",
+      closedBy: identity.id,
+      closedAt: now,
+      closureNote: input.closureNote,
+      updatedAt: now,
+    }).where(eq(recallRecords.id, recall.id));
+    const [donation] = await tx.select({
+      name: donations.name,
+      generatorOrganizationId: donations.generatorOrganizationId,
+      receiverOrganizationId: donations.receiverOrganizationId,
+    }).from(donations).where(eq(donations.id, recall.donationId)).limit(1);
+    if (donation) {
+      const notice = `${donation.name}: the recall record has been closed. The donation stays recalled and will not return to distribution on its own.`;
+      await notifyOrganization(tx, donation.generatorOrganizationId, recall.donationId, "safety.recall_closed", "Recall closed", notice, "/app/listings");
+      if (donation.receiverOrganizationId) {
+        await notifyOrganization(tx, donation.receiverOrganizationId, recall.donationId, "safety.recall_closed", "Recall closed", notice, "/app/offers");
+      }
+    }
+    await audit(tx, identity, "donation.recall_closed", "donation", recall.donationId, input.closureNote, { recallId: recall.id });
+    return { id: recall.id, status: "closed" as const, closedAt: now };
+  });
+}
+
+/**
+ * Append an account-security audit event for actions handled by Better Auth
+ * itself (password change, session revocation). Those routes must not write to
+ * audit_events directly: keeping one append-only path means the guard trigger and
+ * the shape of the record stay in a single place.
+ */
+export async function recordAccountSecurityEvent(
+  identity: Identity,
+  action: string,
+  details: Record<string, unknown>,
+) {
+  return withDomainContext(identity.id, async (tx) => {
+    await audit(tx, identity, action, "user_account", identity.id, undefined, details);
   });
 }
 

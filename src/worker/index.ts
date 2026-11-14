@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { run } from "graphile-worker";
 import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../lib/database-config";
 import { drainEmailOutboxOnce } from "./outbox-drain";
+import { tryRecordWorkerHeartbeat } from "./heartbeat";
 
 // The delivery logic lives in ./outbox-drain so the same code can be driven by
 // this long-lived process or by a short-lived hosted scheduler invocation.
@@ -52,9 +53,37 @@ async function startWorker() {
     concurrency: 2,
     pollInterval: 1_000,
     noHandleSignals: true,
-    taskList: { "drain-email-outbox": async () => { await drainEmailOutboxOnce(pool); } },
+    taskList: {
+      "drain-email-outbox": async () => {
+        try {
+          const result = await drainEmailOutboxOnce(pool);
+          await tryRecordWorkerHeartbeat(pool, {
+            event: "tick",
+            processed: result.sent,
+            failed: result.failed,
+            lastError: null,
+          });
+        } catch (error) {
+          // Record the failure, then re-throw so Graphile Worker applies its own
+          // bounded retry policy instead of the job disappearing silently.
+          await tryRecordWorkerHeartbeat(pool, {
+            event: "tick",
+            lastError: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+          });
+          throw error;
+        }
+      },
+    },
     crontab: "* * * * * drain-email-outbox",
   });
+
+  // The cron job runs once a minute and not at all when the queue is quiet, so
+  // beat independently: otherwise an idle worker looks identical to a dead one.
+  await tryRecordWorkerHeartbeat(pool, { event: "started" });
+  const heartbeatTimer = setInterval(() => {
+    void tryRecordWorkerHeartbeat(pool, { event: "tick" });
+  }, 30_000);
+  heartbeatTimer.unref();
 
   runner.promise.catch(async (error: unknown) => {
     if (stopping) return;
@@ -66,10 +95,14 @@ async function startWorker() {
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.once(signal, () => {
       stopping = true;
-      void runner.stop(signal).then(closePool).catch(async () => {
-        await closePool();
-        process.exitCode = 1;
-      });
+      clearInterval(heartbeatTimer);
+      void tryRecordWorkerHeartbeat(pool, { event: "stopping" })
+        .then(() => runner.stop(signal))
+        .then(closePool)
+        .catch(async () => {
+          await closePool();
+          process.exitCode = 1;
+        });
     });
   }
 }

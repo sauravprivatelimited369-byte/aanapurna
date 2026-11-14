@@ -483,6 +483,30 @@ export const safetyIncidents = pgTable(
   (table) => [index("food_safety_incidents_donation_status_idx").on(table.donationId, table.status)],
 );
 
+export const recallRecords = pgTable(
+  "recall_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    donationId: uuid("donation_id").notNull().references(() => donations.id),
+    status: text("status").notNull().default("open"),
+    reason: text("reason").notNull(),
+    // Snapshot counts, so a later receipt correction cannot rewrite what the
+    // recall notice said at the moment it was issued.
+    affectedReceiptCount: integer("affected_receipt_count").notNull().default(0),
+    recalledStatus: text("recalled_status").notNull(),
+    initiatedBy: text("initiated_by").notNull().references(() => user.id),
+    initiatedAt: instant("initiated_at").notNull().defaultNow(),
+    closedBy: text("closed_by").references(() => user.id),
+    closedAt: instant("closed_at"),
+    closureNote: text("closure_note"),
+    updatedAt: instant("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("recall_records_donation_idx").on(table.donationId, table.status),
+    index("recall_records_open_idx").on(table.initiatedAt),
+  ],
+);
+
 export const privateDocuments = pgTable(
   "private_documents",
   {

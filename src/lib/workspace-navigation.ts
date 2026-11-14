@@ -6,6 +6,7 @@ import {
   House,
   LifeBuoy,
   ListChecks,
+  ShieldCheck,
   Truck,
   UtensilsCrossed,
   type LucideIcon,
@@ -40,6 +41,7 @@ export function getWorkspaceNavigation(identity: WorkspaceNavigationIdentity): {
     ...(hasHelper || hasGenerator || hasReceiver ? [{ href: "/app/deliveries", label: "Deliveries", Icon: Truck, section: "Food coordination" }] : []),
     { href: "/app/onboarding", label: "Partner setup", Icon: Building2, section: "Your account" },
     { href: "/app/notifications", label: "Notifications", Icon: Bell, section: "Your account" },
+    { href: "/app/profile", label: "Profile & security", Icon: ShieldCheck, section: "Your account" },
     { href: "/app/support", label: "Support & privacy", Icon: LifeBuoy, section: "Your account" },
     ...(hasPlatformAccess ? [{ href: "/app/operations", label: "Operations & review", Icon: ListChecks, section: "Restricted" }] : []),
   ];

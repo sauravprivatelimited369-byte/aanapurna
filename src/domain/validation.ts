@@ -207,6 +207,37 @@ export const incidentResolutionSchema = z.object({
   resolution: safeText(800),
 }).strict();
 
+/**
+ * A recall must state why. It is the notice other organisations receive, so a
+ * one-word reason is rejected rather than recorded as if it were evidence.
+ */
+export const recallRequestSchema = z.object({
+  reason: z.string().trim().min(10).max(1000),
+}).strict();
+
+export const recallClosureSchema = z.object({
+  closureNote: z.string().trim().min(10).max(1000),
+}).strict();
+
+/** Password change from an authenticated session. The current password is required. */
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: z.string().min(12).max(128),
+  revokeOtherSessions: z.boolean().optional().default(false),
+}).strict().superRefine((value, context) => {
+  const issue = passwordIssue(value.newPassword);
+  if (issue) context.addIssue({ code: "custom", path: ["newPassword"], message: issue });
+  if (value.currentPassword === value.newPassword) {
+    context.addIssue({ code: "custom", path: ["newPassword"], message: "Choose a password you have not used for this account." });
+  }
+});
+
+/** Session revocation: either one named session, or every other session. */
+export const sessionRevocationSchema = z.union([
+  z.object({ sessionId: z.string().trim().min(1).max(200) }).strict(),
+  z.object({ scope: z.literal("others") }).strict(),
+]);
+
 export const policyRulesSchema = z.object({
   allowedCategories: z.array(z.string().trim().min(1).max(64)).min(1).max(40),
   allowedFoodTypes: z.array(z.enum(["vegetarian", "non_vegetarian", "mixed", "other"])).min(1),
