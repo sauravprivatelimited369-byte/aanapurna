@@ -397,6 +397,58 @@ Honest limits of this arrangement:
   sending them; it reports `status: "deferred"`, which is the correct behaviour
   but is not email delivery.
 
+### Enabling operations for the Joka / IIM Calcutta service area
+
+Done already, in the live database:
+
+- Service area `Joka · IIM Calcutta (Kolkata)` — `IN`, West Bengal, Kolkata,
+  `Asia/Kolkata`, **active** (`26617340-2185-4866-bf38-aa90069bea54`).
+- Policy `0.1.0-iim-calcutta`, **status `draft`**, `approved_by` and `created_by`
+  empty. Its rules: packaged and sealed foods, freshly cooked vegetarian and
+  non-vegetarian meals, bakery and dry snacks, fruit and vegetables, sealed
+  beverages; vegetarian/non-vegetarian/mixed; at least 60 minutes between listing
+  and earliest pickup; best-before at least 120 minutes after latest pickup;
+  30 minutes for a receiver to respond; partial acceptance allowed; allergen
+  disclosure required.
+
+Not done, deliberately: `OPERATIONS_ENABLED` is still `false` and the policy is
+still a draft, because the application's own gates sit in this order and each one
+is a human decision this session cannot honestly make:
+
+1. `assertOperationsEnabled()` — `OPERATIONS_ENABLED=true`, otherwise `423
+   OPERATIONS_PAUSED` on every donation and delivery action.
+2. `activePolicy()` — a policy row with `status = 'approved'`, `effective_from`
+   in the past and rules matching `policyRulesSchema`, otherwise `423
+   NO_ACTIVE_POLICY`. Flipping the flag without this produces a worse state than
+   staying paused: the dashboards stop saying operations are paused while every
+   create action fails.
+3. `platform_roles` — approving a policy, a partner organisation or a Helper
+   requires `operations_admin` / `safety_officer` / `security_admin`. Roles are
+   granted by `scripts/bootstrap-admin.ts`, which refuses unless the target is an
+   email-verified, active user.
+
+So the remaining path is three steps, and only the first needs a human:
+
+1. **Owner registers** at `https://annapurna-link.vercel.app/signup` with the
+   address that should hold the operating role, choosing the password. This is the
+   only step that cannot be delegated, because a password must be chosen by its
+   owner and the capture transport cannot deliver a verification mail.
+2. **Verification and role grant without email** (server-side, audited): set
+   `"user".email_verified = true`, set `user_profiles.account_status = 'active'`
+   (the guard trigger only blocks `annapurna_app`, not the migration role), insert
+   `platform_roles` for `operations_admin` + `safety_officer`, and write the
+   `platform_role.bootstrap_granted` audit event — the same effect as
+   `bootstrap-admin.ts`, minus the mail round trip.
+3. **Approve the draft policy** in `/admin` (or via `POST /api/admin/policies`),
+   then set `OPERATIONS_ENABLED=true` and redeploy.
+
+After that, real food can move inside the Joka service area, but only between
+**verified** partners and **approved** Helpers, and each of those people still
+needs account verification. With the capture transport in place that is either a
+real SMTP credential or the same manual activation used in step 2 — so onboarding
+other people, and self-service password reset, still depend on point 1 of the
+email section above.
+
 ## Evidence and limits
 
 - Supabase `get_project`: `ACTIVE_HEALTHY`; `get_project_health` for `db`:
