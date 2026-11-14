@@ -154,7 +154,8 @@ All commands below were run in this sandbox on the final working tree. The integ
 | 23-point security suite | `RUN_AUTH_SECURITY_TEST=true LOCAL_SMTP_INBOX_PATH=.local-data/inbox.eml npm run test:auth-security` | **PASS — 23/23** |
 | Trusted role routing | `RUN_AUTH_ROLE_TEST=true npm run test:auth-roles` | **PASS — 7/7** |
 | Server-rendered auth pages | HTTP checks of `/signup`, `/login`, `/verify-email`, `/reset-password`, `/account/pending` | **PASS** — all required fields and verified/invalid-link/expired-session/role-caveat states present |
-| GitHub Actions on this exact code commit | [run 43502286365](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43502286365), commit `7408cbe` | **PASS — all six jobs**: Verify application, Native PostgreSQL/auth smoke, disposable PostgreSQL browser workflow, Compose smoke, Windows native auth, Windows one-click start. Verify job's browser suite: 11 passed, 3 opt-in skips; only Node.js 20 action-runtime deprecation warnings. |
+| GitHub Actions on the implementation and final code-equivalent commits | [run 43502286365](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43502286365) at `7408cbe` and [run 43559912589](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43559912589) at `58767b0` | **PASS — all six jobs in both runs**: Verify application, Native PostgreSQL/auth smoke, disposable PostgreSQL browser workflow, Compose smoke, Windows native auth, Windows one-click start. Verify job's browser suite: 11 passed, 3 opt-in skips; only Node.js 20 action-runtime deprecation warnings. |
+| CI stability observation | [docs-only run 43559536225](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43559536225) | **ONE TRANSIENT FAILURE, RESOLVED ON RERUN**: a Windows managed-launcher job reported `A local service exited (1)` and ports did not close; no code changed between the passing run before it and the passing fresh rerun after it. Its log/artifact hosts were unreachable from this sandbox, so the transient cause was not fully diagnosed. No authentication/security test failed. |
 
 ### 23-point security suite detail
 
@@ -233,10 +234,10 @@ All commands below were run in this sandbox on the final working tree. The integ
 | Production HTTPS cookies / production `APP_URL` callbacks | **NOT TESTED** | Config verified in source; requires owner domain/host |
 | Production SMTP provider, sender-domain verification, deliverability, worker retries | **NOT TESTED** | Requires owner account and provider |
 | Compose, Windows launcher, managed PostgreSQL, backup/restore on this commit | **PASS in CI; NOT TESTED in local sandbox** | All corresponding jobs passed in run 43502286365 |
-| GitHub Actions checks on this commit | **PASS** | Run 43502286365, commit `7408cbe`, all six jobs successful |
+| GitHub Actions checks on the implementation/code-equivalent commits | **PASS** | Runs 43502286365 and 43559912589, all six jobs successful. One docs-only intermediate run had a transient Windows launcher failure resolved by a fresh rerun. |
 | Full cross-tenant operational data, load/race testing, independent security review, food-safety/legal/privacy approval, live operations | **NOT TESTED / not authorised** | Keep `OPERATIONS_ENABLED=false` |
 
-**FAIL in the final executed suites: none.** Items marked NOT TESTED are honest gaps, not implied passes.
+**FAIL in the final executed authentication suites: none.** One intermediate CI run had a transient Windows managed-launcher failure on a docs-only commit; the fresh rerun on identical code passed all six jobs. Items marked NOT TESTED are honest gaps, not implied passes.
 
 ---
 
@@ -314,7 +315,7 @@ Use a reason of 20–500 characters. Remove `ALLOW_ADMIN_BOOTSTRAP` from the env
 
 ### 9.7 Run CI and deployment checks
 
-The workflow has been run on this implementation commit: [run 43502286365](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43502286365) passed all six jobs. It includes typecheck, lint, unit/migration tests, browser tests, dependency audit, production build, real-PostgreSQL auth smoke, `test:auth-security`, and `test:auth-roles`. Re-run CI after any further code or configuration change, and investigate every failure before exposing the app publicly.
+The workflow was run twice on code-identical commits: [run 43502286365](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43502286365) at `7408cbe` and [run 43559912589](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43559912589) at `58767b0` both passed all six synthetic jobs. A docs-only intermediate [run 43559536225](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43559536225) had one transient Windows managed-launcher failure; the fresh rerun passed. It includes typecheck, lint, unit/migration tests, browser tests, dependency audit, production build, real-PostgreSQL auth smoke, `test:auth-security`, and `test:auth-roles`. Re-run CI after any further code or configuration change, and investigate every failure before exposing the app publicly. The final documentation-only commit that adds this note was deliberately pushed with `[skip ci]` because it changes no code, configuration, workflow, or test.
 
 ---
 
@@ -350,4 +351,4 @@ The workflow has been run on this implementation commit: [run 43502286365](https
 
 A real user can now register through the app, a real PostgreSQL-backed Better Auth account is created, a verification email is genuinely delivered when the mail service is configured, the verified user can log in, sessions persist and refresh, logout revokes them, password recovery works, and the server sends each approved role to its correct dashboard while denying unauthorised roles. This was exercised locally with real PostgreSQL and SMTP delivery to a test sink; 94 unit/migration tests, 23 security checks, 7 role-routing checks and the core auth smoke all passed, and the app builds.
 
-**Production readiness is not claimed.** CI passing on this commit is evidence for the synthetic test suites, not a production certification. The owner must still provide the persistent database, real SMTP credentials, HTTPS domain, secure secrets, a running worker, independent security review, and the human launch approvals. Do not enable real food operations until those are complete.
+**Production readiness is not claimed.** CI passing is evidence for the synthetic test suites, not a production certification; the transient Windows CI flake also remains a launcher-stability caveat. The owner must still provide the persistent database, real SMTP credentials, HTTPS domain, secure secrets, a running worker, independent security review, and the human launch approvals. Do not enable real food operations until those are complete.
