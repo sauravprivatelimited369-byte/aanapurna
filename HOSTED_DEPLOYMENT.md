@@ -84,6 +84,35 @@ a TypeScript constant in `src/lib/supabase-ca.ts`, and pinned with
 URL SSL query parameters are stripped so `pg` cannot override that explicit,
 verifying TLS configuration. No certificate verification is disabled.
 
+The fifth deployment cleared the certificate error and failed one step later with
+`(ENOTFOUND) tenant/user postgres.wlpibnftabirwtziwubv not found | code: XX000`.
+Supabase's [troubleshooting note](https://supabase.com/docs/guides/troubleshooting/tenant-or-user-not-found)
+explains that this is the shared pooler failing to match the host and username to
+a project, so the previously guessed `aws-0` cluster index was the problem, not
+the password. The `[INDEX]` in `aws-[INDEX]-[REGION].pooler.supabase.com` is a
+cluster index that cannot be derived from the region, and the Dashboard Connect
+dialog is the authoritative source. For this project the region advertises two
+cluster hosts; the non-secret `SUPABASE_POOLER_HOST` value was corrected to the
+second one (`aws-1-ap-south-1.pooler.supabase.com`) and the sixth deployment
+connected successfully, so no password reset was needed. Copy the Session
+pooler host from the dashboard if the project is ever recreated.
+
+The sixth deployment `dpl_8hb33FC4GP2eLbqn8fPSNgawPWZK` confirmed the database
+path end to end: `database.migration_identity` reported `databaseRole: "postgres"`
+with `canCreateSchema: true`, the eleven Drizzle migrations applied, Graphile
+Worker's schema migrated, and `npm run db:check` returned
+`rowLevelSecurityTables: 23`, `requiredFunctions: 10`, `appliedMigrations: 11`,
+`problems: []`. The hosted database is migrated and app-ready.
+
+That same build then failed at `next build`'s TypeScript check: `npm ci` ran with
+`NODE_ENV=production`, so npm omitted dev-only packages (184 installed instead of
+480) and `tests/e2e/*.spec.ts` could not resolve `@axe-core/playwright`, which
+cascaded into implicit-`any` errors. `vercel.json` now pins
+`"installCommand": "npm ci --include=dev"`, which Vercel documents as overriding
+the project's install command. Reproduced in a clean copy of the repository:
+production-mode `npm ci` plus `npm run typecheck` fails with the same 18 errors,
+and production-mode `npm ci --include=dev` plus typecheck passes.
+
 `SMTP_PASS` currently contains the deliberate placeholder name
 `REPLACE_WITH_GMAIL_APP_PASSWORD`, not a credential. The fail-closed preflight
 and `/api/health` therefore report email `not_configured` until the owner
@@ -143,8 +172,15 @@ that exact preview origin in addition to `APP_URL`.
   diagnostics: `connect ENETUNREACH` to the IPv6-only Supabase direct DB host.
   Deployment `dpl_Dj5yktvKxvTnxfnABuHMe7Z8ky7Q` reached the IPv4 session
   pooler but failed with `SELF_SIGNED_CERT_IN_CHAIN`; the reviewed public
-  Supabase root CA and strict TLS verification were added for the fifth
-  deployment. None of the failed deployments applied app DDL.
+  Supabase root CA and strict TLS verification removed that error. Deployment
+  `dpl_5UZBV3KPPAaLXvSCEEjHHEPy1mRk` then failed with
+  `tenant/user postgres.wlpibnftabirwtziwubv not found`, which exposed the
+  guessed pooler cluster index; after correcting the host, deployment
+  `dpl_8hb33FC4GP2eLbqn8fPSNgawPWZK` applied all eleven migrations and passed
+  `db:check` (`23` RLS tables, `10` functions, `11` migrations, no problems)
+  before failing its TypeScript step because production-mode `npm ci` omitted
+  dev-only test dependencies. The install command is now `npm ci --include=dev`;
+  no deployment has reached `READY` yet.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.

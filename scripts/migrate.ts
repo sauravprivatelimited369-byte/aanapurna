@@ -17,6 +17,23 @@ function describeError(error: unknown): string {
   return parts.join(" | ");
 }
 
+function logPoolError(event: string, error: unknown): void {
+  console.error(JSON.stringify({
+    level: "error",
+    event,
+    message: error instanceof Error ? error.message : "unknown",
+  }));
+}
+
+// An idle-client error must not crash the migration step. Graphile Worker also
+// skips installing its own handlers when a shared pool already has them.
+function guardPool(pool: Pool, label: string): void {
+  pool.on("error", (error) => logPoolError(`${label}.database_pool_idle_error`, error));
+  pool.on("connect", (client) => {
+    client.on("error", (error) => logPoolError(`${label}.database_client_error`, error));
+  });
+}
+
 async function main(): Promise<void> {
   const connectionString = databaseUrl("MIGRATION_DATABASE_URL");
   const workerConnectionString = databaseUrl("WORKER_DATABASE_URL");
@@ -37,6 +54,8 @@ async function main(): Promise<void> {
     application_name: "annapurna-link-worker-migrator",
     ssl: databaseSslOptions(workerConnectionString),
   });
+  guardPool(pool, "database.migrator");
+  guardPool(workerPool, "worker.migrator");
   let temporaryWorkerCreateGrant = false;
   let databaseIdentifier: string | null = null;
 
