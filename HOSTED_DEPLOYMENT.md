@@ -255,10 +255,14 @@ that exact preview origin in addition to `APP_URL`.
    and a disposable address. Registration and sign-in are `POST` requests, which
    this sandbox cannot send because its egress to `*.vercel.app` is TLS-reset, so
    the authenticated flows and cookie flags still need that owner-side run.
-3. Provision a long-running worker host with the same encrypted environment and
-   run `npm run worker` (the committed `docker-compose.production.yml` already
-   defines the `worker` service). The Vercel deployment does not drain the
-   outbox: `email_outbox` rows are written but stay pending.
+3. A scheduled drain is now in place for the Vercel deployment, which cannot
+   host the long-lived worker: `.github/workflows/worker-drain.yml` calls
+   `POST /api/worker/drain` every five minutes, which delivers one reserved
+   `email_outbox` batch through the same `app_worker_*` functions the worker
+   uses. For continuous, sub-minute processing (and for anything that needs the
+   worker's crash recovery), still provision a long-running worker host with the
+   same encrypted environment and run `npm run worker`; the committed
+   `docker-compose.production.yml` already defines that `worker` service.
 4. Add a custom domain in Vercel, configure DNS, and update `APP_URL` and
    `APP_DOMAIN` to that domain. The current `.vercel.app` alias is a preview
    hostname, not an owner-controlled production domain.
@@ -269,6 +273,43 @@ that exact preview origin in addition to `APP_URL`.
 6. Complete backup/restore, monitoring, independent security review, and the
    human food-safety, legal, privacy and launch approvals in
    `LAUNCH_CHECKLIST.md`. Keep `OPERATIONS_ENABLED=false` until then.
+
+### Serverless outbox drain (replaces the missing worker host)
+
+Vercel cannot run the Graphile Worker process, so queued authentication email had
+no consumer at all. That is now handled without a new host and without a new
+shared secret:
+
+- `POST /api/worker/drain` reserves and delivers one outbox batch with the
+  least-privilege worker role, using the same SQL functions as `npm run worker`,
+  so the cron path and a future worker host can run at the same time without
+  double-sending.
+- Authorization is a GitHub Actions OIDC token: the workflow requests an ID token
+  for the audience `annapurna-link-worker`, and the route verifies the RS256
+  signature against `token.actions.githubusercontent.com`'s published keys, then
+  requires `repository = sauravprivatelimited369-byte/aanapurna` and a ref in
+  `refs/heads/main` or `refs/heads/arena/5b937561-aanapurna`. Nothing has to be
+  copied into Vercel, GitHub secrets or the repository, and ten unit tests cover
+  tampering, expiry, wrong audience, wrong repository and wrong ref.
+  `WORKER_TRIGGER_TOKEN` optionally adds a static bearer token for other
+  schedulers; it is unset here.
+- `.github/workflows/worker-drain.yml` runs every five minutes and is also
+  dispatchable. It first asserts that an anonymous `POST` is rejected with `401`,
+  then drains with its OIDC token and fails the run if the response is not `200`
+  with `status: "ok"` or `"deferred"`.
+
+Honest limits of this arrangement:
+
+- GitHub's shortest schedule interval is five minutes, and queued runs can start
+  later than their slot; this is not the worker's one-second polling.
+- Scheduled workflows only run from the default branch, so the schedule starts
+  when this branch is merged. `gh workflow run worker-drain.yml --ref <branch>`
+  exercises it immediately.
+- GitHub disables scheduled workflows after 60 days without repository activity,
+  so it needs the same monitoring any scheduler does.
+- With `SMTP_USER`/`SMTP_PASS` still unset the drain defers rows rather than
+  sending them; it reports `status: "deferred"`, which is the correct behaviour
+  but is not email delivery.
 
 ## Evidence and limits
 
