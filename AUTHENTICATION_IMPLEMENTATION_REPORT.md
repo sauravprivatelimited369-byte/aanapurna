@@ -256,11 +256,14 @@ Latest local evidence: typecheck PASS; lint PASS; **105 unit tests PASS**;
 production build PASS; `git diff --check` PASS; positive synthetic `SMTP_URL`,
 discrete SMTP, and Vercel-shape preflights PASS; negative missing/placeholder
 preflights correctly refused. CI at `2d270da` passed five of six jobs; the
-Windows launcher job failed on a port-cleanup race and has a targeted workflow
-patch pending fresh CI. Hosted database migrations, real SMTP delivery, private
-uploads, backups, custom-domain cookies, independent security review and human
-launch approval remain **NOT TESTED**. `OPERATIONS_ENABLED=false`. No production
-readiness is claimed.
+Windows launcher job failed on a port-cleanup race. The targeted workflow patch
+then **PASSed all six jobs** in [run 43565517517](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43565517517)
+at `ff359c4`. The first hosted Vercel build failed at `npm ci` because of a
+nested esbuild binary mismatch; a global `esbuild@0.28.2` override was added
+and verified locally, with a second deployment still required. Hosted database
+migrations, real SMTP delivery, private uploads, backups, custom-domain
+cookies, independent security review and human launch approval remain
+**NOT TESTED**. `OPERATIONS_ENABLED=false`. No production readiness is claimed.
 
 ## 9. Owner-only external configuration — exact simple instructions
 

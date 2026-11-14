@@ -50,7 +50,7 @@
     "zod": "4.6.7"
   },
   "overrides": {
-    "esbuild@~0.18.20": "0.25.12",
+    "esbuild": "0.28.2",
     "eslint-config-next": {
       "typescript-eslint": {
         "@typescript-eslint/typescript-estree": {

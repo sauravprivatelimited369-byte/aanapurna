@@ -31,10 +31,13 @@ verification/reset email can actually be delivered.
 The Supabase project's `postgres` role was used as the migrator role; three
 additional `NOBYPASSRLS` login roles were created (`annapurna_app`,
 `annapurna_auth`, `annapurna_worker`). `REVOKE CREATE ON SCHEMA public FROM
-PUBLIC`, `USAGE` grants, a `graphile_worker` schema, the `drizzle` migrations
-table and eleven migration rows were applied through the connector. The Vercel
-build command `npm run db:migrate && npm run db:check && npm run build` applies
-the repository's real Drizzle/Graphile Worker migrations and verifies them.
+PUBLIC`, `USAGE` grants, a `graphile_worker` schema and the `drizzle`
+migrations table were applied through the connector. Eleven placeholder hash
+rows were initially inserted without DDL; they were later **removed** so the
+Vercel build command `npm run db:migrate && npm run db:check && npm run build`
+can apply the repository's real Drizzle/Graphile Worker migrations and verify
+them. The hosted database currently has **zero** app tables and zero migration
+rows until that build succeeds.
 
 ## Environment variables
 
@@ -47,6 +50,10 @@ the Gmail SMTP fields. Connection URLs and generated secrets are `encrypted`
 Vercel env vars; non-secret settings are `plain`. The Vercel Hobby plan marks
 encrypted values as `readable-secret`, so a real production launch should use
 Sensitive Environment Variables / a higher plan or an external secret store.
+All 25 create calls succeeded, but the connector's list/get responses are
+truncated; a complete name-only verification of the full set is **unavailable**
+through this connector. The visible start/end portions confirm the new SMTP,
+pool, storage and flag variables plus several encrypted secrets.
 
 `package.json` `engines.node` is `22.x`, which overrides the Vercel project's
 default Node `26.x` selection for new deployments; `.nvmrc` remains `22`. Vercel
@@ -99,9 +106,15 @@ that exact preview origin in addition to `APP_URL`.
   and [run 43559912589](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43559912589)
   passed all six synthetic jobs. [Run 43561700577](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43561700577)
   failed only the Windows one-click job with the known managed-launcher port
-  race; the other five jobs passed. The workflow now kills surviving loopback
-  port owners explicitly. A fresh CI run after this push is required; record its
-  result in `BUILD_STATUS.md` before launch.
+  race; the other five jobs passed. [Run 43565517517](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43565517517)
+  passed all six jobs after the workflow began killing surviving loopback port
+  owners explicitly.
+- Vercel deployment `dpl_Cmy8iuLunrJBTQjMyLu5PC9AhkAy` was created from the
+  active branch with `nodeVersion: 22.x` and the configured build command, but
+  **FAILED** at `npm ci` because a deprecated nested esbuild install script
+  found the wrong hoisted binary version. A global `esbuild@0.28.2` override
+  was added and verified locally; a second deployment is needed to verify it on
+  Vercel. The failed deployment applied no database DDL.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.
