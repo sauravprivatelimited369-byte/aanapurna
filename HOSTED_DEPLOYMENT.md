@@ -139,6 +139,12 @@ finally be exercised over HTTPS:
 | `GET /app` (via authenticated-area redirect) | redirects to `/login` |
 | `GET /signup?role=helper` | **200**, registration form renders with role-request wording and "Admin registration is not public" |
 
+Later branch-tip commits are promoted the same way: deployment
+`dpl_6UGd7QJnPAnyTYpwhTWS8KHGafFe` at `a3faba6` re-verified `/api/health`
+(`database.status: "ok"`, `latencyMs: 1404`) and `/how-it-works`. The deployment
+ids in this document are evidence of the runs that produced those results; the
+project's production alias always serves the newest promoted deployment.
+
 The hosted runtime therefore connects to Supabase through the session pooler
 with strict TLS as the least-privilege `annapurna_app` role and serves real
 database-backed responses. A read-only query of the same database reports
