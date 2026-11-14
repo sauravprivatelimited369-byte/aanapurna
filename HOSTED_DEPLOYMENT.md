@@ -112,9 +112,14 @@ that exact preview origin in addition to `APP_URL`.
 - Vercel deployment `dpl_Cmy8iuLunrJBTQjMyLu5PC9AhkAy` was created from the
   active branch with `nodeVersion: 22.x` and the configured build command, but
   **FAILED** at `npm ci` because a deprecated nested esbuild install script
-  found the wrong hoisted binary version. A global `esbuild@0.28.2` override
-  was added and verified locally; a second deployment is needed to verify it on
-  Vercel. The failed deployment applied no database DDL.
+  found the wrong hoisted binary version. Deployment
+  `dpl_DnnnypMoh4bQoxHXxSDPsuPENuVt` **PASSed `npm ci`** with the global
+  `esbuild@0.28.2` override, then **FAILED** in `db:migrate` at Drizzle's
+  `CREATE SCHEMA IF NOT EXISTS "drizzle"` wrapper. Drizzle hid the underlying
+  PostgreSQL cause; the migration scripts now log `error.cause`, SQLSTATE, and
+  connection identity, with a 30-second default timeout. Neither failed
+  deployment applied app DDL; a third deployment is needed to expose the real
+  cause.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.

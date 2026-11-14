@@ -1,12 +1,29 @@
 import { Pool } from "pg";
 
+
+function connectionTimeoutMillis(): number {
+  const raw = process.env.DATABASE_CONNECT_TIMEOUT_MS;
+  const value = raw ? Number(raw) : 30_000;
+  return Number.isFinite(value) && value >= 1_000 ? value : 30_000;
+}
+
+function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown";
+  const parts = [error.message];
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message) parts.push(`cause: ${cause.message}`);
+  const code = (error as Error & { code?: unknown }).code;
+  if (typeof code === "string") parts.push(`code: ${code}`);
+  return parts.join(" | ");
+}
+
 async function main(): Promise<void> {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error("DATABASE_URL is required.");
   const pool = new Pool({
     connectionString,
     max: 1,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: connectionTimeoutMillis(),
     application_name: "annapurna-link-db-check",
     ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: true } : undefined,
   });
@@ -55,7 +72,7 @@ async function main(): Promise<void> {
     }));
     if (problems.length) process.exitCode = 1;
   } catch (error) {
-    console.error(JSON.stringify({ level: "error", event: "database.configuration_check_failed", message: error instanceof Error ? error.message : "unknown" }));
+    console.error(JSON.stringify({ level: "error", event: "database.configuration_check_failed", message: describeError(error) }));
     process.exitCode = 1;
   } finally {
     await pool.end();
@@ -63,6 +80,6 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  console.error(JSON.stringify({ level: "error", event: "database.configuration_check_failed", message: error instanceof Error ? error.message : "unknown" }));
+  console.error(JSON.stringify({ level: "error", event: "database.configuration_check_failed", message: describeError(error) }));
   process.exitCode = 1;
 });
