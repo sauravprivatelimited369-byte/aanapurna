@@ -1,5 +1,14 @@
 # Hosted preview: Supabase PostgreSQL + Vercel
 
+| | |
+|---|---|
+| Live application | **https://annapurna-link.vercel.app** |
+| Sample walkthrough (no account) | **https://annapurna-link.vercel.app/preview** |
+| Health | **https://annapurna-link.vercel.app/api/health** |
+| Same deployment, second alias | `aanapurna-link-preview.vercel.app` |
+| Project / team | `prj_ioMsFVvCdLPvelL6gURUChyoiboJ` · `team_mAUU3kiruUaeDwNSjViG0cQK` (writer nation) |
+| Database | Supabase `wlpibnftabirwtziwubv`, PostgreSQL only (Supabase Auth unused) |
+
 **Status: provisioned preview, not production-ready.** This document records what
 the authorized Supabase and Vercel connectors actually created, what remains
 owner-only, and the evidence gathered. No secret value is printed here or

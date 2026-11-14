@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/workflows/ci.yml/badge.svg)](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/workflows/ci.yml)
 
+**Live deployment:** **https://annapurna-link.vercel.app** · sample walkthrough with no account: **https://annapurna-link.vercel.app/preview** · health: **https://annapurna-link.vercel.app/api/health**
+
 Annapurna Link is a controlled-launch food redistribution platform. It records partner requests, food offers, deliveries and operational reviews. It does not inspect or certify food as safe. Real donation operations stay disabled until the owner approves an operating area and policy.
 
 **Project status:** pre-pilot; this repository is not a live food service. `OPERATIONS_ENABLED=false` by default, and the public impact endpoint shows only backend-derived verified records.
@@ -146,7 +148,7 @@ The same application can run at `localhost` for development or behind a public d
 
    If preflight fails, fix only the named settings in the host's private configuration; do not bypass the check. For a host with an externally managed PostgreSQL database, use the four direct role URLs from `.env.production.example` Mode A and run the same preflight before starting web and worker. Add `-f docker-compose.managed-db.yml` after the production overlay when the host should use those direct URLs and disable the local `db`/`mailpit` profiles.
 
-   An authorized Supabase PostgreSQL-only database and a Vercel deployment are live at **https://aanapurna-link-preview.vercel.app**; all twelve migrations pass the database check and `/api/health` reports a healthy database with `realOperationsEnabled: false`. Email delivery, the background worker and a custom domain are still not configured. [`HOSTED_DEPLOYMENT.md`](HOSTED_DEPLOYMENT.md) lists their identifiers, the encrypted Vercel environment-variable names, and the owner-only SMTP password/worker/domain steps. The Vercel web preview does **not** run the persistent Graphile Worker, and it is not a production launch.
+   An authorized Supabase PostgreSQL-only database and a Vercel deployment are live at **https://annapurna-link.vercel.app** (the `aanapurna-link-preview.vercel.app` alias serves the same deployment); all thirteen migrations pass the database check and `/api/health` reports a healthy database with `realOperationsEnabled: false`. `/preview` renders one fictional handover end to end with no account, no database access and no JavaScript. Email delivery is a capture transport (`email.status: test_sink` — accepted, not delivered), the background worker does not run on Vercel (`worker.status: never_seen`), and the host name is Vercel-owned rather than a domain the owner holds. [`HOSTED_DEPLOYMENT.md`](HOSTED_DEPLOYMENT.md) lists the identifiers, the encrypted Vercel environment-variable names, and the owner-only SMTP, worker and domain steps. It is not a production launch.
 
 4. Visit `https://your-short-domain.io`. The local workflow remains unchanged at `http://localhost:3000`; choose either local run or hosted run against the same codebase. Use `docker compose down` to stop services without removing data. Back up PostgreSQL and private-upload volumes using an off-host, tested restore procedure.
 
