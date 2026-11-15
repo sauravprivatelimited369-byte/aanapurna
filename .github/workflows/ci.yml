@@ -154,6 +154,50 @@ jobs:
           RUN_AUTH_SECURITY_TEST=true LOCAL_SMTP_INBOX_PATH=.local-data/inbox.eml npm run test:auth-security
           RUN_AUTH_ROLE_TEST=true npm run test:auth-roles
 
+  hosted-shape:
+    # The live site is a web process with no long-lived worker beside it. Every other job that starts
+    # the application starts the worker too, and three defects lived in that difference unnoticed:
+    # nobody could turn notifications on, nothing sent a push or a verification email in time, and no
+    # operator could enrol a second factor. This job starts only what the live site has.
+    name: Hosted shape - sign-up, notifications and operator access with no worker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-disposable-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run setup:env
+      - name: Configure isolated test database
+        run: node -e "const fs=require('fs'); const p='.env'; fs.writeFileSync(p,fs.readFileSync(p,'utf8').replaceAll('annapurna_link','annapurna_link_test'))"
+      - name: Bootstrap disposable PostgreSQL and migrate
+        env:
+          PG_ADMIN_URL: postgres://postgres:ci-only-disposable-password@127.0.0.1:5432/postgres
+        run: |
+          npm run local:db:setup
+          npm run local:migrate
+      - name: Sign up, turn notifications on and be notified, with no worker running
+        env:
+          RUN_HOSTED_SHAPE_TEST: 'true'
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm run test:hosted-shape
+
   browser-workflow:
     name: Disposable PostgreSQL browser workflow
     runs-on: ubuntu-24.04

@@ -294,6 +294,8 @@ describe("Web Push is reported, never guessed at", () => {
       { allowTestDomains: true },
     );
     expect(result.warnings.join(" ")).toContain("mailto: address or an https: URL");
+    // Not advice: the application treats such a subject exactly as it treats a missing key.
+    expect(result.warnings.join(" ")).toContain("push stays off");
   });
 
   it("reports nothing about the key values themselves", () => {

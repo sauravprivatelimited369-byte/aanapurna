@@ -31,6 +31,8 @@ const migrationFiles = [
   "20261117090000_distance_ranked_matching.sql",
   "20261117100000_notification_email_recipients.sql",
   "20261117110000_push_subscriptions.sql",
+  "20261117120000_push_delivery_without_a_worker.sql",
+  "20261117130000_two_factor_rows_for_the_sign_in_service.sql",
 ];
 
 let database: PGlite;
@@ -46,7 +48,7 @@ async function applyAllMigrations() {
 }
 
 async function withRole<T>(
-  role: "annapurna_app" | "annapurna_worker",
+  role: "annapurna_app" | "annapurna_worker" | "annapurna_auth",
   userId: string | null,
   callback: () => Promise<T>,
 ): Promise<T> {
@@ -126,13 +128,14 @@ describe("PostgreSQL migration and authorization contracts", () => {
             'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
             'app_guard_user_profile_status',
             'app_notify_platform_roles','app_current_agreement_version',
-            'app_org_coordinates','app_normalize_place','app_notification_recipients','app_push_targets','app_unpushed_notifications','app_mark_push_delivered','app_revoke_push_subscription'
+            'app_org_coordinates','app_normalize_place','app_notification_recipients','app_push_targets','app_unpushed_notifications','app_mark_push_delivered','app_revoke_push_subscription',
+            'app_register_push_subscription','app_claim_push_batch','app_push_targets_for','app_finish_push_batch'
           )) AS required_functions
     `);
     // Migration 20 added two forced-RLS tables and two functions; migration 24 added the two functions
     // that resolve an organisation's coordinates. Both floors rise so removing one fails the suite.
     expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(25);
-    expect(result.rows[0]?.required_functions).toBe(19);
+    expect(result.rows[0]?.required_functions).toBe(23);
   });
 
   it("adds recall records as append-only, policy-protected evidence with one open recall per donation", async () => {
@@ -723,6 +726,56 @@ describe("Second factor storage", () => {
     `);
     // The app role holds no privilege at all, so even a policy cannot expose it.
     await expect(withRole("annapurna_app", "2fa-other", async () => {
+      await database.query("SELECT secret FROM public.two_factor");
+    })).rejects.toThrow(/permission denied/i);
+  });
+
+  it("lets the sign-in service make every statement enrolment and sign-in need", async () => {
+    // The privilege table said yes all along - the first test in this suite passes on the broken
+    // schema. Row-level security said no to every statement, and nothing here had ever spoken as the
+    // sign-in role to find out. An account holding a platform role must enrol before the application
+    // serves it at all, so this was not "two-factor is unavailable": no operator could use the product.
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('2fa-enrolling', 'Enrolling operator', '2fa-enrolling@example.test', true)
+      ON CONFLICT (id) DO NOTHING;
+    `);
+    await withRole("annapurna_auth", null, async () => {
+      // Enrolment looks for an existing factor, then stores the new one.
+      const existing = await database.query("SELECT id FROM public.two_factor WHERE user_id = '2fa-enrolling'");
+      expect(existing.rows).toEqual([]);
+      await database.query(`
+        INSERT INTO public.two_factor (id, user_id, secret, backup_codes, verified)
+        VALUES ('2fa-enrolling-row', '2fa-enrolling', 'encrypted-secret', 'hashed-codes', false)
+      `);
+      // Confirming the first code, and the failed-attempt counter on every later sign-in.
+      const updated = await database.query(`
+        UPDATE public.two_factor SET verified = true, failed_verification_count = 1
+        WHERE user_id = '2fa-enrolling' RETURNING id
+      `);
+      expect(updated.rows).toHaveLength(1);
+      // Sign-in reads the secret of the account that is signing in, before any session exists that
+      // could say who is asking. That is why this role's policy has no row predicate.
+      const read = await database.query<{ secret: string }>("SELECT secret FROM public.two_factor WHERE user_id = '2fa-enrolling'");
+      expect(read.rows[0]?.secret).toBe("encrypted-secret");
+      // Removing the factor.
+      const removed = await database.query("DELETE FROM public.two_factor WHERE user_id = '2fa-enrolling' RETURNING id");
+      expect(removed.rows).toHaveLength(1);
+    });
+  });
+
+  it("admits the sign-in service by name and nobody else", async () => {
+    const policies = await database.query<{ polname: string; command: string; roles: string }>(`
+      SELECT polname, polcmd::text AS command, array_to_string(polroles::regrole[]::text[], ',') AS roles
+      FROM pg_policy WHERE polrelid = 'public.two_factor'::regclass ORDER BY polname
+    `);
+    // Exactly two, each naming one role. A policy for PUBLIC here would be a policy for everybody.
+    expect(policies.rows).toEqual([
+      { polname: "two_factor_owner_only", command: "r", roles: "annapurna_app" },
+      { polname: "two_factor_sign_in_service", command: "*", roles: "annapurna_auth" },
+    ]);
+    // The worker was never granted the table and no policy admits it.
+    await expect(withRole("annapurna_worker", null, async () => {
       await database.query("SELECT secret FROM public.two_factor");
     })).rejects.toThrow(/permission denied/i);
   });
@@ -1742,10 +1795,14 @@ describe("notifications can reach the device a person is holding", () => {
 
 describe("a session cannot read somebody else's device", () => {
   /**
-   * `app_push_targets` had to be granted to the app role as well as the worker, because the web process
-   * sends pushes too. That grant is only safe because the function checks the caller: the endpoint and
-   * keys are what let anybody holding them send that device a push, so reading another person's is
-   * reading their credentials.
+   * The endpoint and keys are what let anybody holding them send that device a push, so reading
+   * another person's is reading their credentials.
+   *
+   * `app_push_targets` used to be granted to the web role, on the reasoning that the function checks
+   * its caller. It did - but it read "no session user" as "this is the worker", and the web role with
+   * no session set is not the worker: it is a request handler that forgot to set one. Migration 27
+   * removed the grant. The web role now reads its own devices through the table, where an unset
+   * session sees nothing, and only the worker role can run the function at all.
    */
   it("refuses a session asking about another person's devices", async () => {
     await database.query(
@@ -1756,7 +1813,7 @@ describe("a session cannot read somebody else's device", () => {
     await database.query(
       `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth)
        VALUES ('authz-suite-a','https://push.example.test/authz-suite','keykeykeykey','authauth')
-       ON CONFLICT (endpoint) DO NOTHING`,
+       ON CONFLICT (endpoint) WHERE revoked_at IS NULL DO NOTHING`,
     );
 
     const crossRead = await withRole("annapurna_app", "authz-suite-b", async () =>
@@ -1764,16 +1821,339 @@ describe("a session cannot read somebody else's device", () => {
         .then(() => "allowed").catch(() => "refused"));
     expect(crossRead).toBe("refused");
 
-    // Its own devices are fine, and being empty is not an error.
+    // Not even about itself: the function is the sender's, and the web role is not a sender.
     const ownRead = await withRole("annapurna_app", "authz-suite-b", async () =>
       database.query("SELECT * FROM public.app_push_targets('authz-suite-b')")
         .then(() => "allowed").catch(() => "refused"));
-    expect(ownRead).toBe("allowed");
+    expect(ownRead).toBe("refused");
 
-    // The worker has no session identity and is how the drain addresses anybody. This is the check that
-    // makes the wider grant safe rather than a hole.
-    const workerRead = await database.query<{ id: string }>("SELECT * FROM public.app_push_targets('authz-suite-a')");
+    // The case the old grant got wrong. A web request that set no session at all used to be taken for
+    // the worker and handed anybody's endpoint and keys.
+    const forgotten = await withRole("annapurna_app", null, async () =>
+      database.query("SELECT * FROM public.app_push_targets('authz-suite-a')")
+        .then(() => "allowed").catch((error: unknown) => String((error as Error).message)));
+    expect(forgotten).toMatch(/permission denied/i);
+
+    // Its own devices are read through the table, and being empty is not an error.
+    const ownDevices = await withRole("annapurna_app", "authz-suite-b", async () =>
+      database.query("SELECT id FROM public.push_subscriptions WHERE revoked_at IS NULL"));
+    expect(ownDevices.rows).toEqual([]);
+
+    // The worker - connected as the worker role, not merely "no session" - is how a sender addresses anybody.
+    const workerRead = await withRole("annapurna_worker", null, async () =>
+      database.query<{ id: string }>("SELECT * FROM public.app_push_targets('authz-suite-a')"));
     expect(workerRead.rows.length).toBeGreaterThan(0);
+  });
+});
+
+describe("device notifications on a deployment with no long-lived worker", () => {
+  /**
+   * Migration 27. The hosted site cannot run a worker, so pushes are sent from short-lived requests,
+   * several of which can be running at once. These pin what that needs from the database: one live
+   * registration per browser, a notification held by one sender at a time, a failed send that stays
+   * pending, and device credentials that the web role cannot reach at all.
+   */
+  const KEY = "BPm3n1rYtJ8sQf0aXc2dLw7eVh4uKz9oGi6yTb5NjR1pSx3CqWm8ZvEa0DlHgUkFyOs2IrAeBn4Mt7Jc6Xd9Lw";
+  const OTHER_KEY = "BQz8k2sWuK9tRg1bYd3eMx8fWi5vLa0pHj7zUc6OkS2qTy4DrXn9AwFb1EmIhVlGzPt3JsBfCo5Nu8Kd7Ye0Mx";
+  const AUTH = "c2VjcmV0LWF1dGgtMDE";
+  const OTHER_AUTH = "b3RoZXItYXV0aC0wMDI";
+
+  const asApp = <T>(userId: string | null, callback: () => Promise<T>) => withRole("annapurna_app", userId, callback);
+  const asWorker = <T>(callback: () => Promise<T>) => withRole("annapurna_worker", null, callback);
+  const refusal = (promise: Promise<unknown>) =>
+    promise.then(() => "allowed", (error: unknown) => `${(error as { code?: string }).code}: ${(error as Error).message}`);
+  const register = (endpoint: string, key = KEY, auth = AUTH, label = "Chrome on Android") =>
+    database.query<{ id: string }>(
+      "SELECT public.app_register_push_subscription($1, $2, $3, $4) AS id", [endpoint, key, auth, label],
+    ).then((result) => result.rows[0]!.id);
+  const claim = () => database.query<{ id: string; user_id: string; attempts: number }>(
+    "SELECT id, user_id, attempts FROM public.app_claim_push_batch(100, 60)",
+  );
+  const notify = (userId: string, title: string) => asApp(userId, () =>
+    database.query("SELECT public.app_notify_user($1, NULL, 'test.push27', $2, 'Body.', '/app')", [userId, title]));
+  const device = (endpoint: string) => database.query<{
+    user_id: string; revoked: boolean; last_error: string | null; delivered: boolean;
+  }>(
+    `SELECT user_id, revoked_at IS NOT NULL AS revoked, last_error, last_delivered_at IS NOT NULL AS delivered
+     FROM public.push_subscriptions WHERE endpoint = $1 ORDER BY created_at, revoked_at NULLS LAST`, [endpoint],
+  ).then((result) => result.rows);
+
+  beforeAll(async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('p27-a', 'A', 'p27-a@example.test', true), ('p27-b', 'B', 'p27-b@example.test', true),
+        ('p27-c', 'C', 'p27-c@example.test', true), ('p27-many', 'Many', 'p27-many@example.test', true)
+      ON CONFLICT (id) DO NOTHING;
+      -- Whatever earlier suites left unsent is not this suite's to claim.
+      UPDATE public.notifications SET push_delivered_at = clock_timestamp() WHERE push_delivered_at IS NULL;
+    `);
+  });
+
+  it("registers a device for whoever the session says is asking, and for nobody when it says nothing", async () => {
+    await asApp("p27-a", () => register("https://push.example.test/p27-first"));
+    expect(await device("https://push.example.test/p27-first")).toEqual([
+      { user_id: "p27-a", revoked: false, last_error: null, delivered: false },
+    ]);
+
+    // No session set. This is the mistake that kept every registration on the live site from being
+    // stored: the route sent its statements without saying who was asking, and the database - correctly
+    // - refused each one. Both doors stay shut: the function, and the table behind it.
+    expect(await refusal(asApp(null, () => register("https://push.example.test/p27-nobody"))))
+      .toMatch(/^42501: a signed-in user is required/);
+    expect(await refusal(asApp(null, () => database.query(
+      `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth)
+       VALUES ('p27-a', 'https://push.example.test/p27-nobody', $1, $2)`, [KEY, AUTH],
+    )))).toMatch(/^42501: .*row-level security/);
+    expect(await device("https://push.example.test/p27-nobody")).toEqual([]);
+
+    // Nothing a caller sends can name another account as the owner: there is no parameter for it.
+    const signature = await database.query<{ arguments: string }>(`
+      SELECT pg_get_function_identity_arguments(oid) AS arguments
+      FROM pg_proc WHERE proname = 'app_register_push_subscription'
+    `);
+    expect(signature.rows[0]!.arguments).not.toMatch(/user/);
+
+    // An address that is not https never becomes a row, whatever the layer above let through.
+    expect(await refusal(asApp("p27-a", () => register("http://push.example.test/p27-plain"))))
+      .toMatch(/^22023: /);
+  });
+
+  it("keeps one live registration per browser, and updates it rather than adding another", async () => {
+    await asApp("p27-a", () => register("https://push.example.test/p27-first", KEY, AUTH, "Firefox on Windows"));
+    const rows = await database.query<{ device_label: string }>(
+      "SELECT device_label FROM public.push_subscriptions WHERE endpoint = 'https://push.example.test/p27-first'",
+    );
+    expect(rows.rows).toEqual([{ device_label: "Firefox on Windows" }]);
+  });
+
+  it("moves a shared browser to the person now signed in on it, only on proof of its keys", async () => {
+    // B knows the address of A's device but not its keys. That is not the same browser, and an address
+    // alone must never be enough to take somebody's device from them.
+    expect(await refusal(asApp("p27-b", () => register("https://push.example.test/p27-first", OTHER_KEY, OTHER_AUTH))))
+      .toMatch(/^23505: push subscription is registered to another account/);
+    expect(await device("https://push.example.test/p27-first")).toEqual([
+      { user_id: "p27-a", revoked: false, last_error: null, delivered: false },
+    ]);
+
+    // B presents the same subscription the browser holds: same address, same keys. A never signed out
+    // of this phone; B is using it now. The device moves, and A's registration is retired with the reason.
+    await asApp("p27-b", () => register("https://push.example.test/p27-first"));
+    expect(await device("https://push.example.test/p27-first")).toEqual([
+      { user_id: "p27-a", revoked: true, last_error: "registered_by_another_account", delivered: false },
+      { user_id: "p27-b", revoked: false, last_error: null, delivered: false },
+    ]);
+
+    // So a notification for A no longer has anywhere to go on B's phone.
+    const targets = await asWorker(() => database.query<{ user_id: string }>(
+      "SELECT user_id FROM public.app_push_targets_for(ARRAY['p27-a', 'p27-b'])",
+    ));
+    expect(targets.rows).toEqual([{ user_id: "p27-b" }]);
+  });
+
+  it("keeps the record of a retired device when the same browser registers again", async () => {
+    await asApp("p27-b", () => database.query(
+      `UPDATE public.push_subscriptions SET revoked_at = now(), last_error = 'unsubscribed_by_owner'
+       WHERE endpoint = 'https://push.example.test/p27-first' AND revoked_at IS NULL`,
+    ));
+    await asApp("p27-b", () => register("https://push.example.test/p27-first"));
+    // Three rows now: A's, B's retired one, and B's live one. The endpoint used to be unique for ever,
+    // so registering again had to overwrite the retired row - and with it the fact that it was retired.
+    const history = await device("https://push.example.test/p27-first");
+    expect(history.map((row) => `${row.user_id}:${row.revoked ? row.last_error : "live"}`).sort()).toEqual([
+      "p27-a:registered_by_another_account",
+      "p27-b:live",
+      "p27-b:unsubscribed_by_owner",
+    ]);
+  });
+
+  it("keeps at most the ten devices delivery will address, retiring the one seen longest ago", async () => {
+    for (let index = 0; index < 11; index += 1) {
+      await asApp("p27-many", () => register(`https://push.example.test/p27-many-${index}`));
+      // Registration order is the order the cap retires in; give each a distinct moment.
+      await database.query(
+        "UPDATE public.push_subscriptions SET last_seen_at = now() - make_interval(secs => $1) WHERE endpoint = $2",
+        [100 - index, `https://push.example.test/p27-many-${index}`],
+      );
+    }
+    await asApp("p27-many", () => register("https://push.example.test/p27-many-11"));
+    const tally = await database.query<{ live: number; retired: string[] }>(`
+      SELECT count(*) FILTER (WHERE revoked_at IS NULL)::int AS live,
+        array_agg(endpoint ORDER BY endpoint) FILTER (WHERE last_error = 'replaced_by_newer_device') AS retired
+      FROM public.push_subscriptions WHERE user_id = 'p27-many'
+    `);
+    expect(tally.rows[0]!.live).toBe(10);
+    expect(tally.rows[0]!.retired).toEqual([
+      "https://push.example.test/p27-many-0",
+      "https://push.example.test/p27-many-1",
+    ]);
+    // What a person is shown and what a sender addresses are the same ten.
+    const targets = await asWorker(() => database.query("SELECT id FROM public.app_push_targets_for(ARRAY['p27-many'])"));
+    expect(targets.rows).toHaveLength(10);
+  });
+
+  it("hands a notification to one sender at a time, and back again if that sender dies", async () => {
+    await notify("p27-c", "Claimed once");
+    const first = await asWorker(claim);
+    expect(first.rows.map((row) => [row.user_id, row.attempts])).toEqual([["p27-c", 1]]);
+
+    // A second sender arriving while the first is still working finds nothing to send. This is what
+    // stops one notification reaching a phone twice when several requests finish at the same moment.
+    expect((await asWorker(claim)).rows).toEqual([]);
+
+    // The first sender never reports back - a serverless function killed mid-batch is the ordinary
+    // case. Nothing has to notice or clean up: the lease runs out and the row is there to be taken.
+    await database.query(
+      "UPDATE public.notifications SET push_next_attempt_at = clock_timestamp() - interval '1 second' WHERE id = $1::uuid",
+      [first.rows[0]!.id],
+    );
+    const again = await asWorker(claim);
+    expect(again.rows.map((row) => [row.id, row.attempts])).toEqual([[first.rows[0]!.id, 2]]);
+    await asWorker(() => database.query(
+      "SELECT public.app_finish_push_batch($1::uuid[], '{}', '{}', 0, '{}', '[]'::jsonb)", [[first.rows[0]!.id]],
+    ));
+  });
+
+  it("finishes a notification only when it has an ending", async () => {
+    await notify("p27-c", "Accepted");
+    await notify("p27-c", "Nobody to tell");
+    await notify("p27-c", "Push service was down");
+    const claimed = await asWorker(() => database.query<{ id: string; title: string }>(
+      "SELECT id, title FROM public.app_claim_push_batch(100, 60)",
+    ));
+    const idOf = (title: string) => claimed.rows.find((row) => row.title === title)!.id;
+    await asWorker(() => database.query(
+      "SELECT public.app_finish_push_batch($1::uuid[], $2::uuid[], $3::uuid[], 30, '{}', '[]'::jsonb)",
+      [[idOf("Accepted")], [idOf("Nobody to tell")], [idOf("Push service was down")]],
+    ));
+    const state = await database.query<{ title: string; finished: boolean; outcome: string | null; retry_in: number | null }>(`
+      SELECT title, push_delivered_at IS NOT NULL AS finished, push_outcome AS outcome,
+        round(extract(epoch FROM push_next_attempt_at - clock_timestamp()))::int AS retry_in
+      FROM public.notifications WHERE user_id = 'p27-c' AND title IN ('Accepted', 'Nobody to tell', 'Push service was down')
+      ORDER BY title
+    `);
+    expect(state.rows).toEqual([
+      { title: "Accepted", finished: true, outcome: "delivered", retry_in: null },
+      { title: "Nobody to tell", finished: true, outcome: "no_device", retry_in: null },
+      // The case that used to be recorded as delivered. It is not finished; it is waiting.
+      { title: "Push service was down", finished: false, outcome: null, retry_in: 30 },
+    ]);
+
+    // Not before its time, and then once more.
+    expect((await asWorker(claim)).rows).toEqual([]);
+    await database.query(
+      "UPDATE public.notifications SET push_next_attempt_at = clock_timestamp() - interval '1 second' WHERE id = $1::uuid",
+      [idOf("Push service was down")],
+    );
+    const retried = await asWorker(claim);
+    expect(retried.rows.map((row) => [row.id, row.attempts])).toEqual([[idOf("Push service was down"), 2]]);
+    await asWorker(() => database.query(
+      "SELECT public.app_finish_push_batch($1::uuid[], '{}', '{}', 0, '{}', '[]'::jsonb)", [[idOf("Push service was down")]],
+    ));
+
+    // An ending is final: a late report from a sender that lost its lease cannot reopen it.
+    await asWorker(() => database.query(
+      "SELECT public.app_finish_push_batch('{}', '{}', $1::uuid[], 30, '{}', '[]'::jsonb)", [[idOf("Accepted")]],
+    ));
+    expect((await asWorker(claim)).rows).toEqual([]);
+  });
+
+  it("does not count a notification the sender ran out of time for as an attempt", async () => {
+    await notify("p27-c", "Never reached");
+    const claimed = await asWorker(claim);
+    expect(claimed.rows.map((row) => row.attempts)).toEqual([1]);
+    await asWorker(() => database.query(
+      "SELECT public.app_finish_push_batch('{}', '{}', '{}', 0, $1::uuid[], '[]'::jsonb)", [[claimed.rows[0]!.id]],
+    ));
+    // Straight back, for whoever runs next, and still on its first try.
+    const again = await asWorker(claim);
+    expect(again.rows.map((row) => [row.id, row.attempts])).toEqual([[claimed.rows[0]!.id, 1]]);
+    await asWorker(() => database.query(
+      "SELECT public.app_finish_push_batch('{}', $1::uuid[], '{}', 0, '{}', '[]'::jsonb)", [[claimed.rows[0]!.id]],
+    ));
+  });
+
+  it("never claims a notification too old to be worth sending", async () => {
+    await database.query(`
+      INSERT INTO public.notifications (user_id, kind, title, body, href, created_at)
+      VALUES ('p27-c', 'test.push27', 'Old news', 'Sixteen minutes late.', '/app', clock_timestamp() - interval '16 minutes')
+    `);
+    // Pushing about food that was collected a quarter of an hour ago is noise. The list and the email
+    // are the record; this stays unsent rather than arriving late.
+    expect((await asWorker(claim)).rows).toEqual([]);
+  });
+
+  it("records each device's answer: retires the one that is gone, keeps the one having a bad minute", async () => {
+    const ids = await asApp("p27-c", async () => ({
+      fine: await register("https://push.example.test/p27-fine"),
+      gone: await register("https://push.example.test/p27-gone"),
+      struggling: await register("https://push.example.test/p27-struggling"),
+    }));
+    await asWorker(() => database.query(
+      "SELECT public.app_finish_push_batch('{}', '{}', '{}', 0, '{}', $1::jsonb)",
+      [JSON.stringify([
+        { id: ids.fine, outcome: "delivered", reason: null },
+        { id: ids.gone, outcome: "gone", reason: "push_service_410" },
+        { id: ids.struggling, outcome: "failed", reason: "push_service_503" },
+        // Anything a sender should not be able to say is ignored rather than written.
+        { id: ids.fine, outcome: "revoke-everything", reason: "nonsense" },
+      ])],
+    ));
+    expect(await device("https://push.example.test/p27-fine")).toEqual([
+      { user_id: "p27-c", revoked: false, last_error: null, delivered: true },
+    ]);
+    // Revoked, not deleted: "this device was registered and then stopped accepting pushes" is the fact
+    // somebody asks for when a notification is said never to have arrived.
+    expect(await device("https://push.example.test/p27-gone")).toEqual([
+      { user_id: "p27-c", revoked: true, last_error: "push_service_410", delivered: false },
+    ]);
+    // A push service having a bad minute must not silently unsubscribe anybody.
+    expect(await device("https://push.example.test/p27-struggling")).toEqual([
+      { user_id: "p27-c", revoked: false, last_error: "push_service_503", delivered: false },
+    ]);
+    const targets = await asWorker(() => database.query<{ endpoint: string }>(
+      "SELECT endpoint FROM public.app_push_targets_for(ARRAY['p27-c']) ORDER BY endpoint",
+    ));
+    expect(targets.rows.map((row) => row.endpoint)).toEqual([
+      "https://push.example.test/p27-fine",
+      "https://push.example.test/p27-struggling",
+    ]);
+  });
+
+  it("keeps everything that addresses a device away from the role that serves web requests", async () => {
+    const calls = [
+      "SELECT * FROM public.app_push_targets('p27-b')",
+      "SELECT * FROM public.app_push_targets_for(ARRAY['p27-b'])",
+      "SELECT * FROM public.app_claim_push_batch(10, 60)",
+      "SELECT public.app_finish_push_batch('{}', '{}', '{}', 0, '{}', '[]'::jsonb)",
+      "SELECT public.app_revoke_push_subscription(gen_random_uuid(), 'x')",
+      "SELECT * FROM public.app_unpushed_notifications(10)",
+      "SELECT public.app_mark_push_delivered('{}'::uuid[])",
+    ];
+    for (const call of calls) {
+      // With a session and - the case that matters - without one. Two of these functions used to read
+      // "no session" as "this is the worker" and answer for anybody.
+      expect(await refusal(asApp("p27-b", () => database.query(call))), call).toMatch(/^42501: permission denied/);
+      expect(await refusal(asApp(null, () => database.query(call))), call).toMatch(/^42501: permission denied/);
+      expect(await refusal(asWorker(() => database.query(call))), call).toBe("allowed");
+    }
+    // And the table itself, asked with no session, shows nothing rather than everything.
+    const unscoped = await asApp(null, () => database.query("SELECT endpoint FROM public.push_subscriptions"));
+    expect(unscoped.rows).toEqual([]);
+    // The only device function the web role may run is the one that registers the caller's own.
+    const reachable = await database.query<{ proname: string }>(`
+      SELECT proname FROM pg_proc
+      WHERE pronamespace = 'public'::regnamespace AND proname LIKE '%push%'
+        AND has_function_privilege('annapurna_app', oid, 'EXECUTE')
+      ORDER BY proname
+    `);
+    expect(reachable.rows).toEqual([{ proname: "app_register_push_subscription" }]);
+  });
+
+  it("makes the build fail if one of those grants ever comes back", () => {
+    const source = readFileSync(resolve(process.cwd(), "scripts/check-db.ts"), "utf8");
+    expect(source).toContain("WORKER_ONLY_DEVICE_FUNCTIONS");
+    expect(source).toMatch(/has_function_privilege\(current_user, function_info\.oid, 'EXECUTE'\)/);
+    expect(source).toContain("web_reachable_device_functions > 0");
   });
 });
 

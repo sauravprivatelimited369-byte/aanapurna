@@ -22,6 +22,10 @@ export function vapidKeys(): VapidKeys | null {
   // A misconfigured key that is present but wrong fails inside the signing step on every single send,
   // one device at a time. Checking the shape here turns that into one clear answer: push is off.
   if (publicKey.length < 40 || privateKey.length < 20) return null;
+  // The same reasoning applies to the contact address. Push services require a `mailto:` or `https:`
+  // subject and the signing step refuses anything else, so a bare email address here would leave the
+  // toggle looking live while every send failed before it left this server.
+  if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) return null;
   return { publicKey, privateKey, subject };
 }
 

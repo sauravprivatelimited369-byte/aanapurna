@@ -32,9 +32,32 @@ export type OutboxDrainResult = {
   failed: number;
 };
 
+export type OutboxDrainOptions = {
+  /** How many queued messages to reserve. A caller with little time reserves only what it can send. */
+  batchSize?: number;
+  /**
+   * How many SMTP conversations to hold at once. The worker and the scheduled drain send one at a
+   * time, as they always have. A drain that runs in the seconds after a web request has answered
+   * cannot afford to: three people told about one offer are three connections, each a second or two.
+   */
+  sendsAtOnce?: number;
+};
+
+export type OutboxSweepOptions = OutboxDrainOptions & {
+  /**
+   * Stop taking new batches after this long. A batch already taken is always finished: a reserved
+   * message that nobody sends waits ten minutes for its reservation to lapse.
+   */
+  budgetMs: number;
+};
+
 export const MAX_ATTEMPTS = 8;
 export const BATCH_SIZE = 20;
 const RETRY_INTERVAL_MS = 30_000;
+
+function boundedBatchSize(requested: number | undefined): number {
+  return Math.max(1, Math.min(requested ?? BATCH_SIZE, 100));
+}
 
 let transporter: Transporter | null = null;
 
@@ -99,10 +122,10 @@ async function deferOutboxUntilSmtpIsConfigured(pool: Pool) {
   await pool.query("SELECT public.app_worker_defer_outbox($1, $2)", [MAX_ATTEMPTS, 15]);
 }
 
-async function reserveOutboxBatch(pool: Pool): Promise<OutboxRow[]> {
+async function reserveOutboxBatch(pool: Pool, batchSize: number): Promise<OutboxRow[]> {
   const result = await pool.query<OutboxRow>(
     "SELECT * FROM public.app_worker_reserve_outbox_batch($1, $2)",
-    [MAX_ATTEMPTS, BATCH_SIZE],
+    [MAX_ATTEMPTS, batchSize],
   );
   return result.rows;
 }
@@ -158,17 +181,54 @@ async function deliverRow(pool: Pool, row: OutboxRow): Promise<boolean> {
  * Safe to call concurrently and safe to call repeatedly: unsent rows are
  * deferred rather than consumed when SMTP settings are incomplete.
  */
-export async function drainEmailOutboxOnce(pool: Pool): Promise<OutboxDrainResult> {
+export async function drainEmailOutboxOnce(pool: Pool, options: OutboxDrainOptions = {}): Promise<OutboxDrainResult> {
   if (!smtpConfigured()) {
     await deferOutboxUntilSmtpIsConfigured(pool);
     return { delivered: false, reserved: 0, sent: 0, failed: 0 };
   }
-  const rows = await reserveOutboxBatch(pool);
+  const rows = await reserveOutboxBatch(pool, boundedBatchSize(options.batchSize));
   let sent = 0;
   let failed = 0;
-  for (const row of rows) {
-    if (await deliverRow(pool, row)) sent += 1;
-    else failed += 1;
-  }
+  let next = 0;
+  const sendNext = async (): Promise<void> => {
+    while (next < rows.length) {
+      const row = rows[next]!;
+      next += 1;
+      if (await deliverRow(pool, row)) sent += 1;
+      else failed += 1;
+    }
+  };
+  const sendsAtOnce = Math.max(1, Math.min(options.sendsAtOnce ?? 1, rows.length || 1));
+  await Promise.all(Array.from({ length: sendsAtOnce }, sendNext));
   return { delivered: true, reserved: rows.length, sent, failed };
+}
+
+/**
+ * Deliver queued mail a batch at a time until none is due, or until time is up.
+ *
+ * For a sender that may be the only one for hours, which is what a web request is on a host with no
+ * worker. One batch is the oldest few messages and nothing else. With that many older messages
+ * waiting - messages that can never be sent are enough - the one a person has just asked for is not
+ * among them, the pass ends, and nothing else comes along to send it: the verification link sits in
+ * the queue until a scheduler runs, by which time it has expired. A queue is served oldest first, so
+ * the only way to reach the newest message is to keep going.
+ *
+ * This always ends. A message that was sent is no longer queued, and one that failed is not due again
+ * for at least thirty seconds, so no message is taken twice in one sweep; and whatever the queue does,
+ * no batch is started after the budget has run out.
+ */
+export async function drainEmailOutboxWhileDue(pool: Pool, options: OutboxSweepOptions): Promise<OutboxDrainResult> {
+  const batchSize = boundedBatchSize(options.batchSize);
+  const stopTakingAt = Date.now() + options.budgetMs;
+  const total: OutboxDrainResult = { delivered: true, reserved: 0, sent: 0, failed: 0 };
+  for (;;) {
+    const batch = await drainEmailOutboxOnce(pool, options);
+    total.reserved += batch.reserved;
+    total.sent += batch.sent;
+    total.failed += batch.failed;
+    // SMTP is not configured here: the queue was deferred, not served, and asking again changes nothing.
+    if (!batch.delivered) return { ...total, delivered: false };
+    // A short batch is the end of what is due.
+    if (batch.reserved < batchSize || Date.now() >= stopTakingAt) return total;
+  }
 }

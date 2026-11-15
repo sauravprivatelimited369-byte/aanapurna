@@ -41,6 +41,7 @@ import { withPasswordResetCapture } from "@/email/reset-link-capture";
 import { canAccessOrganization, hasAnyRole, type Identity } from "@/lib/identity";
 import { assessTransit, normalizePlaceName, type Coordinates, type TransitAssessment } from "@/domain/transit";
 import { enqueueNotificationEmail } from "@/email/outbox";
+import { requestInlineDelivery } from "@/worker/inline-delivery";
 import {
   createDeliveryCode,
   decryptValue,
@@ -190,7 +191,20 @@ async function notifyOrganization(
       ${kind}, ${title}, ${body}, ${href}
     )
   `);
+  pushAfterResponse();
   await emailOrganizationMembers(tx, organizationId, donationId, title, body, href);
+}
+
+/**
+ * Ask for the notifications this request wrote to be pushed once it has answered.
+ *
+ * The rows are written inside the caller's transaction and are invisible to any other connection until
+ * it commits, so nothing can be sent from here. The task this registers runs after the response, which
+ * is after the commit; if the transaction rolled back there is nothing for it to find. On a host with
+ * no long-lived worker this is the only thing that sends a push while it is still worth sending.
+ */
+function pushAfterResponse(): void {
+  requestInlineDelivery();
 }
 
 /**
@@ -258,6 +272,7 @@ async function notifyAreaHelpers(
       ${donationId}::uuid, ${kind}, ${title}, ${body}, ${href}
     ) as app_notify_area_helpers
   `);
+  pushAfterResponse();
   return Number(result.rows[0]?.app_notify_area_helpers ?? 0);
 }
 
@@ -275,6 +290,7 @@ async function notifyUser(
       ${userId}, ${organizationId}::uuid, ${kind}, ${title}, ${body}, ${href}
     )
   `);
+  pushAfterResponse();
 }
 
 /**
@@ -298,6 +314,7 @@ async function notifyPlatformRoles(
       ${roles}::text[], ${kind}, ${title}, ${body}, ${href}
     ) as app_notify_platform_roles
   `);
+  pushAfterResponse();
   return Number(result.rows[0]?.app_notify_platform_roles ?? 0);
 }
 

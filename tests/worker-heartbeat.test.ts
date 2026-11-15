@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Pool } from "pg";
 import {
+  AFTER_RESPONSE_DELIVERY_KEY,
+  SCHEDULED_DRAIN_KEY,
   WORKER_HEARTBEAT_STALE_SECONDS,
+  evaluateDeliverySighting,
   evaluateWorkerHealth,
   recordWorkerHeartbeat,
+  tryRecordDeliverySighting,
   tryRecordWorkerHeartbeat,
 } from "@/worker/heartbeat";
 
@@ -67,5 +71,42 @@ describe("worker heartbeat", () => {
     const future = evaluateWorkerHealth({ updated_at: new Date("2026-11-14T10:05:00.000Z"), details: {} }, now);
     expect(future.ageSeconds).toBe(0);
     expect(future.status).toBe("ok");
+  });
+});
+
+describe("when delivery last ran, where there is no worker", () => {
+  it("keeps one row for each of the two senders, separate from the worker's", async () => {
+    const { pool, query } = fakePool();
+    await tryRecordDeliverySighting(pool, AFTER_RESPONSE_DELIVERY_KEY, { mailSent: 1, mailFailed: 0, pushDelivered: null, pushFailed: null });
+    await tryRecordDeliverySighting(pool, SCHEDULED_DRAIN_KEY, { mailSent: 0, mailFailed: 0, pushDelivered: 2, pushFailed: 0 });
+    const keys = query.mock.calls.map(([, parameters]) => (parameters as unknown[])[0]);
+    expect(keys).toEqual(["after-response-delivery", "scheduled-drain"]);
+    expect(new Set([...keys, "worker"]).size).toBe(3);
+    for (const [statement] of query.mock.calls as [string, unknown[]][]) {
+      expect(statement).toContain("on conflict (service) do update");
+    }
+    expect(JSON.parse(String((query.mock.calls[0] as [string, unknown[]])[1][1]))).toEqual({
+      mailSent: 1, mailFailed: 0, pushDelivered: null, pushFailed: null,
+    });
+  });
+
+  it("never lets a failed write reach the caller, whose job is to send a message", async () => {
+    const { pool, query } = fakePool();
+    query.mockRejectedValueOnce(new Error("connection terminated"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await expect(tryRecordDeliverySighting(pool, SCHEDULED_DRAIN_KEY, { mailSent: 0 })).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
+  it("reports how long ago, and does not call a quiet day a fault", () => {
+    const now = new Date("2026-11-17T10:00:00.000Z");
+    expect(evaluateDeliverySighting({ updated_at: new Date("2026-11-17T09:59:48.000Z") }, now)).toEqual({ status: "seen", ageSeconds: 12 });
+    // Three days without anybody queueing anything is three days, not "stale".
+    expect(evaluateDeliverySighting({ updated_at: "2026-11-14T10:00:00+00:00" }, now)).toEqual({ status: "seen", ageSeconds: 259_200 });
+    expect(evaluateDeliverySighting(undefined, now)).toEqual({ status: "never_seen", ageSeconds: null });
+    expect(evaluateDeliverySighting({ updated_at: "not-a-date" }, now)).toEqual({ status: "never_seen", ageSeconds: null });
+    // A clock a little ahead of the database's must not produce a negative age.
+    expect(evaluateDeliverySighting({ updated_at: new Date("2026-11-17T10:00:02.000Z") }, now)).toEqual({ status: "seen", ageSeconds: 0 });
   });
 });

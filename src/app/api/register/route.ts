@@ -9,6 +9,9 @@ import { enforceRateLimit, getRequestAddressKey } from "@/security/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Room for the verification email, which is sent straight after this request has answered and counts
+// towards this limit. The reasoning for the number is beside the same line in `api/auth/[...all]`.
+export const maxDuration = 60;
 
 /**
  * Public registration endpoint. It validates every field server-side, blocks

@@ -37,6 +37,27 @@ test("the security policy permits the worker that shows a notification", async (
   expect(csp).toContain("worker-src 'self'");
 });
 
+test("the site can be installed, which is the only way an iPhone offers notifications", async ({ page }) => {
+  // Apple offers web notifications only to a site that was added to the Home Screen and opened from
+  // there. What makes it an app when it is added is this manifest, so it has to be served, say
+  // "standalone", and point at icons that exist.
+  const response = await page.request.get("/manifest.webmanifest");
+  expect(response.status()).toBe(200);
+  const manifest = await response.json() as { display?: string; icons?: { src: string }[] };
+  expect(manifest.display).toBe("standalone");
+  const icons = manifest.icons ?? [];
+  expect(icons.length).toBeGreaterThan(0);
+  for (const icon of icons) {
+    const image = await page.request.get(icon.src);
+    expect(image.status(), icon.src).toBe(200);
+    expect(image.headers()["content-type"], icon.src).toContain("image/png");
+  }
+  // And the pages point a browser at it, under a security policy that names it.
+  const document = await page.goto("/");
+  await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", /manifest\.webmanifest/);
+  expect(document?.headers()["content-security-policy"] ?? "").toContain("manifest-src 'self'");
+});
+
 test("health says whether notifications are switched on, and never leaks the key", async ({ page }) => {
   const response = await page.request.get("/api/health");
   const body = await response.json() as Record<string, unknown>;

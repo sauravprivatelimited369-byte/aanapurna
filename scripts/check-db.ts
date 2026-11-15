@@ -46,6 +46,28 @@ const REQUIRED_FUNCTIONS = [
   "app_unpushed_notifications",
   "app_mark_push_delivered",
   "app_revoke_push_subscription",
+  "app_register_push_subscription",
+  "app_claim_push_batch",
+  "app_push_targets_for",
+  "app_finish_push_batch",
+] as const;
+
+/**
+ * Functions that hand out, or act on, the credentials that address a person's device.
+ *
+ * They exist for the sender, which connects as the worker role. The role that serves web requests must
+ * not be able to run any of them: two of them once treated "no session user" as "this is the worker",
+ * and a request handler that forgets to set its session is exactly the mistake row-level security is
+ * there to make harmless. Checked here, by the role itself, so the build fails if a grant returns.
+ */
+const WORKER_ONLY_DEVICE_FUNCTIONS = [
+  "app_push_targets",
+  "app_push_targets_for",
+  "app_revoke_push_subscription",
+  "app_claim_push_batch",
+  "app_finish_push_batch",
+  "app_unpushed_notifications",
+  "app_mark_push_delivered",
 ] as const;
 import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../src/lib/database-config";
 
@@ -81,6 +103,7 @@ async function main(): Promise<void> {
       migrations: number;
       exposed_tables: number;
       exposed_functions: number;
+      web_reachable_device_functions: number;
     }>(`
       SELECT current_user,
         role.rolbypassrls AS bypass_rls,
@@ -108,9 +131,14 @@ async function main(): Promise<void> {
           WHERE namespace.nspname = 'public' AND function_info.proacl IS NOT NULL
             AND EXISTS (SELECT 1 FROM aclexplode(function_info.proacl) acl
                         JOIN pg_roles grantee_role ON grantee_role.oid = acl.grantee
-                        WHERE grantee_role.rolname IN ('anon', 'authenticated'))) AS exposed_functions
+                        WHERE grantee_role.rolname IN ('anon', 'authenticated'))) AS exposed_functions,
+        (SELECT count(*)::int FROM pg_proc function_info
+          JOIN pg_namespace namespace ON namespace.oid = function_info.pronamespace
+          WHERE namespace.nspname = 'public'
+            AND function_info.proname = ANY($2::text[])
+            AND has_function_privilege(current_user, function_info.oid, 'EXECUTE')) AS web_reachable_device_functions
       FROM pg_roles role WHERE role.rolname = current_user
-    `, [[...REQUIRED_FUNCTIONS]]);
+    `, [[...REQUIRED_FUNCTIONS], [...WORKER_ONLY_DEVICE_FUNCTIONS]]);
     const row = result.rows[0];
     if (!row) throw new Error("The database role could not be identified.");
     const problems: string[] = [];
@@ -123,7 +151,8 @@ async function main(): Promise<void> {
     // one. The expected value comes from the list itself, because a literal beside it drifted once and
     // failed a healthy deployment.
     if (row.required_functions !== REQUIRED_FUNCTIONS.length) problems.push(`expected required database functions, found ${row.required_functions}/${REQUIRED_FUNCTIONS.length}`);
-    if (row.migrations < 26) problems.push(`expected at least 26 applied migrations, found ${row.migrations}`);
+    if (row.migrations < 28) problems.push(`expected at least 28 applied migrations, found ${row.migrations}`);
+    if (row.web_reachable_device_functions > 0) problems.push(`the web database role can execute ${row.web_reachable_device_functions} worker-only device function(s); apply 20261117120000_push_delivery_without_a_worker`);
     if (row.exposed_tables > 0) problems.push(`Supabase public API roles can reach ${row.exposed_tables} application table(s); apply 20261114120000_revoke_public_api_privileges`);
     if (row.exposed_functions > 0) problems.push(`Supabase public API roles can execute ${row.exposed_functions} application function(s); apply 20261114120000_revoke_public_api_privileges`);
     console.info(JSON.stringify({
@@ -135,6 +164,7 @@ async function main(): Promise<void> {
       appliedMigrations: row.migrations,
       publicApiExposedTables: row.exposed_tables,
       publicApiExposedFunctions: row.exposed_functions,
+      webReachableDeviceFunctions: row.web_reachable_device_functions,
       problems,
     }));
     if (problems.length) process.exitCode = 1;

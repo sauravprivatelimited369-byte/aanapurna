@@ -1,9 +1,9 @@
 import { sql } from "drizzle-orm";
-import { db } from "@/db";
-import { assertSameOrigin, fail, json } from "@/lib/http";
-import { HttpError } from "@/lib/http";
+import { withUserContext } from "@/db";
+import { assertSameOrigin, fail, HttpError, json } from "@/lib/http";
 import { requireIdentity } from "@/lib/identity";
 import { enforceMutationRateLimit } from "@/security/rate-limit";
+import { deviceLabelOf, endpointFingerprint, isUsableEndpoint, parseSubscription, pushServiceOf } from "@/push/subscription";
 import { pushConfigured, vapidKeys } from "@/push/vapid";
 
 export const runtime = "nodejs";
@@ -15,65 +15,56 @@ export const dynamic = "force-dynamic";
  * The subscription is created by the browser against its push service and handed here. What arrives is
  * a credential for that device, so the rules are strict:
  *
- * - Only the signed-in person's own devices. The row is written through the app role, whose RLS policy
- *   is `user_id = app_current_user_id()`, so a bug in this handler cannot register a device to somebody
- *   else even if it tried.
+ * - Only the signed-in person's own devices. Every statement below runs inside `withUserContext`, which
+ *   is what tells the database who is asking; the table's row-level security is forced, so a statement
+ *   sent without it reads nothing and writes nothing. That is not a formality. The first version of this
+ *   file queried the table directly, the database refused every insert, and "Turn on for this device"
+ *   could not succeed for anybody on any deployment.
  * - The endpoint must be https. A push endpoint is where this server will send signed requests; an
  *   http or relative value would be an SSRF primitive.
- * - Re-subscribing the same device updates it rather than adding a second row. Browsers re-issue the
- *   same endpoint, and duplicate rows mean duplicate notifications on one phone.
+ * - A browser has one live registration. Registering it again updates that row, and a browser that was
+ *   registered to a different account - a shared phone - moves to the person now signed in on it.
+ * - A replacement continues a registration, it does not start one. The service worker reports a
+ *   subscription the browser rotated by itself, naming the one it replaces (`replaces`). That is
+ *   accepted only if the old one is live and belongs to the caller; otherwise a background event could
+ *   enrol whoever happens to be signed in on a browser where somebody else once pressed the button.
  *
  * Nothing here ever returns an endpoint or a key back to the browser. The person can see which devices
- * they have registered (label + date), not the secrets behind them.
+ * they have registered (label, date and a fingerprint of the endpoint), not the secrets behind them.
  */
 
-type SubscriptionBody = {
-  endpoint?: unknown;
-  keys?: { p256dh?: unknown; auth?: unknown };
-  deviceLabel?: unknown;
-};
-
-/** A short, human label. Not the raw user agent: that is a fingerprint and a long one. */
-export function deviceLabelOf(raw: unknown): string {
-  const value = typeof raw === "string" ? raw.slice(0, 200) : "";
-  const browser = /firefox/i.test(value) ? "Firefox"
-    : /edg/i.test(value) ? "Edge"
-    : /chrome|chromium/i.test(value) ? "Chrome"
-    : /safari/i.test(value) ? "Safari"
-    : "Browser";
-  const platform = /android/i.test(value) ? "Android"
-    : /iphone|ipad|ios/i.test(value) ? "iOS"
-    : /windows/i.test(value) ? "Windows"
-    : /mac os|macintosh/i.test(value) ? "macOS"
-    : /linux/i.test(value) ? "Linux"
-    : "device";
-  return `${browser} on ${platform}`;
-}
-
-export function isUsableEndpoint(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  if (value.length < 8 || value.length > 2048) return false;
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
+function databaseErrorCode(error: unknown): string | undefined {
+  // The query layer wraps the driver's error, so the SQLSTATE is on the cause, not on what is thrown.
+  for (let current: unknown = error, depth = 0; current && depth < 4; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return code;
+    current = (current as { cause?: unknown }).cause;
   }
+  return undefined;
 }
 
 export async function GET(request: Request) {
   try {
     const identity = await requireIdentity(request.headers);
-    const rows = await db.execute<{ label: string | null; created_at: Date; endpoint_host: string }>(sql`
-      select device_label as label, created_at, split_part(split_part(endpoint, '/', 3), '.', 1) as endpoint_host
+    const rows = await withUserContext(identity.id, (tx) => tx.execute<{ label: string | null; created_at: Date; endpoint: string }>(sql`
+      select device_label as label, created_at, endpoint
       from public.push_subscriptions
       where user_id = ${identity.id} and revoked_at is null
-      order by last_seen_at desc
-    `);
+      order by last_seen_at desc, created_at desc
+      limit 10
+    `));
+    const configured = pushConfigured();
     return json({
-      configured: pushConfigured(),
-      publicKey: pushConfigured() ? vapidKeys()!.publicKey : null,
-      // The endpoint's host, never the endpoint: it identifies the push service, not the device.
-      devices: rows.rows.map((row) => ({ label: row.label, addedAt: row.created_at, service: row.endpoint_host })),
+      configured,
+      publicKey: configured ? vapidKeys()!.publicKey : null,
+      devices: rows.rows.map((row) => ({
+        label: row.label,
+        addedAt: row.created_at,
+        // The host's first label, never the endpoint: it identifies the push service, not the device.
+        service: pushServiceOf(row.endpoint),
+        // Lets a browser recognise its own subscription in this list without the list containing it.
+        fingerprint: endpointFingerprint(row.endpoint),
+      })),
     });
   } catch (error) {
     return fail(error);
@@ -84,34 +75,51 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const identity = await requireIdentity(request.headers);
-    enforceMutationRateLimit({ request, bucket: "push-subscribe", userId: identity.id, userMax: 20 });
+    await enforceMutationRateLimit({ request, bucket: "push-subscribe", userId: identity.id, userMax: 20 });
 
     if (!pushConfigured()) {
-      return json({ error: { message: "Notifications to your device are not configured on this deployment." } }, 503);
+      throw new HttpError(503, "Notifications to your device are not configured on this deployment.", "PUSH_NOT_CONFIGURED");
     }
 
-    const body = (await request.json().catch(() => ({}))) as SubscriptionBody;
-    const p256dh = body.keys?.p256dh;
-    const auth = body.keys?.auth;
-    if (!isUsableEndpoint(body.endpoint) || typeof p256dh !== "string" || typeof auth !== "string"
-      || p256dh.length > 200 || auth.length > 100) {
+    const body = await request.json().catch(() => null) as { replaces?: unknown } | null;
+    const subscription = parseSubscription(body);
+    if (!subscription) {
+      throw new HttpError(400, "That notification subscription is not usable.", "PUSH_SUBSCRIPTION_INVALID");
+    }
+    const replaces = body?.replaces === undefined || body.replaces === null ? null : body.replaces;
+    if (replaces !== null && !isUsableEndpoint(replaces)) {
       throw new HttpError(400, "That notification subscription is not usable.", "PUSH_SUBSCRIPTION_INVALID");
     }
 
     const label = deviceLabelOf(request.headers.get("user-agent"));
-    await db.execute(sql`
-      insert into public.push_subscriptions (user_id, endpoint, p256dh, auth, device_label)
-      values (${identity.id}, ${body.endpoint}, ${p256dh}, ${auth}, ${label})
-      on conflict (endpoint) do update
-        set p256dh = excluded.p256dh,
-            auth = excluded.auth,
-            device_label = excluded.device_label,
-            last_seen_at = now(),
-            revoked_at = null,
-            last_error = null
-        where public.push_subscriptions.user_id = excluded.user_id
-    `);
-    return json({ registered: true, label }, 201);
+    try {
+      await withUserContext(identity.id, async (tx) => {
+        if (replaces !== null && replaces !== subscription.endpoint) {
+          const retired = await tx.execute<{ id: string }>(sql`
+            update public.push_subscriptions
+            set revoked_at = now(), last_error = 'replaced_by_browser'
+            where user_id = ${identity.id} and endpoint = ${replaces} and revoked_at is null
+            returning id
+          `);
+          if (retired.rows.length === 0) {
+            throw new HttpError(409, "There is no registration on this account for that device to continue.", "PUSH_SUBSCRIPTION_NOT_CONTINUED");
+          }
+        }
+        await tx.execute(sql`
+          select public.app_register_push_subscription(
+            ${subscription.endpoint}, ${subscription.p256dh}, ${subscription.auth}, ${label}
+          )
+        `);
+      });
+    } catch (error) {
+      if (databaseErrorCode(error) === "23505") {
+        // Live for another account, and this browser did not present that registration's keys. A real
+        // browser cannot get here; the answer still has to be a refusal rather than a takeover.
+        throw new HttpError(409, "This browser is registered for notifications on another account. Turn notifications off for this site in the browser's settings, reload, and try again.", "PUSH_SUBSCRIPTION_CONFLICT");
+      }
+      throw error;
+    }
+    return json({ registered: true, label, fingerprint: endpointFingerprint(subscription.endpoint) }, 201);
   } catch (error) {
     return fail(error);
   }
@@ -121,20 +129,29 @@ export async function DELETE(request: Request) {
   try {
     assertSameOrigin(request);
     const identity = await requireIdentity(request.headers);
-    enforceMutationRateLimit({ request, bucket: "push-unsubscribe", userId: identity.id, userMax: 20 });
-    const body = (await request.json().catch(() => ({}))) as { endpoint?: unknown };
+    await enforceMutationRateLimit({ request, bucket: "push-unsubscribe", userId: identity.id, userMax: 20 });
+    const body = (await request.json().catch(() => null)) as { endpoint?: unknown; all?: unknown } | null;
 
-    // Revoked by endpoint, scoped to the caller by RLS. There is no delete: a revoked row is the record
-    // that a device was once registered, which is what somebody will ask for if a notification is
-    // claimed never to have arrived.
-    await db.execute(sql`
+    // One device, or - only when asked for in so many words - every device. A body with neither used
+    // to mean "all of them", which is the wrong thing to do by default: a browser that had lost its own
+    // subscription and pressed "turn off" silenced the person's other phone.
+    const everyDevice = body?.all === true;
+    const endpoint = isUsableEndpoint(body?.endpoint) ? body.endpoint : null;
+    if (!everyDevice && !endpoint) {
+      throw new HttpError(400, "Say which device to turn notifications off for.", "PUSH_DEVICE_REQUIRED");
+    }
+
+    // There is no delete: a revoked row is the record that a device was once registered, which is what
+    // somebody will ask for if a notification is claimed never to have arrived.
+    const revoked = await withUserContext(identity.id, (tx) => tx.execute<{ id: string }>(sql`
       update public.push_subscriptions
-      set revoked_at = now(), last_error = 'unsubscribed_by_owner'
+      set revoked_at = now(), last_error = ${everyDevice ? "unsubscribed_everywhere_by_owner" : "unsubscribed_by_owner"}
       where revoked_at is null
         and user_id = ${identity.id}
-        and (${isUsableEndpoint(body.endpoint) ? body.endpoint : null}::text is null or endpoint = ${isUsableEndpoint(body.endpoint) ? body.endpoint : null})
-    `);
-    return json({ revoked: true });
+        and (${everyDevice} or endpoint = ${endpoint})
+      returning id
+    `));
+    return json({ revoked: true, devices: revoked.rows.length });
   } catch (error) {
     return fail(error);
   }
