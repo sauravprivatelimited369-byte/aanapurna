@@ -420,6 +420,8 @@ export const directoryPlaces = pgTable("directory_places", {
   latitude: numeric("latitude", { precision: 9, scale: 6 }),
   longitude: numeric("longitude", { precision: 9, scale: 6 }),
   phone: text("phone"),
+  // Both this and a recorded owner consent are required before the public reader returns a number.
+  publishPhone: boolean("publish_phone").notNull().default(false),
   phoneSource: text("phone_source"),
   phoneKind: text("phone_kind").notNull().default("unknown"),
   sourceUrl: text("source_url"),

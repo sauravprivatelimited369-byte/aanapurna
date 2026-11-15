@@ -100,6 +100,12 @@ export default async function JokaDirectoryPage() {
                         </div>
                       </div>
                       <p className="directory-address">{entry.addressLine}</p>
+                      {entry.phone ? (
+                        <p className="directory-phone">
+                          <a href={`tel:${entry.phone.replace(/[^+0-9]/g, "")}`}>{entry.phone}</a>
+                          <small>Published because the owner agreed to be contacted.</small>
+                        </p>
+                      ) : null}
                       <div className="directory-tags">
                         <span className={`status-pill status-pill--${entry.ownerVerified ? "active" : "pending"}`}>
                           {entry.ownerVerified ? "confirmed with the owner" : "not yet confirmed with the owner"}

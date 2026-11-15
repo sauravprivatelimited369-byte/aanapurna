@@ -134,6 +134,13 @@
       "when": 1794841800000,
       "tag": "20261115203000_joka_directory",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794845400000,
+      "tag": "20261115213000_directory_phone_consent",
+      "breakpoints": true
     }
   ]
 }

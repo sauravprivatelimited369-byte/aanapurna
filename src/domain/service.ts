@@ -2705,6 +2705,7 @@ export async function listDirectoryPlaces(identity: Identity) {
     phone: directoryPlaces.phone,
     phoneSource: directoryPlaces.phoneSource,
     phoneKind: directoryPlaces.phoneKind,
+    publishPhone: directoryPlaces.publishPhone,
     photoUrl: directoryPlaces.photoUrl,
     consentStatus: directoryPlaces.consentStatus,
     ownerVerified: directoryPlaces.ownerVerified,
@@ -2717,9 +2718,28 @@ export async function listDirectoryPlaces(identity: Identity) {
 export async function updateDirectoryPlace(identity: Identity, input: DirectoryPlaceUpdate) {
   requireDirectoryWrite(identity);
   return withDomainContext(identity.id, async (tx) => {
-    const [existing] = await tx.select({ slug: directoryPlaces.slug, name: directoryPlaces.name })
+    const [existing] = await tx.select({
+      slug: directoryPlaces.slug,
+      name: directoryPlaces.name,
+      consentStatus: directoryPlaces.consentStatus,
+      phone: directoryPlaces.phone,
+    })
       .from(directoryPlaces).where(eq(directoryPlaces.slug, input.slug)).limit(1);
     if (!existing) throw new HttpError(404, "That place is not in the directory.", "DIRECTORY_PLACE_NOT_FOUND");
+
+    // A number is a person's, not a listing's. Publishing one requires the recorded agreement of the
+    // owner, and the database enforces the same pair, so this check is a courtesy rather than the lock.
+    if (input.publishPhone === true) {
+      const willHaveConsented = input.consentStatus
+        ? input.consentStatus === "consented"
+        : existing.consentStatus === "consented";
+      if (!willHaveConsented) {
+        throw new HttpError(422, "Record the owner's agreement before publishing their number.", "DIRECTORY_PHONE_CONSENT_REQUIRED");
+      }
+      if (!input.phone && !existing.phone) {
+        throw new HttpError(422, "There is no number recorded for this place yet.", "DIRECTORY_PHONE_MISSING");
+      }
+    }
 
     const patch: Partial<typeof directoryPlaces.$inferInsert> = { updatedAt: new Date() };
     if (input.phone !== undefined) patch.phone = input.phone ? input.phone : null;
@@ -2728,6 +2748,7 @@ export async function updateDirectoryPlace(identity: Identity, input: DirectoryP
     if (input.published !== undefined) patch.published = input.published;
     if (input.ownerVerified !== undefined) patch.ownerVerified = input.ownerVerified;
     if (input.photoUrl !== undefined) patch.photoUrl = input.photoUrl;
+    if (input.publishPhone !== undefined) patch.publishPhone = input.publishPhone;
     if (input.notes !== undefined) patch.notes = input.notes ? input.notes : null;
     // Confirming details with the owner is the only thing that turns the label green, and it can
     // only happen on the word of a person who spoke to them, never from a listing.

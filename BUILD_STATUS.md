@@ -317,7 +317,9 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   public page at `/joka` publishes names, areas and addresses only, and labels every card
   "not yet confirmed with the owner". Numbers live in the operators' view; `phone_kind` records
   whether a number is the business's line or a booking-marketplace line, and no licence status is
-  stored or implied. Photos are accepted only when an operator enters one the owner supplied.
+  stored or implied. Photos are accepted only when an operator enters one the owner supplied. A
+  number can be published on the public page per place, but only after the owner's agreement is
+  recorded; the database requires both the consent and the flag.
 - **Still open:** no standby rota, no named coordinator, no legal entity or insurance, no mail
   credential, no scanner host and no independent test (people, lawyers and money), so readiness
   remains incomplete on every deployment. The difference is that each one is now a named, dated,

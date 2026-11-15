@@ -354,7 +354,7 @@ try {
   const seededDirectory = await admin.query<{ places: Record<string, unknown>[] }>("SELECT public.app_public_directory() places");
   assert(seededDirectory.rows[0]!.places.length >= 25, "The seeded directory must be visible on the public projection.");
   for (const entry of seededDirectory.rows[0]!.places) {
-    assert(!("phone" in entry), "The public projection must never carry a phone number.");
+    assert.equal(entry.phone ?? null, null, "No seeded place may publish a phone number before its owner agrees.");
     assert(!("notes" in entry), "Internal notes must not reach the public projection.");
     assert.equal(entry.ownerVerified, false, "No seeded place may claim owner confirmation.");
   }
@@ -370,6 +370,18 @@ try {
     "SELECT owner_verified, consent_status FROM public.directory_places WHERE slug = 'halla-bowl'",
   );
   assert.deepEqual(verifiedRow.rows[0], { owner_verified: true, consent_status: "consented" });
+  // A number stays private until the owner agrees, and then only that number.
+  const phoneBefore = await admin.query<{ places: { slug: string; phone: string | null }[] }>("SELECT public.app_public_directory() places");
+  assert.equal(phoneBefore.rows[0]!.places.find((entry) => entry.slug === "halla-bowl")?.phone ?? null, null, "An unconsented number must stay private.");
+  await assert.rejects(
+    service.updateDirectoryPlace(operations, { slug: "shree-shyam-banquet", publishPhone: true }),
+    "Publishing a number without the owner's agreement must be refused.",
+  );
+  await service.updateDirectoryPlace(operations, { slug: "halla-bowl", publishPhone: true });
+  const phoneAfter = await admin.query<{ places: { slug: string; phone: string | null }[] }>("SELECT public.app_public_directory() places");
+  assert.equal(phoneAfter.rows[0]!.places.find((entry) => entry.slug === "halla-bowl")?.phone, "+919007087129");
+  const otherPhones = phoneAfter.rows[0]!.places.filter((entry) => entry.slug !== "halla-bowl" && entry.phone);
+  assert.equal(otherPhones.length, 0, "Consent for one place must not publish anyone else's number.");
   // Unpublishing removes it from the public projection without deleting the record.
   await service.updateDirectoryPlace(operations, { slug: "halla-bowl", published: false });
   const afterHide = await admin.query<{ places: { slug: string }[] }>("SELECT public.app_public_directory() places");

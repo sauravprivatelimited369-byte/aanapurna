@@ -22,6 +22,7 @@ type Place = {
   phoneKind: "unknown" | "direct" | "business_line" | "marketplace_line";
   consentStatus: "unknown" | "contacted" | "consented" | "declined";
   ownerVerified: boolean;
+  publishPhone: boolean;
   published: boolean;
   photoUrl: string | null;
   lastCheckedOn: string;
@@ -174,6 +175,17 @@ export function DirectoryPanel({ canWrite }: { canWrite: boolean }) {
                     onChange={(event) => void save(place.slug, { ownerVerified: event.target.checked }, event.target.checked ? `${place.name} confirmed with the owner.` : `${place.name} is unconfirmed again.`)}
                   />
                   Details confirmed with the owner (licence, capacity and consent were asked, not assumed)
+                </label>
+              </div>
+              <div className="form-field">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={place.publishPhone}
+                    disabled={place.consentStatus !== "consented"}
+                    onChange={(event) => void save(place.slug, { publishPhone: event.target.checked }, event.target.checked ? `${place.name}'s number is now public.` : `${place.name}'s number is private again.`)}
+                  />
+                  Publish this number on the public page {place.consentStatus !== "consented" ? "(record the owner's agreement first)" : ""}
                 </label>
               </div>
               <div className="form-field">

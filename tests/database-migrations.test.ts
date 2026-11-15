@@ -22,6 +22,7 @@ const migrationFiles = [
   "20261115180000_owner_attestations_and_launch_gate.sql",
   "20261115193000_readiness_escalation.sql",
   "20261115203000_joka_directory.sql",
+  "20261115213000_directory_phone_consent.sql",
 ];
 
 let database: PGlite;

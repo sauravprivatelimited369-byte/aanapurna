@@ -16,6 +16,8 @@ export type DirectoryEntry = {
   longitude: number | string | null;
   ownerVerified: boolean;
   photoUrl: string | null;
+  /** Present only when the owner agreed to be contacted publicly. */
+  phone: string | null;
   lastCheckedOn: string;
 };
 

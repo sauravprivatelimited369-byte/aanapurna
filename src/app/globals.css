@@ -790,5 +790,9 @@ select.form-control { appearance: auto; }
 .directory-card-head small { display: block; margin-top: 3px; color: #a9a5ac; font-size: 12px; }
 .directory-monogram { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: rgba(255,183,3,.12); border: 1px solid rgba(255,183,3,.24); color: var(--saffron); font-size: 15px; font-weight: 700; letter-spacing: .04em; }
 .directory-address { margin: 14px 0 0; color: #cbc6cc; font-size: 13px; line-height: 1.65; }
+.directory-phone { margin: 14px 0 0; font-size: 14px; }
+.directory-phone a { color: var(--saffron); font-weight: 650; text-decoration: none; }
+.directory-phone a:hover { text-decoration: underline; }
+.directory-phone small { display: block; margin-top: 3px; color: #a9a5ac; font-size: 11px; }
 .directory-tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 16px; }
 .directory-tags .status-pill { font-size: 11px; }

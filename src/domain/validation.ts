@@ -416,6 +416,8 @@ export const directoryPlaceUpdateSchema = z.object({
   consentStatus: z.enum(["unknown", "contacted", "consented", "declined"]).optional(),
   published: z.boolean().optional(),
   ownerVerified: z.boolean().optional(),
+  /** Publishing a number requires the owner's agreement; the service refuses without it. */
+  publishPhone: z.boolean().optional(),
   // A photo the owner handed over. Listing-site images are copyrighted and are not copied in.
   photoUrl: z.string().trim().url().max(500).startsWith("https://").nullable().optional(),
   notes: z.string().trim().max(8_000).nullable().optional(),
