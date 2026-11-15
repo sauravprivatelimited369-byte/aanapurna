@@ -21,8 +21,11 @@ used; Better Auth remains the application's only authentication system, with its
 own `user`, `session`, `account`, `verification` and rate-limit tables. Vercel
 hosts the Next.js **web** application only. The Graphile Worker that drains the
 encrypted `email_outbox` is a long-running process and is **not** deployed as a
-Vercel serverless function; it still needs a separate long-running host before
-verification/reset email can actually be delivered.
+Vercel serverless function. Email and device notifications are instead sent by
+the web tier, straight after the request that queued them, with a scheduled
+drain as the second chance; see "Delivery straight after the request" below.
+Whether an email reaches a real inbox is a separate matter, and today it does
+not: the mail settings point at a capture service.
 
 ## Provisioned resources (identifiers only)
 
@@ -246,32 +249,47 @@ failing, non-HTTPS and missing-URL cases. It cannot be run from this build
 sandbox because sandbox egress to `*.vercel.app` is TLS-reset; the live results
 above were obtained through an HTTP fetch tool instead.
 
-`SMTP_PASS` currently contains the deliberate placeholder name
-`REPLACE_WITH_GMAIL_APP_PASSWORD`, not a credential. The fail-closed preflight
-and `/api/health` therefore report email `not_configured` until the owner
-replaces it. Vercel injects `VERCEL_URL` automatically; `src/lib/auth.ts` trusts
-that exact preview origin in addition to `APP_URL`.
+`SMTP_PASS` first held the deliberate placeholder name
+`REPLACE_WITH_GMAIL_APP_PASSWORD`, and `/api/health` reported email
+`not_configured`. The mail settings were later pointed at a capture service
+(see "The email path is now proven on the live deployment"), so health now
+reports `test_sink`: mail is accepted and kept in a test inbox, and none of it
+reaches the person it was written to. Vercel injects `VERCEL_URL`
+automatically; `src/lib/auth.ts` trusts that exact preview origin in addition
+to `APP_URL`.
 
 ## Owner-only remaining steps
 
-1. In **Vercel → project → Settings → Environment Variables**, replace
-   `SMTP_PASS` with a Gmail/Workspace 16-character App Password for
-   `sauravprivatelimited369@gmail.com`. Do not paste it in chat, commit it, or
-   put it in a public variable. Keep `SMTP_HOST=smtp.gmail.com`,
-   `SMTP_PORT=465`, `SMTP_SECURE=true`.
+1. In **Vercel → project → Settings → Environment Variables**, point the mail
+   settings at a real provider, then redeploy (Vercel applies a changed variable
+   only to deployments made after the change). They currently point at the
+   capture service described under "The email path is now proven" below, so
+   **no email this site sends reaches a real inbox**, and until one does nobody
+   can confirm an address or sign in. For Gmail or Workspace that is
+   `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, `SMTP_SECURE=true`,
+   `SMTP_USER=sauravprivatelimited369@gmail.com`, `SMTP_PASS` = a 16-character
+   App Password for that account, and `SMTP_FROM` using the same address. Any
+   other provider's SMTP settings work the same way. Do not paste the password
+   in chat, commit it, or put it in a public variable.
 2. Run `HOSTED_SMOKE_BASE_URL=https://aanapurna-link-preview.vercel.app npm run smoke:hosted`
    from a network that can reach the site, then re-run it with `-- --register`
    and a disposable address. Registration and sign-in are `POST` requests, which
    this sandbox cannot send because its egress to `*.vercel.app` is TLS-reset, so
    the authenticated flows and cookie flags still need that owner-side run.
-3. A scheduled drain is now in place for the Vercel deployment, which cannot
-   host the long-lived worker: `.github/workflows/worker-drain.yml` calls
-   `POST /api/worker/drain` every five minutes, which delivers one reserved
-   `email_outbox` batch through the same `app_worker_*` functions the worker
-   uses. For continuous, sub-minute processing (and for anything that needs the
-   worker's crash recovery), still provision a long-running worker host with the
-   same encrypted environment and run `npm run worker`; the committed
-   `docker-compose.production.yml` already defines that `worker` service.
+3. The Vercel deployment cannot host the long-lived worker. Email and device
+   notifications are sent by the web tier itself, straight after the request
+   that queued them (see "Delivery straight after the request" below).
+   `.github/workflows/worker-drain.yml` is the second chance: it is scheduled
+   for every five minutes and calls `POST /api/worker/drain`, **but GitHub has
+   been running it between three and seven hours apart**. Two things have no
+   other trigger and therefore run that late: a retry when nobody else uses the
+   site, and the sweeps that notice an unclaimed delivery or an empty rota.
+   Before real food moves, give the drain a scheduler that keeps time - any
+   service that can send a `POST` with `Authorization: Bearer
+   <WORKER_TRIGGER_TOKEN>` every minute or two - or provision a long-running
+   worker host with the same encrypted environment and run `npm run worker`;
+   the committed `docker-compose.production.yml` already defines that `worker`
+   service. `/api/health` shows when either last ran, under `delivery`.
 4. Add a custom domain in Vercel, configure DNS, and update `APP_URL` and
    `APP_DOMAIN` to that domain. The current `.vercel.app` alias is a preview
    hostname, not an owner-controlled production domain.
@@ -366,6 +384,14 @@ trusted-origin check covers the Better Auth endpoints.
 
 ### Serverless outbox drain (replaces the missing worker host)
 
+**Status, 2026-11-15: this is now the recovery path, not the delivery path.** The
+schedule below was believed to run every five minutes. On the live repository it
+has run four times in its life, between three and seven hours apart, so anything
+a person is waiting for is sent by the request that queued it instead - the next
+section. The drain remains the only trigger for retries on a quiet site and for
+the escalation sweeps, and it now also sends device notifications and records
+when it ran.
+
 Vercel cannot run the Graphile Worker process, so queued authentication email had
 no consumer at all. That is now handled without a new host and without a new
 shared secret:
@@ -383,15 +409,19 @@ shared secret:
   tampering, expiry, wrong audience, wrong repository and wrong ref.
   `WORKER_TRIGGER_TOKEN` optionally adds a static bearer token for other
   schedulers; it is unset here.
-- `.github/workflows/worker-drain.yml` runs every five minutes and is also
-  dispatchable. It first asserts that an anonymous `POST` is rejected with `401`,
-  then drains with its OIDC token and fails the run if the response is not `200`
-  with `status: "ok"` or `"deferred"`.
+- `.github/workflows/worker-drain.yml` is scheduled for every five minutes and
+  is also dispatchable. It first asserts that an anonymous `POST` is rejected
+  with `401`, then drains with its OIDC token and fails the run if the response
+  is not `200` with `status: "ok"` or `"deferred"`.
 
 Honest limits of this arrangement:
 
 - GitHub's shortest schedule interval is five minutes, and queued runs can start
-  later than their slot; this is not the worker's one-second polling.
+  later than their slot; this is not the worker's one-second polling. **Measured,
+  it is far worse than "later than their slot"**: the four scheduled runs to date
+  started at 22:55 UTC on 14 November and at 02:14, 09:25 and 16:28 UTC on the
+  15th. The two verification emails real people had been sent left five and
+  twelve hours after they signed up, against a link that lasts one hour.
 - Scheduled workflows only run from the default branch. GitHub also refuses to
   dispatch, or even list, a workflow file that is absent from the default branch:
   `gh workflow run worker-drain.yml --ref arena/5b937561-aanapurna` returned
@@ -405,6 +435,77 @@ Honest limits of this arrangement:
 - With `SMTP_USER`/`SMTP_PASS` still unset the drain defers rows rather than
   sending them; it reports `status: "deferred"`, which is the correct behaviour
   but is not email delivery.
+
+### Delivery straight after the request (what the hosted site relies on)
+
+A request that queues an email or writes a notification now delivers it itself,
+once it has answered (`src/worker/inline-delivery.ts`, through Next.js `after()`).
+The person who made the request is not kept waiting on a mail server, and the
+person the message is for hears in seconds instead of whenever a scheduler runs.
+It uses the same reservations as the worker and the drain, so all three can run
+at once without anything being sent twice, and none of them is required.
+
+What it needs from the host, and how to tell that it has it:
+
+- **The function instance must be kept alive after the response.** Vercel does
+  this for `after()`. It is the one assumption everything above rests on, and it
+  cannot be tested from a build sandbox. `GET /api/health` reports it without
+  signing in:
+
+  ```
+  "delivery": { "afterResponse":  { "status": "seen", "ageSeconds": 41 },
+                "scheduledDrain": { "status": "seen", "ageSeconds": 41 } }
+  ```
+
+  `afterResponse` is refreshed by every pass, including the one each scheduled
+  drain asks for after it has answered. If `scheduledDrain` is recent and
+  `afterResponse` is not, the host has stopped running work after responses and
+  delivery is back to depending on the schedule. `never_seen` on both, the
+  first time this is deployed, only means nothing has been queued and no
+  scheduled drain has run since.
+- **Enough time.** A pass takes at most twenty seconds, no function is held open
+  for more than two of them, and that time counts towards the function's limit.
+  The sign-in, registration and drain routes state sixty seconds. Every other
+  route takes the project default, which Vercel documents as 300 seconds on this
+  plan with Fluid compute, as this project has. If Fluid compute is turned off
+  or the project's default duration is lowered below about a minute, this is
+  the first thing that would be cut short, and the queue would again wait for
+  the schedule.
+- **`WORKER_DATABASE_URL` and the mail settings in the web tier's environment**,
+  and `WEB_PUSH_PUBLIC_KEY` / `WEB_PUSH_PRIVATE_KEY` / `WEB_PUSH_SUBJECT` for
+  device notifications. All are set on the Vercel project.
+
+Its limits:
+
+- Mail goes oldest first, six messages at a time, for up to twelve seconds per
+  pass. A new message behind a few dozen older ones waits for the next request or
+  the next scheduled drain.
+- A push that fails is tried once more within the same pass. After that it waits
+  for whoever next runs a pass, and it is only sent for fifteen minutes. On a
+  site nobody else is using, that push is not sent. The notification is still in
+  the list in the application, and news for an organisation's members is emailed
+  to them as well.
+- Nothing here runs on a timer. The escalation sweeps still wait for the drain.
+
+`npm run test:hosted-shape` (CI job `hosted-shape`) is the check of this
+arrangement: a web process, a mail server and a push service, with no worker and
+nobody calling the drain. `npm run local:start` starts a worker and therefore
+cannot show any of it.
+
+**Checking device notifications on the live site** takes one person and one
+phone, and an account that can sign in:
+
+1. Sign in and open **Notifications**. On an iPhone or iPad, first add the site
+   to the Home Screen (Safari → Share → Add to Home Screen) and open it from that
+   icon: Apple offers web notifications nowhere else.
+2. **Turn on for this device**, and allow notifications when the browser asks.
+3. **Send a test notification.** It reports what the push service answered:
+   delivered, or that the device is no longer registered, or that it could not
+   be reached. A notification should appear within a few seconds, including with
+   the site closed.
+
+Notifications about food are only written while operations are enabled. The test
+button, and notifications about the account itself, work while they are paused.
 
 ### Enabling operations for the Joka / IIM Calcutta service area
 
