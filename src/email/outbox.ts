@@ -5,6 +5,7 @@ import { emailOutbox } from "@/db/schema";
 import { db } from "@/db";
 import { encryptValue } from "@/security/crypto";
 import { databaseSslOptions, databaseUrl } from "@/lib/database-config";
+import { canSendMailHere, requestInlineDelivery } from "@/worker/inline-delivery";
 
 export type AuthEmailKind = "verification" | "password_reset";
 /** Operational mail: something happened that the person may need to act on before it expires. */
@@ -17,7 +18,7 @@ type AuthEmailPayload = {
   buttonLabel: string;
 };
 
-/** Store the sensitive link encrypted, then kick the PostgreSQL-backed worker. A scheduled scan recovers missed kicks. */
+/** Store the sensitive link encrypted, then start delivery. A scheduled scan recovers anything that was missed. */
 export async function enqueueAuthEmail(kind: AuthEmailKind, recipient: string, url: string): Promise<void> {
   const payload: AuthEmailPayload = kind === "verification"
     ? {
@@ -93,7 +94,7 @@ export async function enqueueNotificationEmail(
   await storeAndKick("notification", recipient, payload);
 }
 
-/** The shared tail: encrypt, store durably, then try to wake the worker once. */
+/** The shared tail: encrypt, store durably, then get it sent - by this process if it can, by the worker if not. */
 async function storeAndKick(kind: string, recipient: string, payload: AuthEmailPayload): Promise<void> {
   const id = randomUUID();
   await db.insert(emailOutbox).values({
@@ -104,8 +105,16 @@ async function storeAndKick(kind: string, recipient: string, payload: AuthEmailP
     messageId: `<${id}@annapurna-link.local>`,
   });
 
-  // A durable outbox row is the source of truth. If the worker or its queue is unavailable,
-  // the periodic worker scan will still deliver it. Do not log the link or the error payload.
+  // A durable outbox row is the source of truth. If nothing below manages to send it, the periodic
+  // scan will. Do not log the link or the error payload.
+  //
+  // Where this process can send mail itself it does so, straight after the request has answered. That
+  // is the only prompt path on a host with no long-lived worker, where the job queued below is never
+  // picked up: each one sat in the queue for good, the person signing up waited on the round trips it
+  // took to put it there, and the message itself left hours later. Queueing the job remains the path
+  // for a web tier that has no SMTP settings of its own and relies on the worker beside it.
+  if (canSendMailHere() && requestInlineDelivery()) return;
+
   const workerDatabaseUrl = databaseUrl("WORKER_DATABASE_URL");
   if (workerDatabaseUrl) {
     try {

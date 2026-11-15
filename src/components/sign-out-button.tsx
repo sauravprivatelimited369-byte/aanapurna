@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { releaseDeviceOnSignOut } from "@/lib/push-client";
 
 export function SignOutButton() {
   const router = useRouter();
@@ -14,6 +15,9 @@ export function SignOutButton() {
       setPending(true);
       setError("");
       try {
+        // While the session can still say whose device this is. Bounded, and never the reason
+        // signing out fails.
+        await releaseDeviceOnSignOut();
         const result = await authClient.signOut();
         if (result.error) throw new Error("Sign out did not complete.");
         router.replace("/login");

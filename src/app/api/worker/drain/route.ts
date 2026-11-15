@@ -4,14 +4,26 @@ import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from
 import { verifyGithubOidcToken, fetchGithubJwks } from "@/worker/github-oidc";
 import { drainEmailOutboxOnce } from "@/worker/outbox-drain";
 import { runEscalationSweep, runReadinessSweep } from "@/worker/escalation";
+import { drainPushOnce, type PushDrainResult } from "@/worker/push-drain";
+import { SCHEDULED_DRAIN_KEY, tryRecordDeliverySighting } from "@/worker/heartbeat";
+import { requestInlineDelivery } from "@/worker/inline-delivery";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 30;
+// This route's own work - a batch of mail, two sweeps, a bounded push pass - and then the pass it asks
+// for once it has answered, which may take twenty seconds more and counts towards the same limit.
+export const maxDuration = 60;
 
 /**
- * Runs one batch of the email outbox drain, for schedulers that cannot host a
- * long-lived process (this Vercel deployment cannot run the Graphile Worker).
+ * Runs one batch of the email outbox drain, the escalation sweeps and one pass of
+ * device notifications, for schedulers that cannot host a long-lived process (this
+ * Vercel deployment cannot run the Graphile Worker).
+ *
+ * This is the recovery path, not the delivery path. The schedule that calls it has
+ * been observed to fire hours apart, so anything a person is waiting for is sent
+ * straight after the request that queued it (see `@/worker/inline-delivery`). What
+ * this route adds is a second chance for whatever that missed, and the only sender
+ * for the notifications the sweeps below write, which no web request triggers.
  *
  * Authorization is deliberately credential-free: the caller must present a
  * GitHub Actions OIDC token proving it is this repository's `worker-drain`
@@ -19,7 +31,8 @@ export const maxDuration = 30;
  * `WORKER_TRIGGER_TOKEN` and send it as a bearer token, which is useful for
  * other schedulers.
  *
- * The route never returns email content, recipients or SMTP details.
+ * The route never returns email content, recipients, SMTP details, device endpoints
+ * or notification text: counts only.
  */
 
 const ALLOWED_REPOSITORY = "sauravprivatelimited369-byte/aanapurna";
@@ -118,6 +131,34 @@ export async function POST(request: Request) {
       }));
       readiness = { status: "error" };
     }
+    // Last, because the two sweeps above are what write the notifications nobody else will send:
+    // an unclaimed delivery or a lapsing declaration is exactly what somebody should be told about
+    // on the device in their pocket. Bounded so a stalled push service cannot run out the clock:
+    // the worst case for one device is a timeout, a pause and one more timeout, started no later
+    // than the budget - seventeen seconds of this route's sixty.
+    let push: ({ status: "ok" } & PushDrainResult) | { status: "error" };
+    try {
+      push = { status: "ok", ...(await drainPushOnce(pool, { budgetMs: 6_000, requestTimeoutMs: 5_000, retryDelayMs: 1_000 })) };
+    } catch (error) {
+      console.error(JSON.stringify({
+        level: "error",
+        event: "worker.push_drain_failed",
+        message: error instanceof Error ? error.message : "unknown",
+      }));
+      push = { status: "error" };
+    }
+    // When a scheduler last got here, for `/api/health`. The schedule has been seen to fire hours
+    // apart, and nothing a person could look at said so.
+    await tryRecordDeliverySighting(pool, SCHEDULED_DRAIN_KEY, {
+      mailSent: result.sent,
+      mailFailed: result.failed,
+      pushDelivered: push.status === "ok" ? push.delivered : null,
+      pushFailed: push.status === "ok" ? push.failed : null,
+    });
+    // And once this has answered, one more pass, the way every other request does it. It takes up
+    // whatever the bounded passes above left behind, and it is the standing check that this host
+    // still runs work after a response - which is what delivery rests on between two calls here.
+    requestInlineDelivery();
     return json({
       status: result.delivered ? "ok" : "deferred",
       schedule: "one-batch",
@@ -125,6 +166,7 @@ export async function POST(request: Request) {
       ...result,
       escalation,
       readiness,
+      push,
     }, 200);
   } catch (error) {
     console.error(JSON.stringify({

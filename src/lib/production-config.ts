@@ -230,7 +230,7 @@ export function validateProductionConfig(
       if (!subject) {
         warnings.push("WEB_PUSH_SUBJECT is unset; push services are told to contact an unroutable default address");
       } else if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) {
-        warnings.push("WEB_PUSH_SUBJECT must be a mailto: address or an https: URL");
+        warnings.push("WEB_PUSH_SUBJECT must be a mailto: address or an https: URL; with anything else push stays off");
       }
     }
   } else {

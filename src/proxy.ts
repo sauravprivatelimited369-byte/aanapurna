@@ -58,6 +58,9 @@ const BASE_DIRECTIVES = [
   // default cannot silently disable device notifications. `worker-src 'self'` is the directive that
   // governs `navigator.serviceWorker.register`.
   "worker-src 'self'",
+  // The web app manifest. An iPhone only offers notifications to a site that was added to the Home
+  // Screen, and the manifest is what makes that an installed app. Named for the same reason.
+  "manifest-src 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",

@@ -116,6 +116,13 @@ no long-lived worker exists, from the same scheduled `/api/worker/drain` invocat
 mail outbox. Thresholds are configurable with `ESCALATION_THRESHOLD_MINUTES` and
 `ESCALATION_DOCUMENT_HORIZON_DAYS`.
 
+**That schedule does not keep time on the hosted deployment.** It is set for every five minutes and
+has been running between three and seven hours apart (measured 2026-11-15; `HOSTED_DEPLOYMENT.md`,
+"Serverless outbox drain"). Nothing else triggers the sweep there, so an uncollected delivery would
+be escalated that late. Operations are paused, so no food depends on it today; it must be fixed
+before they are enabled, by a scheduler that keeps its schedule or by a worker host. `/api/health`
+reports when the drain last ran, under `delivery.scheduledDrain`.
+
 **A delivery no longer needs a Helper at all.** A receiving organisation can collect the food itself
 (`POST /api/jobs/[id]/self-collect`, migration 16): its own operator becomes the assigned collector,
 and the same collection code, custody events and receipt apply. That path is refused under the same

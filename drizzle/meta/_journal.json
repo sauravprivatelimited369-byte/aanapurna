@@ -183,6 +183,20 @@
       "when": 1794913200000,
       "tag": "20261117110000_push_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794916800000,
+      "tag": "20261117120000_push_delivery_without_a_worker",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794920400000,
+      "tag": "20261117130000_two_factor_rows_for_the_sign_in_service",
+      "breakpoints": true
     }
   ]
 }

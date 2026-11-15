@@ -5,7 +5,7 @@
  * show a notification. Registering a cache-first service worker on a product where a stale page could
  * show a food offer that has already been collected would be a much larger risk than the one it solves.
  *
- * Two things it does carefully:
+ * Three things it does carefully:
  *
  * 1. **The URL is resolved against this origin.** The payload carries a site-relative path, and the
  *    worker refuses anything else. A push payload is attacker-influenced in principle, and an absolute
@@ -13,7 +13,17 @@
  * 2. **It always shows something.** A notification event that completes without calling
  *    `showNotification` makes some browsers display a generic "this site has been updated in the
  *    background" message, which tells a person nothing and looks broken.
+ * 3. **It keeps a registration current, and never starts one.** A browser may replace a subscription
+ *    by itself, with no page open. The worker tells the server about the replacement only when it can
+ *    name the subscription being replaced, and the server accepts it only if that one belongs to the
+ *    account signed in on this browser. Turning notifications on remains something a person does with
+ *    a button; this only stops them from quietly turning themselves off.
+ *
+ * It never intercepts a request from a page. The one request it makes is its own, to the server.
  */
+
+// Shown beside the text on Android and desktop. A path on this origin, never a value from the payload.
+const ICON = "/icons/icon-192.png";
 
 self.addEventListener("install", () => self.skipWaiting());
 
@@ -34,13 +44,14 @@ self.addEventListener("push", (event) => {
   const url = new URL(href, self.location.origin);
   // Belt and braces: whatever the path looked like, only this origin may be opened.
   if (url.origin !== self.location.origin) {
-    event.waitUntil(self.registration.showNotification("Annapurna Link", { body, tag: "annapurna-link" }));
+    event.waitUntil(self.registration.showNotification("Annapurna Link", { body, icon: ICON, tag: "annapurna-link" }));
     return;
   }
 
   event.waitUntil(
     self.registration.showNotification(title, {
       body,
+      icon: ICON,
       tag: "annapurna-link",
       renotify: true,
       data: { url: url.toString() },
@@ -65,6 +76,38 @@ self.addEventListener("notificationclick", (event) => {
         }
       }
       await self.clients.openWindow(target);
+    })(),
+  );
+});
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        const previous = event.oldSubscription || null;
+        // Without the old subscription there is nothing to prove this continues a registration somebody
+        // chose to make. The Notifications page compares what the browser holds with what the server
+        // has each time it is opened, and offers the button again if they differ.
+        if (!previous || !previous.endpoint) return;
+
+        let next = event.newSubscription || null;
+        if (!next) {
+          // Not every browser supplies the replacement. Make one with the key the old one was made with.
+          const key = previous.options ? previous.options.applicationServerKey : null;
+          if (!key) return;
+          next = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+        }
+
+        const subscription = next.toJSON();
+        await self.fetch("/api/account/push", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: subscription.endpoint, keys: subscription.keys, replaces: previous.endpoint }),
+        });
+      } catch {
+        // Nobody is looking and there is nothing useful to show. The page is the recovery path.
+      }
     })(),
   );
 });

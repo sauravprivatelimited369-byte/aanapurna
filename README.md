@@ -211,9 +211,12 @@ shortest honest path through them.
    as missing.
 3. **Schedule the first shift.** Pick a named account, a start, an end and a way to reach them. The
    support page derives its response window from this coverage and publishes nothing when it is
-   absent. `app_escalate_platform_readiness` — run every fifteen minutes by the worker or by the
-   scheduled drain — notifies administrators when a declaration is within 30 days of lapsing and
-   when nobody is on call for the next twelve hours, once per lapse window rather than every sweep.
+   absent. `app_escalate_platform_readiness` — run every fifteen minutes by the worker, or by the
+   scheduled drain whenever that runs — notifies administrators when a declaration is within 30
+   days of lapsing and when nobody is on call for the next twelve hours, once per lapse window
+   rather than every sweep. On the hosted deployment the scheduled drain has been running hours
+   apart, not every five minutes (`HOSTED_DEPLOYMENT.md`, "Serverless outbox drain"), so there
+   this notice can be that late.
 4. **Mail.** Either `SMTP_URL` (for example `smtps://resend:YOUR_API_KEY@smtp.resend.com:465`,
    `smtps://USER:KEY@smtp-relay.brevo.com:465`, or Amazon SES
    `smtp://USER:PASS@email-smtp.<region>.amazonaws.com:587`) or the explicit

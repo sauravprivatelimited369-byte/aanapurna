@@ -14,6 +14,7 @@ production build succeeds.
 | Database and migration | Vitest + PGlite | All 16 migrations apply from empty; 26 tables have forced RLS; 12 required functions exist; role-level authorisation; append-only guards; new recall table constraints |
 | Real PostgreSQL domain | `tests/integration/local-domain.ts` (`npm run test:local-domain`) | Concurrent claim, expiry, code consumption, receipts against a real server |
 | Authentication | `scripts/test-local-auth.mjs`, `test-auth-security.mjs`, `test-auth-roles.mjs` | Signup, verify, login, reset, replay, forged cookies, CSRF, role routing |
+| Hosted shape (no worker) | `scripts/test-hosted-shape.mjs` (`npm run test:hosted-shape`) | What the live site is: a web process with no worker beside it. Sign-up email, device notifications and operator second-factor enrolment, end to end over HTTP, against a push service that verifies the signature and decrypts the payload |
 | Browser | Playwright (`tests/e2e`) | Public pages, accessibility snapshot, and the full local workflow |
 | Hosted smoke | `scripts/hosted-smoke.mjs` | A deployed origin: health, registration, protection, drain authorization |
 | Build and supply chain | `npm run build`, `npm audit` | The app compiles; no moderate+ advisory in the lockfile |
@@ -49,6 +50,18 @@ routes call Better Auth directly and have **not** been exercised in a browser he
 (`tests/worker-heartbeat.test.ts`); the `service_health` privilege split is asserted in the migration
 suite.
 
+**Delivery without a worker (new, 2026-11-15)** — every other check that starts the application
+starts the worker too, and the hosted site has none. `npm run test:hosted-shape` starts only a web
+process, a mail server and a push service, refuses to run if a worker is connected, and nobody
+calls the drain: a verification email and a push must arrive because the request that caused them
+delivered them. It also covers a device whose browser has unsubscribed, a push service that is
+failing, a shared phone, older undeliverable mail in the way, and what the web role can reach with
+no session. Underneath it, `tests/push-pipeline.test.ts` and `tests/outbox-backlog.test.ts` run the
+claim, lease, retry and backlog rules against the real migrations, and `tests/inline-delivery.test.ts`
+and `tests/worker-drain-route.test.ts` pin the pass itself and the drain route. **Not covered
+anywhere:** a real push service, a real permission prompt, and whether the host keeps a function
+alive after its response — the last is reported by `/api/health` under `delivery` once deployed.
+
 ## Status board
 
 | Suite | Local result | Evidence |
@@ -59,6 +72,7 @@ suite.
 | `npm run build` | PASS | 44 routes, `/preview` static |
 | Playwright | NOT RUN here | Browser download blocked in this sandbox; the same suite ran green in CI |
 | `npm run test:local-domain` | NOT RUN here | Needs a real PostgreSQL; available in CI |
+| `npm run test:hosted-shape` | PASS (2026-11-15) | 37 expectations, on PostgreSQL 16.15 and 17.11; also CI job `hosted-shape` |
 | `scripts/hosted-smoke.mjs` | NOT RUN after the latest deploy | Last recorded run: 9/9 |
 | Restore drill | NOT RUN | Script exists, no successful restore observed |
 

@@ -3,7 +3,15 @@ import { checkDatabase, pool } from "@/db";
 import { getEmailDeliveryStatus } from "@/email/config";
 import { pushConfigured } from "@/push/vapid";
 import { evaluateReadiness } from "@/domain/readiness";
-import { evaluateWorkerHealth, WORKER_SERVICE_KEY, type WorkerHealth } from "@/worker/heartbeat";
+import {
+  AFTER_RESPONSE_DELIVERY_KEY,
+  SCHEDULED_DRAIN_KEY,
+  evaluateDeliverySighting,
+  evaluateWorkerHealth,
+  WORKER_SERVICE_KEY,
+  type DeliverySighting,
+  type WorkerHealth,
+} from "@/worker/heartbeat";
 
 /**
  * Read the worker's own heartbeat. A hosted deployment that runs no worker is
@@ -18,6 +26,27 @@ async function readWorkerHealth(): Promise<WorkerHealth> {
     return evaluateWorkerHealth(rows[0]);
   } catch {
     return { status: "never_seen", ageSeconds: null, details: {} };
+  }
+}
+
+/**
+ * When mail and device notifications were last sent from here, by each of the two things that send
+ * them where no worker runs. Ages only.
+ */
+async function readDeliverySightings(): Promise<{ afterResponse: DeliverySighting; scheduledDrain: DeliverySighting }> {
+  try {
+    const { rows } = await pool.query<{ service: string; updated_at: Date | string }>(
+      "select service, updated_at from public.service_health where service = any($1::text[])",
+      [[AFTER_RESPONSE_DELIVERY_KEY, SCHEDULED_DRAIN_KEY]],
+    );
+    const now = new Date();
+    const sighting = (key: string) => evaluateDeliverySighting(rows.find((row) => row.service === key), now);
+    return { afterResponse: sighting(AFTER_RESPONSE_DELIVERY_KEY), scheduledDrain: sighting(SCHEDULED_DRAIN_KEY) };
+  } catch {
+    return {
+      afterResponse: { status: "never_seen", ageSeconds: null },
+      scheduledDrain: { status: "never_seen", ageSeconds: null },
+    };
   }
 }
 
@@ -47,6 +76,7 @@ export async function GET() {
   const database = await checkDatabase();
   const email = getEmailDeliveryStatus();
   const worker = await readWorkerHealth();
+  const delivery = await readDeliverySightings();
   const declared = await readDeclaredReadiness();
 
   // A missing function means the migration has not run, which is itself an unmet requirement, so
@@ -89,6 +119,13 @@ export async function GET() {
       lastEvent: typeof worker.details.event === "string" ? worker.details.event : null,
       lastError: typeof worker.details.lastError === "string" ? worker.details.lastError : null,
     },
+    // How mail and device notifications leave a deployment that runs no worker. The request that
+    // queued them sends them once it has answered (`afterResponse`), and a scheduler calls the drain
+    // as the second chance (`scheduledDrain`). When each last ran: a schedule that has gone quiet
+    // shows here as a number, instead of as a verification email that arrives after its link expired.
+    // Every drain also asks for an after-response pass, so a recent drain beside an old pass means
+    // this host has stopped running work after a response.
+    delivery,
     // Whether a person can turn on notifications to their own device. A boolean, deliberately: the
     // subscription key is handed out by the authenticated account API, never by this public page.
     push: { configured: pushConfigured() },
