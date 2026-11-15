@@ -676,6 +676,11 @@ export const dataRequests = pgTable(
     resolution: text("resolution"),
     reviewedBy: text("reviewed_by").references(() => user.id),
     completedAt: instant("completed_at"),
+    // A completed erasure must carry the redaction it performed, enforced by a CHECK constraint in
+    // migration 22. Without these three columns `completed` was a status with nothing behind it.
+    redactedAt: instant("redacted_at"),
+    redactedBy: text("redacted_by").references(() => user.id, { onDelete: "set null" }),
+    redactionDetail: jsonb("redaction_detail"),
     createdAt: instant("created_at").notNull().defaultNow(),
   },
   (table) => [index("data_requests_user_status_idx").on(table.userId, table.status)],

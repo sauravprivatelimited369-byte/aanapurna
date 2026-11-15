@@ -2,11 +2,13 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { AccountSecurity } from "@/components/account-security";
+import { MyDataPanel } from "@/components/my-data-panel";
 import { TwoFactorPanel } from "@/components/two-factor-panel";
 import { PartnerCompliance } from "@/components/partner-compliance";
 import { AGREEMENT_STATUS_LABEL, AGREEMENT_VERSION, PARTNER_AGREEMENT_CLAUSES } from "@/domain/partner-agreement";
 import { requiresTwoFactorEnrolment } from "@/lib/identity";
 import { getIdentity } from "@/lib/identity";
+import { getUserProfile } from "@/domain/service";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Profile and security" };
@@ -21,6 +23,8 @@ const roleLabel: Record<string, string> = {
 export default async function ProfilePage() {
   const identity = await getIdentity();
   if (!identity) redirect("/login");
+
+  const profile = await getUserProfile(identity.id);
 
   return (
     <AppShell identity={identity} current="/app/profile">
@@ -77,6 +81,8 @@ export default async function ProfilePage() {
       {requiresTwoFactorEnrolment(identity) && <div className="auth-error" role="alert" style={{ marginBottom: 14 }}>
         <strong>Restricted features are blocked.</strong> Your account holds a platform role, so application actions are refused until a second factor is confirmed above. Pages stay readable.
       </div>}
+
+      <MyDataPanel currentDisplayName={profile?.displayName ?? null} />
 
       <AccountSecurity />
 

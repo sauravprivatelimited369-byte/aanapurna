@@ -2729,6 +2729,31 @@ export async function updateDataRequest(identity: Identity, requestId: string, i
     }).from(dataRequests).where(eq(dataRequests.id, requestId)).for("update");
     if (!existing) throw new HttpError(404, "Privacy request not found.", "DATA_REQUEST_NOT_FOUND");
     const now = new Date();
+
+    // An erasure request is not a label to be changed. Before this, staff could set one to
+    // `completed` and the person's data would still be sitting in the database, signed off by
+    // somebody who had done nothing. Completing an erasure now performs it, in the same
+    // transaction, so the status and the act cannot diverge.
+    let redactionDetail: Record<string, unknown> | undefined;
+    if (existing.requestType === "erasure" && input.status === "completed") {
+      if (existing.userId === identity.id) {
+        throw new HttpError(422, "You cannot erase the account you are signed in as.", "ERASURE_SELF_REFUSED");
+      }
+      const redacted = await tx.execute<{
+        redacted_users: number;
+        redacted_accounts: number;
+        redacted_profiles: number;
+        redacted_notifications: number;
+      }>(sql`select * from public.app_redact_user(${existing.userId}, ${input.resolution})`);
+      const row = redacted.rows[0];
+      redactionDetail = {
+        redactedUsers: Number(row?.redacted_users ?? 0),
+        redactedAccounts: Number(row?.redacted_accounts ?? 0),
+        redactedProfiles: Number(row?.redacted_profiles ?? 0),
+        redactedNotifications: Number(row?.redacted_notifications ?? 0),
+      };
+    }
+
     const completedAt = input.status === "completed" || input.status === "rejected" ? now : null;
     const [updated] = await tx.update(dataRequests).set({
       status: input.status,
@@ -2736,16 +2761,95 @@ export async function updateDataRequest(identity: Identity, requestId: string, i
       assignedTo: identity.id,
       reviewedBy: identity.id,
       completedAt,
+      ...(redactionDetail ? { redactedAt: now, redactedBy: identity.id, redactionDetail } : {}),
     }).where(eq(dataRequests.id, requestId)).returning({ id: dataRequests.id, status: dataRequests.status, completedAt: dataRequests.completedAt });
     await audit(tx, identity, "privacy.data_request_updated", "data_request", existing.id, input.resolution, {
       requestType: existing.requestType,
       fromStatus: existing.status,
       toStatus: input.status,
+      ...(redactionDetail ? { redaction: redactionDetail } : {}),
     });
-    await notifyUser(tx, existing.userId, null, "privacy.data_request_updated", "Privacy request update",
-      `Your ${existing.requestType.replaceAll("_", " ")} request is ${input.status.replaceAll("_", " ")}. ${input.resolution}`,
-      "/app/support");
+    // A redacted person cannot be notified — their session is gone and their identity is a marker.
+    // Saying so in the audit trail is better than a notification nobody can read.
+    if (redactionDetail) {
+      await audit(tx, identity, "privacy.erasure_performed", "user", existing.userId, input.resolution, redactionDetail);
+    } else {
+      await notifyUser(tx, existing.userId, null, "privacy.data_request_updated", "Privacy request update",
+        `Your ${existing.requestType.replaceAll("_", " ")} request is ${input.status.replaceAll("_", " ")}. ${input.resolution}`,
+        "/app/support");
+    }
+    return { ...updated, redaction: redactionDetail ?? null };
+  });
+}
+
+/**
+ * Everything the application holds about the signed-in person, as one document.
+ *
+ * This is the access half of the same promise the erasure half fulfils. It reads a fixed list of
+ * tables inside `app_export_person`, so the document cannot quietly grow to include a new sensitive
+ * table without somebody editing that list, and the disclosure is written to the audit trail.
+ */
+export async function exportMyData(identity: Identity): Promise<{ document: unknown; filename: string; generatedAt: string }> {
+  return withDomainContext(identity.id, async (tx) => {
+    const result = await tx.execute<{ document: Record<string, unknown> }>(
+      sql`select public.app_export_person(${identity.id}) as document`,
+    );
+    const document = result.rows[0]?.document;
+    if (!document) throw new HttpError(404, "No exportable record exists for this account.", "EXPORT_EMPTY");
+    const generatedAt = new Date().toISOString();
+    await audit(tx, identity, "privacy.export_downloaded", "user", identity.id, "The account holder downloaded their own data export.", {
+      format: "data-export@1",
+    });
+    return {
+      document,
+      filename: `annapurna-link-data-export-${generatedAt.slice(0, 10)}.json`,
+      generatedAt,
+    };
+  });
+}
+
+/**
+ * What a person may correct about themselves without review.
+ *
+ * A display name is theirs. An organisation's legal name, a partner's phone number and a verification
+ * status are not, because other people act on those and a silent edit would be indistinguishable
+ * from a false claim. Everything outside this list goes through a reviewed request.
+ */
+export async function correctMyProfile(identity: Identity, input: { displayName: string }) {
+  const displayName = input.displayName.trim();
+  if (displayName.length < 1) throw new HttpError(422, "A display name cannot be empty.", "DISPLAY_NAME_REQUIRED");
+  if (displayName.length > 80) throw new HttpError(422, "A display name must be 80 characters or fewer.", "DISPLAY_NAME_TOO_LONG");
+  return withDomainContext(identity.id, async (tx) => {
+    const [updated] = await tx.update(userProfiles)
+      .set({ displayName, updatedAt: new Date() })
+      .where(eq(userProfiles.userId, identity.id))
+      .returning({ displayName: userProfiles.displayName });
+    await tx.execute(sql`select public.app_record_profile_correction(${identity.id}, 'display_name')`);
     return updated;
+  });
+}
+
+/** The overdue counts, for the operations screen and the readiness card. */
+export async function getGrievanceClocks(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin", "support_agent", "safety_officer"])) {
+    throw new HttpError(403, "You do not have access to the support queues.", "OPERATIONS_ACCESS_REQUIRED");
+  }
+  return withUserContext(identity.id, async (tx) => {
+    const window = await tx.execute<{ hours: number | null }>(sql`select public.app_privacy_response_window_hours() as hours`);
+    const requests = await tx.execute<{
+      open_requests: number;
+      overdue_requests: number;
+      oldest_open_at: string | null;
+      oldest_overdue_hours: number;
+    }>(sql`select * from public.app_overdue_privacy_requests(coalesce(public.app_privacy_response_window_hours(), 72))`);
+    const cases = await tx.execute<{ open_cases: number; overdue_cases: number }>(
+      sql`select * from public.app_overdue_support_cases(coalesce(public.app_privacy_response_window_hours(), 72))`,
+    );
+    return {
+      windowHours: window.rows[0]?.hours ?? null,
+      privacyRequests: requests.rows[0] ?? { open_requests: 0, overdue_requests: 0, oldest_open_at: null, oldest_overdue_hours: 0 },
+      supportCases: cases.rows[0] ?? { open_cases: 0, overdue_cases: 0 },
+    };
   });
 }
 
@@ -2810,6 +2914,7 @@ const ATTESTATION_LABELS = {
   insurance: "Insurance",
   data_protection_contact: "Data-protection contact",
   penetration_test: "Independent penetration test",
+  support_response_window: "Privacy response window",
 } as const;
 
 type AttestationKey = keyof typeof ATTESTATION_LABELS;
@@ -2833,6 +2938,14 @@ export async function getLaunchReadiness(identity: Identity) {
   if (!hasAnyRole(identity, ["operations_admin", "security_admin", "safety_officer", "support_agent"])) {
     throw new HttpError(403, "You do not have access to the operations workspace.", "OPERATIONS_ACCESS_REQUIRED");
   }
+  // The database already knows the answers to the seven declarations and the two facts added in
+  // migration 22. Reading them from SQL rather than re-deriving them here means the screen cannot
+  // disagree with the constraint that actually governs whether a partner is covered.
+  const declared = await withUserContext(identity.id, async (tx) => {
+    const result = await tx.execute<Record<string, boolean>>(sql`select * from public.app_launch_readiness()`);
+    return result.rows[0] ?? null;
+  });
+
   const [attestations, shifts] = await withUserContext(identity.id, async (tx) => {
     const attestationRows = await tx.select({
       key: platformAttestations.key,
@@ -2854,6 +2967,19 @@ export async function getLaunchReadiness(identity: Identity) {
   const email = getEmailDeliveryStatus();
   return evaluateReadiness({
     now: new Date(),
+    declared: declared
+      ? {
+          legal_entity: Boolean(declared.legal_entity),
+          insurance: Boolean(declared.insurance),
+          data_protection_contact: Boolean(declared.data_protection_contact),
+          on_call: Boolean(declared.on_call),
+          penetration_test: Boolean(declared.penetration_test),
+          partner_insurance: Boolean(declared.partner_insurance),
+          partner_agreement: Boolean(declared.partner_agreement),
+          subject_rights: Boolean(declared.subject_rights),
+          grievance_window: Boolean(declared.grievance_window),
+        }
+      : undefined,
     attestations: attestations.map((row) => ({
       key: row.key,
       label: row.label,
@@ -3072,5 +3198,17 @@ export async function updateDirectoryPlace(identity: Identity, input: DirectoryP
       consentStatus: input.consentStatus,
     });
     return { slug: input.slug, name: existing.name };
+  });
+}
+
+/** The signed-in person's own profile row. Used by the profile page and the self-correction panel. */
+export async function getUserProfile(userId: string) {
+  return withUserContext(userId, async (tx) => {
+    const [row] = await tx.select({
+      displayName: userProfiles.displayName,
+      accountStatus: userProfiles.accountStatus,
+      requestedRole: userProfiles.requestedRole,
+    }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1);
+    return row ?? null;
   });
 }

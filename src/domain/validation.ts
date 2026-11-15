@@ -463,6 +463,17 @@ export const attestationSchema = z.discriminatedUnion("key", [
       scopeSummary: safeText(1_000),
     }).strict(),
   }).strict(),
+  // A response window is a number of hours and nothing else. It is deliberately not a promise
+  // about outcomes, and it cannot be recorded without naming who staffs it.
+  z.object({
+    key: z.literal("support_response_window"),
+    evidenceReference,
+    expiresAt: futureDay.nullish(),
+    value: z.object({
+      hours: z.number().int().min(1).max(2160),
+      staffedBy: safeText(200),
+    }).strict(),
+  }).strict(),
 ]);
 
 export const onCallShiftSchema = z.object({
@@ -538,4 +549,13 @@ export const retentionRunSchema = z.object({
 export const erasureSchema = z.object({
   userId: z.string().trim().min(1).max(200),
   reason: z.string().trim().min(10).max(1000),
+}).strict();
+
+/**
+ * The single field a person may correct about themselves without review. Everything else — an
+ * organisation's legal name, a partner phone number, a verification status — is a record other people
+ * act on and stays behind a reviewed request.
+ */
+export const displayNameSchema = z.object({
+  displayName: z.string().trim().min(1).max(80),
 }).strict();

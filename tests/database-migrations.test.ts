@@ -25,6 +25,7 @@ const migrationFiles = [
   "20261115213000_directory_phone_consent.sql",
   "20261115230000_food_safety_attestation_and_recovery.sql",
   "20261116090000_data_retention_and_holds.sql",
+  "20261116120000_privacy_subject_rights.sql",
 ];
 
 let database: PGlite;
@@ -940,9 +941,12 @@ describe("Transit limits and receiver self-collection", () => {
 
   it("reports partner coverage and the agreement as unmet until partners hold them", async () => {
     const empty = await database.query<Record<string, boolean>>("SELECT * FROM public.app_launch_readiness()");
+    // Migration 22 appended two columns. Pinning the exact list means adding a third requires
+    // deliberately editing this test, which is the point: a readiness check that grows silently is
+    // a readiness check nobody reads.
     expect(Object.keys(empty.rows[0] ?? {}).sort()).toEqual([
-      "data_protection_contact", "insurance", "legal_entity", "on_call",
-      "partner_agreement", "partner_insurance", "penetration_test",
+      "data_protection_contact", "grievance_window", "insurance", "legal_entity", "on_call",
+      "partner_agreement", "partner_insurance", "penetration_test", "subject_rights",
     ]);
     // Verified partners exist in this fixture and at least one has not accepted the agreement, so
     // the gate must not claim coverage it cannot show.
@@ -1258,5 +1262,182 @@ describe("the audit trail stays append-only after migration 21", () => {
       "SELECT details FROM public.audit_events WHERE action = 'identity.redacted'",
     );
     expect(result.rows[0]?.details).toEqual({});
+  });
+});
+
+/**
+ * Migration 22: the three promises that were previously prose.
+ *
+ * Each test here corresponds to a sentence that used to be a claim and is now a constraint. The
+ * erasure test is the important one: before migration 22 an operator could mark an erasure request
+ * `completed` having done nothing at all, and the person would be told their data was erased.
+ */
+describe("privacy subject rights", () => {
+  const person = "subject-rights-person";
+  const operator = "subject-rights-operator";
+
+  beforeAll(async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('subject-rights-person', 'Meera Nair', 'meera.nair@example.test', true),
+        ('subject-rights-operator', 'Ops Lead', 'privacy-ops@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status, display_name) VALUES
+        ('subject-rights-person', 'active', 'Meera'),
+        ('subject-rights-operator', 'active', 'Ops');
+      INSERT INTO public.platform_roles (user_id, role, reason) VALUES
+        ('subject-rights-operator', 'security_admin', 'Fixture: privacy operator');
+      INSERT INTO public.notifications (user_id, kind, title, body) VALUES
+        ('subject-rights-person', 'test', 'A notification', 'with a body');
+      INSERT INTO public.data_requests (user_id, request_type, description, status) VALUES
+        ('subject-rights-person', 'erasure', 'Please erase my account', 'submitted');
+    `);
+  });
+
+  it("refuses to mark an erasure complete without a redaction behind it", async () => {
+    await expect(database.query(
+      "UPDATE public.data_requests SET status = 'completed', completed_at = now() WHERE user_id = $1 AND request_type = 'erasure'",
+      [person],
+    )).rejects.toThrow(/data_requests_erasure_requires_redaction/);
+  });
+
+  it("allows every other request type to complete without a redaction", async () => {
+    await database.query(`
+      INSERT INTO public.data_requests (user_id, request_type, description, status, completed_at)
+      VALUES ($1, 'access', 'Send me my data', 'completed', now())
+    `, [person]);
+    const rows = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.data_requests WHERE user_id = $1 AND request_type = 'access'",
+      [person],
+    );
+    expect(rows.rows[0]?.count).toBe(1);
+  });
+
+  it("produces an export that contains the person's own rows and nothing else", async () => {
+    const result = await database.query<{ document: Record<string, unknown> }>(
+      "SELECT public.app_export_person($1) AS document", [person],
+    );
+    const document = result.rows[0]?.document as Record<string, unknown> & {
+      account: { email: string };
+      notifications: unknown[];
+      privacyRequests: unknown[];
+      about: { whatThisIsNot: string };
+    };
+    expect(document.account.email).toBe("meera.nair@example.test");
+    expect(document.notifications).toHaveLength(1);
+    // The erasure request and the completed access request are both in the person's own record.
+    expect(document.privacyRequests.length).toBeGreaterThanOrEqual(2);
+    // The document says what it is not, rather than implying it is the whole truth.
+    expect(document.about.whatThisIsNot).toMatch(/free text/);
+  });
+
+  it("records the export as a disclosure, because an export is one", async () => {
+    const rows = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.audit_events WHERE action = 'privacy.export_generated' AND entity_id = $1",
+      [person],
+    );
+    expect(Number(rows.rows[0]?.count)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("refuses to export an account that does not exist instead of returning an empty document", async () => {
+    await expect(database.query("SELECT public.app_export_person('no-such-person')"))
+      .rejects.toThrow(/no account exists/);
+  });
+
+  it("lets a person correct their own display name but nothing that belongs to somebody else", async () => {
+    await database.query("UPDATE public.user_profiles SET display_name = 'Meera N.' WHERE user_id = $1", [person]);
+    await database.query("SELECT public.app_record_profile_correction($1, 'display_name')", [person]);
+
+    const audit = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.audit_events WHERE action = 'privacy.self_correction' AND entity_id = $1",
+      [person],
+    );
+    expect(Number(audit.rows[0]?.count)).toBe(1);
+
+    // The audited list is an allow-list of one, enforced in the function.
+    await expect(database.query("SELECT public.app_record_profile_correction($1, 'account_status')", [person]))
+      .rejects.toThrow(/not self-service correctable/);
+  });
+
+  it("gives the application role no way to change an account status through the profile grant", async () => {
+    const grants = await database.query<{ can_update_status: boolean; can_update_name: boolean }>(`
+      SELECT has_column_privilege('annapurna_app', 'public.user_profiles', 'account_status', 'UPDATE') AS can_update_status,
+             has_column_privilege('annapurna_app', 'public.user_profiles', 'display_name', 'UPDATE') AS can_update_name
+    `);
+    expect(grants.rows[0]).toEqual({ can_update_status: false, can_update_name: true });
+  });
+
+  it("measures how long a complaint has waited, and calls it overdue past the window", async () => {
+    await database.query("UPDATE public.data_requests SET created_at = now() - interval '10 days' WHERE user_id = $1", [person]);
+    const result = await database.query<{ open_requests: number; overdue_requests: number; oldest_overdue_hours: number }>(
+      "SELECT * FROM public.app_overdue_privacy_requests(72)",
+    );
+    expect(Number(result.rows[0]?.overdue_requests)).toBeGreaterThanOrEqual(1);
+    expect(Number(result.rows[0]?.oldest_overdue_hours)).toBeGreaterThan(200);
+  });
+
+  it("treats an unrecorded window as unmade rather than assuming a default", async () => {
+    const window = await database.query<{ hours: number | null }>(
+      "SELECT public.app_privacy_response_window_hours() AS hours",
+    );
+    expect(window.rows[0]?.hours).toBeNull();
+
+    const readiness = await database.query<{ grievance_window: boolean; subject_rights: boolean }>(
+      "SELECT grievance_window, subject_rights FROM public.app_launch_readiness()",
+    );
+    // No window recorded, so the grievance gate cannot be met — whatever the request queue looks like.
+    expect(readiness.rows[0]?.grievance_window).toBe(false);
+    // The subject-rights machinery is present from the schema alone.
+    expect(readiness.rows[0]?.subject_rights).toBe(true);
+  });
+
+  it("goes green once a window is recorded and nothing has waited past it", async () => {
+    await database.query(`
+      INSERT INTO public.platform_attestations (key, label, value, recorded_by, evidence_reference)
+      VALUES ('support_response_window', 'Privacy response window', '{"hours": 720}'::jsonb, $1, 'Two operators, not a service level')
+    `, [operator]);
+    const readiness = await database.query<{ grievance_window: boolean }>(
+      "SELECT grievance_window FROM public.app_launch_readiness()",
+    );
+    // A 720-hour window comfortably covers the 10-day-old fixture.
+    expect(readiness.rows[0]?.grievance_window).toBe(true);
+
+    // Tighten the window below the age of the open request and the gate reopens by itself.
+    await database.query(`
+      UPDATE public.platform_attestations SET value = '{"hours": 1}'::jsonb WHERE key = 'support_response_window'
+    `);
+    const reopened = await database.query<{ grievance_window: boolean }>(
+      "SELECT grievance_window FROM public.app_launch_readiness()",
+    );
+    expect(reopened.rows[0]?.grievance_window).toBe(false);
+  });
+
+  it("performs the redaction when the erasure is finally completed properly", async () => {
+    const redacted = await database.query<{ redacted_users: number; redacted_notifications: number }>(
+      "SELECT * FROM public.app_redact_user($1, 'Erasure request DR-2026-011, identity verified by phone')",
+      [person],
+    );
+    expect(Number(redacted.rows[0]?.redacted_users)).toBe(1);
+
+    // Only now can the request move to completed, and it carries the redaction it performed.
+    await database.query(`
+      UPDATE public.data_requests
+      SET status = 'completed', completed_at = now(), redacted_at = now(), redacted_by = $2,
+          redaction_detail = '{"redactedUsers": 1}'::jsonb,
+          resolution = 'Erasure request DR-2026-011 fulfilled after an identity check.'
+      WHERE user_id = $1 AND request_type = 'erasure'
+    `, [person, operator]);
+
+    const request = await database.query<{ status: string; redacted_at: string | null }>(
+      "SELECT status, redacted_at FROM public.data_requests WHERE user_id = $1 AND request_type = 'erasure'",
+      [person],
+    );
+    expect(request.rows[0]?.status).toBe("completed");
+    expect(request.rows[0]?.redacted_at).not.toBeNull();
+
+    const account = await database.query<{ name: string; email: string }>(
+      "SELECT name, email FROM public.\"user\" WHERE id = $1", [person],
+    );
+    expect(account.rows[0]?.name).toBe("Redacted account");
+    expect(account.rows[0]?.email).toContain("@invalid");
   });
 });

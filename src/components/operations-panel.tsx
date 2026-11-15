@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { LaunchReadinessPanel } from "@/components/launch-readiness-panel";
 import { DirectoryPanel } from "@/components/directory-panel";
 import { RetentionPanel } from "@/components/retention-panel";
+import { GrievanceClock } from "@/components/grievance-clock";
 import { OrganizationDocuments } from "@/components/organization-documents";
 
 type ServiceArea = { id: string; label: string; countryCode: string; stateOrRegion: string | null; cityOrDistrict: string | null; timezone: string; active: boolean };
@@ -299,6 +300,8 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
 
     {(isOperations || isSecurity) && <DirectoryPanel canWrite={isOperations || isSecurity} />}
 
+    {(isOperations || isSupport || isSecurity || isSafety) && <GrievanceClock />}
+
     {/* Retention is readable by safety officers too, but only operations and security may act. */}
     {(isOperations || isSecurity || isSafety) && (
       <RetentionPanel canWrite={isOperations || isSecurity} canErase={isSecurity} />
@@ -344,9 +347,9 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
     </section>}
 
     {(isOperations || isSupport || isSecurity) && <section id="privacy-requests" className="app-card app-card--full">
-      <div className="app-card-title"><div><h2>Personal-data request queue</h2><p>Requests remain under review until authorised privacy/security staff record an outcome. Do not infer deletion or export completion.</p></div></div>
+      <div className="app-card-title"><div><h2>Personal-data request queue</h2><p>Requests remain under review until authorised privacy/security staff record an outcome. Recording an <strong>erasure</strong> request as completed now performs the redaction in the same transaction: it overwrites the person&apos;s name, email and credentials and cannot be undone. Every other request type is a decision you carry out by hand.</p></div></div>
       {dataRequests.length ? <div className="data-list">{dataRequests.map((request) => <article className="operation-record" key={request.id}>
-        <div className="operation-record-head"><div><strong>{request.requestType.replaceAll("_", " ")}</strong><small>{request.userName || request.userId} · submitted {formatDate(request.createdAt)}</small><small>{request.description || "No additional details"}</small>{request.resolution && <small>Reviewer note: {request.resolution}</small>}</div><span className={`status-pill status-pill--${request.status}`}>{request.status.replaceAll("_", " ")}</span></div>
+        <div className="operation-record-head"><div><strong>{request.requestType.replaceAll("_", " ")}</strong><small>{request.userName || request.userId} · submitted {formatDate(request.createdAt)}</small><small>{request.description || "No additional details"}</small>{request.resolution && <small>Reviewer note: {request.resolution}</small>}{request.requestType === "erasure" && request.status !== "completed" && request.status !== "rejected" && <small><strong>Choosing Completed below erases this account immediately and permanently.</strong> Their receipts and the audit trail are kept.</small>}</div><span className={`status-pill status-pill--${request.status}`}>{request.status.replaceAll("_", " ")}</span></div>
         {(isOperations || isSecurity) && <form className="form-stack" onSubmit={(event) => submitForm(event, `data-${request.id}`, `/api/data-requests/${request.id}`, (form) => ({ status: form.get("status"), resolution: form.get("resolution") }), "Privacy request review recorded.", "PATCH")}>
           <div className="form-field"><label htmlFor={`data-status-${request.id}`}>Decision status</label><select className="form-control" id={`data-status-${request.id}`} name="status" defaultValue={request.status === "submitted" ? "in_review" : request.status}><option value="in_review">In review</option><option value="awaiting_user">Awaiting user</option><option value="completed">Completed</option><option value="rejected">Rejected</option></select></div>
           <div className="form-field"><label htmlFor={`data-resolution-${request.id}`}>Reviewer response</label><textarea className="form-control" id={`data-resolution-${request.id}`} name="resolution" required maxLength={800} rows={2} /></div>

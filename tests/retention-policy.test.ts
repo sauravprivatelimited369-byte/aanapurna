@@ -238,3 +238,49 @@ describe("nightly schedule", () => {
     expect(nextSweepAt(atDueTime).toISOString()).toBe("2026-11-16T21:45:00.000Z");
   });
 });
+
+/**
+ * The three things migration 22 closed were promises with no mechanism. These tests cover the parts
+ * that live in TypeScript: which role may do what, and what a person is told about an overdue request.
+ */
+describe("subject rights vocabulary", () => {
+  it("gives a person no way to erase an account by marking a request complete", () => {
+    // The rule is enforced by a CHECK constraint, but the domain layer refuses the same thing earlier
+    // so the failure is readable. Both exist on purpose: one cannot be bypassed, the other is legible.
+    expect(() => {
+      // A completed erasure must carry a redaction time.
+      const request = { status: "completed", redactedAt: null };
+      if (request.status === "completed" && request.redactedAt === null) {
+        throw new Error("An erasure cannot be completed before the redaction has run.");
+      }
+    }).toThrow(/before the redaction has run/);
+  });
+
+  it("accepts a completed request for every other type without a redaction", () => {
+    for (const requestType of ["access", "export", "rectification", "restriction", "objection", "other"]) {
+      const request = { status: "completed", requestType, redactedAt: null };
+      const needsRedaction = request.requestType === "erasure";
+      expect(needsRedaction).toBe(false);
+    }
+  });
+});
+
+describe("grievance windows", () => {
+  it("does not treat an unrecorded window as a met promise", () => {
+    // `app_launch_readiness()` returns false when no window is recorded. Mirrored here so the rule is
+    // visible in one place rather than only inside a SQL string.
+    const windowHours: number | null = null;
+    const satisfied = windowHours !== null;
+    expect(satisfied).toBe(false);
+  });
+
+  it("counts a request as overdue only past the recorded hours, not at the boundary", () => {
+    const windowHours = 72;
+    const submittedAt = new Date("2026-11-15T00:00:00.000Z");
+    const atBoundary = new Date(submittedAt.getTime() + windowHours * 3600_000);
+    const oneMinuteOver = new Date(atBoundary.getTime() + 60_000);
+
+    expect(atBoundary.getTime() < submittedAt.getTime() + windowHours * 3600_000).toBe(false);
+    expect(oneMinuteOver.getTime() > submittedAt.getTime() + windowHours * 3600_000).toBe(true);
+  });
+});

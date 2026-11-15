@@ -80,6 +80,24 @@ Run `npm run local:migrate` on a native development instance, or `docker compose
 
 **The windows are maximums, not targets.** Nothing is deleted early, and a row on hold is never deleted at all. Whether 90 days for a notification is the right number is an owner and legal decision; the repository only guarantees that whatever number is set is the number enforced.
 
+### Subject rights (migration 22)
+
+Migration 21 left three promises as prose. They are now mechanisms.
+
+| Object | What it does |
+|---|---|
+| `data_requests_erasure_requires_redaction` | A request whose type is `erasure` cannot reach `status = 'completed'` unless `redacted_at` is set. Before this, staff could mark an erasure complete having done nothing, and the person was told their data was erased. |
+| `app_export_person(text)` | Returns one JSON document containing every row the application holds about an account: profile, registration details, memberships, roles, notifications, donations created, receipts signed, custody events, support and privacy requests, the retention actions that ran, and any legal hold. Built from an explicit table list, so a new table does not enter an export until somebody adds it deliberately. Every call is audited as `privacy.export_generated`. |
+| `app_record_profile_correction(text, text)` | Records a self-service correction. The allow-list is one field, `display_name`; anything else raises. The application role's `UPDATE` grant on `user_profiles` is column-level, so `account_status` and `email` remain unreachable through that path. |
+| `app_overdue_privacy_requests(int)` / `app_overdue_support_cases(int)` | How long the queues have waited against a window. A measurement, not a service level. |
+| `app_privacy_response_window_hours()` | The recorded window, or NULL. A window nobody recorded is not a window, and readiness reports it that way. |
+
+`app_launch_readiness()` gained two columns, `subject_rights` and `grievance_window`. The first is true from the schema alone once migration 22 is applied. The second requires a recorded window **and** nothing sitting past it, so an unanswered complaint reopens the gate by itself.
+
+**What a completed erasure does now.** `updateDataRequest` performs the redaction in the same transaction that sets the status, through `app_redact_user`. The person's name, email and credentials are overwritten, their sessions and sign-in methods are destroyed, and their free-text profile fields are cleared. Their receipts, custody events and the audit trail stay, because those answer for what happened to the food. The erasure itself is written to the audit trail. A staff member cannot erase their own account through this path (`ERASURE_SELF_REFUSED`).
+
+**What is still not implemented.** A person cannot yet correct their own email or a partner's contact details without a reviewed request, and there is no automated rectification workflow: those are handled as `rectification` requests by a human. The export is JSON only. Grievance handling has a clock but no escalation beyond the readiness gate.
+
 
 ## Disposable backup/restore drill
 

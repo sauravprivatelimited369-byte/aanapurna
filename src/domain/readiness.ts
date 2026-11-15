@@ -20,7 +20,9 @@ export type ReadinessKey =
   | "email_delivery"
   | "malware_scanner"
   | "partner_insurance"
-  | "partner_agreement";
+  | "partner_agreement"
+  | "subject_rights"
+  | "grievance_window";
 
 export type ReadinessItem = {
   key: ReadinessKey;
@@ -50,7 +52,15 @@ export type ReadinessInput = {
    * declarations, which lets a public endpoint report readiness without reading the values.
    */
   declared?: Partial<Record<
-    "legal_entity" | "insurance" | "data_protection_contact" | "on_call" | "penetration_test" | "partner_insurance" | "partner_agreement",
+    | "legal_entity"
+    | "insurance"
+    | "data_protection_contact"
+    | "on_call"
+    | "penetration_test"
+    | "partner_insurance"
+    | "partner_agreement"
+    | "subject_rights"
+    | "grievance_window",
     boolean
   >>;
   attestations: AttestationRecord[];
@@ -89,6 +99,10 @@ export const OWNER_ACTIONS: Record<ReadinessKey, string> = {
     "Every verified partner records its own policy reference and expiry from Its organisation page. Until each one is current, the answer to \"who is covered if someone is harmed\" is nobody.",
   partner_agreement:
     "A named member of every verified partner accepts the current responsibility agreement. When the agreement text changes, each partner is asked again rather than silently grandfathered.",
+  subject_rights:
+    "Nothing to buy: this turns green from the schema alone once migration 22 is applied. It is here so a deployment that cannot produce an export or honour an erasure is visibly incomplete rather than quietly assumed to work.",
+  grievance_window:
+    "Decide how fast a person gets an answer, record it as the support response window on the register, then answer inside it. An unrecorded window reads as unmet, because a promise nobody made cannot be kept.",
 };
 
 export function evaluateReadiness(input: ReadinessInput): { items: ReadinessItem[]; complete: boolean; missing: ReadinessKey[] } {
@@ -201,6 +215,26 @@ export function evaluateReadiness(input: ReadinessInput): { items: ReadinessItem
         ? "Every verified partner has accepted the current responsibility agreement."
         : "At least one verified partner has not accepted the current agreement version.",
       ownerAction: OWNER_ACTIONS.partner_agreement,
+      expiresAt: null,
+    },
+    {
+      key: "subject_rights",
+      label: "People can get and correct their data",
+      satisfied: input.declared?.subject_rights ?? false,
+      detail: input.declared?.subject_rights
+        ? "A person can download everything held about them, correct their own display name, and an erasure cannot be marked complete without actually erasing."
+        : "The subject-rights machinery is not fully in place: either the export function, the redaction function, or the constraint that refuses a hollow erasure is missing.",
+      ownerAction: OWNER_ACTIONS.subject_rights,
+      expiresAt: null,
+    },
+    {
+      key: "grievance_window",
+      label: "Complaints answered inside a stated window",
+      satisfied: input.declared?.grievance_window ?? false,
+      detail: input.declared?.grievance_window
+        ? "A response window is recorded on the register and nothing is currently sitting past it."
+        : "Either no response window has been recorded — so there is nothing to meet — or a privacy request or support case has been open past the window that was recorded.",
+      ownerAction: OWNER_ACTIONS.grievance_window,
       expiresAt: null,
     },
     {

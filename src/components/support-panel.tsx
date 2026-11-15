@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 
 type Membership = { organizationId: string; organizationName: string };
 type SupportCase = { id: string; reference: string; subject: string; description: string; status: string; createdAt: string; updatedAt: string };
-type DataRequest = { id: string; requestType: string; description: string | null; status: string; resolution: string | null; createdAt: string; completedAt: string | null };
+type DataRequest = { id: string; requestType: string; description: string | null; status: string; resolution: string | null; createdAt: string; completedAt: string | null; redactionDetail?: unknown };
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(value));
@@ -111,6 +111,7 @@ export function SupportPanel({ memberships, responseWindowHours }: { memberships
     <section className="app-card app-card--span-6">
       <div className="app-card-title"><div><h2>Privacy and personal-data request</h2><p>Submit a request for review. The platform will not claim completion until an authorised reviewer records the outcome.</p></div></div>
       <form className="form-stack" onSubmit={(event) => void submit(event, "/api/data-requests", "Your personal-data request was submitted for review.")}>
+        <p className="muted">Erasure and rectification are reviewed by a person, not applied automatically. You can download a copy of your own data immediately from your profile page, and change your own display name there too. Erasure ends your sign-in methods; your receipts and the record of what happened to food are kept.</p>
         <div className="form-field"><label htmlFor="data-request-type">Request type</label><select className="form-control" id="data-request-type" name="requestType" required defaultValue="access"><option value="access">Access my personal data</option><option value="export">Export a copy</option><option value="rectification">Correct inaccurate data</option><option value="erasure">Request erasure</option><option value="restriction">Restrict processing</option><option value="objection">Object to processing</option><option value="other">Other privacy request</option></select></div>
         <div className="form-field"><label htmlFor="data-request-description">Details for the privacy reviewer <span className="form-hint">(optional)</span></label><textarea className="form-control" id="data-request-description" name="description" maxLength={1000} rows={4} /></div>
         <button className="button button--secondary button--small" type="submit" disabled={sending}>{sending ? "Submitting…" : "Submit privacy request"}</button>
