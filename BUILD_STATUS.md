@@ -236,3 +236,51 @@ Complete and verify the requested end-to-end donation/offer/concurrent assignmen
 1. In a controlled, isolated staging setup, validate database roles/migrations and worker/email/reset behavior; test role-specific flows with authorized synthetic fixtures and keep `OPERATIONS_ENABLED=false`.
 2. Verify Docker/Compose, upload scanning, backup/restore and external services on a supported host.
 3. Complete the manual protected-workspace and accessibility reviews, then obtain required human policy/legal/privacy/security and partner approvals before any pilot. Keep `OPERATIONS_ENABLED=false` until those approvals and operational checks are recorded.
+
+## Dispatch reliability and backlog escalation (migration 14)
+
+Triggered by the operational questions "what if the Helper is not available", "how do we get more
+people to help" and "who notices when nobody claims the food". Three of those had code answers.
+Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth migration.
+
+- **Helper dispatch fan-out.** `app_notify_area_helpers(donation, kind, title, body, href)` is a
+  `SECURITY DEFINER` function that selects recipients itself: approved, active Helpers in the
+  donation's service area whose account is active, capped at 500, excluding the caller. It refuses a
+  caller who is not platform staff and not a party to the donation. `respondToOffer` calls it when an
+  accepted offer creates a claimable job, so Helpers learn about work at the moment it exists instead
+  of having to poll.
+- **Backlog escalation.** `app_escalate_delivery_backlog(threshold_minutes, document_horizon_days)`
+  notifies `operations_admin` and `safety_officer` holders once per open job that has sat unclaimed
+  past the threshold or whose claim has expired, and once per partner document inside its expiry
+  horizon. A signed-in caller must hold one of those roles; a background caller is authorised by the
+  EXECUTE grant only. Each item is marked (`delivery_jobs.escalated_at`,
+  `private_documents.expiry_notified_at`) so a five-minute schedule is not a notification flood. It
+  writes one audit event per run.
+- **Operations release of a stalled assignment.** `assigned -> open` was previously forbidden by
+  `app_guard_delivery_update`, so a Helper who claimed a job and vanished left the food with no path
+  except a hold or a cancellation. The guard now permits that single transition when the Helper is
+  cleared and the caller holds `operations_admin`/`safety_officer`; the matching donation guard
+  permits `assigned -> reserved`. `releaseDeliveryAssignment` writes a custody event, an audit event
+  (with the reason and the previous Helper), notifies the parties and the previous Helper, and
+  re-broadcasts to the area. It refuses once collection is recorded — then the incident and hold
+  process applies.
+- **Hosted pipeline.** `runEscalationSweep` is called from a new Graphile Worker task
+  (`*/5 * * * * escalate-delivery-backlog`) and from the scheduled `/api/worker/drain` route, because
+  this Vercel deployment cannot host the long-lived worker. An escalation failure is reported
+  separately and does not make the mail drain look failed.
+- **Verification.** `tests/database-migrations.test.ts` now applies fourteen migrations and asserts:
+  both new columns exist and are **not** updatable by `annapurna_app`; each function is granted to the
+  right role and not to `PUBLIC`; the fan-out reaches only the active Helper in the area (not the
+  suspended Helper, not the Helper in another area); an unrelated caller is refused; the sweep
+  escalates exactly once; a non-operations signed-in caller is refused; and the release transition
+  still requires a cleared Helper plus a platform role. `npm run typecheck`, `npm run lint` and
+  `npm test` (175 tests) pass locally. `npm run db:check` now requires both functions and at least
+  fourteen migrations.
+- **Applied to the hosted database** `wlpibnftabirwtziwubv` and verified there by direct query: both
+  columns exist, both functions exist as `SECURITY DEFINER` with `app_execute = true`,
+  `worker_execute` only on the sweep, and `public_execute = false`. The application code that calls
+  them is on the branch and has **not** been deployed; the hosted site therefore still runs the
+  previous build, and no end-to-end dispatch notification has been observed in production.
+- **Still open:** no standby rota or named coordinator (people), no distance/ETA logic or receiver
+  self-collection path (product), and no SMTP credential, so password reset still cannot reach a
+  user. See the status column in [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

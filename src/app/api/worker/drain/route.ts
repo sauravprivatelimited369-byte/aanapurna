@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "@/lib/database-config";
 import { verifyGithubOidcToken, fetchGithubJwks } from "@/worker/github-oidc";
 import { drainEmailOutboxOnce } from "@/worker/outbox-drain";
+import { runEscalationSweep } from "@/worker/escalation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,11 +90,27 @@ export async function POST(request: Request) {
   });
   try {
     const result = await drainEmailOutboxOnce(pool);
+    // This deployment cannot host the long-lived worker, so the same scheduled
+    // invocation also runs the backlog sweep. An escalation failure must not
+    // make the mail drain look failed: it is reported separately.
+    let escalation: { status: "ok"; unclaimedJobs: number; expiringDocuments: number } | { status: "error" };
+    try {
+      const sweep = await runEscalationSweep(pool);
+      escalation = { status: "ok", ...sweep };
+    } catch (error) {
+      console.error(JSON.stringify({
+        level: "error",
+        event: "worker.escalation_failed",
+        message: error instanceof Error ? error.message : "unknown",
+      }));
+      escalation = { status: "error" };
+    }
     return json({
       status: result.delivered ? "ok" : "deferred",
       schedule: "one-batch",
       via: authorization.via,
       ...result,
+      escalation,
     }, 200);
   } catch (error) {
     console.error(JSON.stringify({

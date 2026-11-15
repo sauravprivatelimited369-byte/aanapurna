@@ -325,11 +325,15 @@ export const deliveryJobs = pgTable(
     collectionCondition: text("collection_condition"),
     deliveryCondition: text("delivery_condition"),
     exceptionReason: text("exception_reason"),
+    // Set by the escalation sweep once operations staff have been told an open
+    // job has gone unclaimed, so the same job is not reported every run.
+    escalatedAt: instant("escalated_at"),
     createdAt: instant("created_at").notNull().defaultNow(),
     updatedAt: instant("updated_at").notNull().defaultNow(),
   },
   (table) => [
     index("delivery_jobs_helper_status_idx").on(table.helperUserId, table.status),
+    index("delivery_jobs_open_escalation_idx").on(table.status, table.escalatedAt, table.createdAt),
     index("delivery_jobs_receiver_status_idx").on(table.receiverOrganizationId, table.status),
     uniqueIndex("delivery_jobs_active_helper_uq").on(table.helperUserId, table.donationId),
   ],
@@ -522,6 +526,9 @@ export const privateDocuments = pgTable(
     documentType: text("document_type").notNull(),
     scanStatus: text("scan_status").notNull().default("unscanned"),
     expiresAt: instant("expires_at"),
+    // Set when operations have been reminded that this evidence is expiring, so
+    // the reminder is sent once per document rather than on every sweep.
+    expiryNotifiedAt: instant("expiry_notified_at"),
     createdAt: instant("created_at").notNull().defaultNow(),
   },
   (table) => [index("private_documents_org_idx").on(table.organizationId, table.createdAt)],

@@ -16,6 +16,7 @@ const migrationFiles = [
   "20261113190000_auth_registration_and_guards.sql",
   "20261114120000_revoke_public_api_privileges.sql",
   "20261114150000_recall_records_and_worker_heartbeat.sql",
+  "20261115090000_helper_dispatch_and_escalation.sql",
 ];
 
 let database: PGlite;
@@ -30,13 +31,18 @@ async function applyAllMigrations() {
   }
 }
 
-async function withRole(role: "annapurna_app" | "annapurna_worker", userId: string | null, callback: () => Promise<void>) {
+async function withRole<T>(
+  role: "annapurna_app" | "annapurna_worker",
+  userId: string | null,
+  callback: () => Promise<T>,
+): Promise<T> {
   await database.exec(`SET ROLE ${role}`);
   await database.exec("BEGIN");
   if (userId !== null) await database.query("SELECT set_config('app.user_id', $1, true)", [userId]);
   try {
-    await callback();
+    const value = await callback();
     await database.exec("COMMIT");
+    return value;
   } catch (error) {
     await database.exec("ROLLBACK").catch(() => undefined);
     throw error;
@@ -475,5 +481,176 @@ describe("Supabase PostgREST roles", () => {
         has_table_privilege('annapurna_app', 'public.donations', 'SELECT') AS app_can_read
     `);
     expect(after.rows[0]).toEqual({ tables: 0, functions: 0, defaults: 0, app_can_read: true });
+  });
+});
+
+describe("Helper dispatch and backlog escalation", () => {
+  const area = "00000000-0000-0000-0000-000000000301";
+  const otherArea = "00000000-0000-0000-0000-000000000302";
+  const generator = "00000000-0000-0000-0000-000000000311";
+  const receiver = "00000000-0000-0000-0000-000000000312";
+  const donation = "00000000-0000-0000-0000-000000000321";
+  const offer = "00000000-0000-0000-0000-000000000331";
+  const job = "00000000-0000-0000-0000-000000000341";
+
+  beforeAll(async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('dispatch-ops', 'Dispatch operations', 'dispatch-ops@example.test', true),
+        ('dispatch-helper', 'Dispatch helper', 'dispatch-helper@example.test', true),
+        ('dispatch-helper-other-area', 'Other area helper', 'dispatch-helper-2@example.test', true),
+        ('dispatch-helper-suspended', 'Suspended helper', 'dispatch-helper-3@example.test', true),
+        ('dispatch-outsider', 'Ordinary member', 'dispatch-outsider@example.test', true);
+
+      INSERT INTO public.user_profiles (user_id, account_status, display_name) VALUES
+        ('dispatch-ops', 'active', 'Dispatch operations'),
+        ('dispatch-helper', 'active', 'Dispatch helper'),
+        ('dispatch-helper-other-area', 'active', 'Other area helper'),
+        ('dispatch-helper-suspended', 'active', 'Suspended helper'),
+        ('dispatch-outsider', 'active', 'Ordinary member');
+
+      INSERT INTO public.platform_roles (user_id, role, reason) VALUES
+        ('dispatch-ops', 'operations_admin', 'Fixture operations administrator');
+
+      INSERT INTO public.service_areas (id, label, country_code, timezone, active) VALUES
+        ('${area}', 'Fixture dispatch area', 'IN', 'Asia/Kolkata', true),
+        ('${otherArea}', 'Fixture other area', 'IN', 'Asia/Kolkata', true);
+
+      INSERT INTO public.organizations (
+        id, name, type, status, service_area_id, operating_address, city_or_district,
+        contact_name, contact_email, created_by, reviewed_by, reviewed_at
+      ) VALUES
+        ('${generator}', 'Fixture dispatch Generator', 'generator', 'verified', '${area}', 'Fixture only', 'Fixture only', 'Test contact', 'dispatch-ops@example.test', 'dispatch-ops', 'dispatch-ops', now()),
+        ('${receiver}', 'Fixture dispatch Receiver', 'receiver', 'verified', '${area}', 'Fixture only', 'Fixture only', 'Test contact', 'dispatch-ops@example.test', 'dispatch-ops', 'dispatch-ops', now());
+
+      INSERT INTO public.helper_profiles (user_id, status, service_area_id) VALUES
+        ('dispatch-helper', 'active', '${area}'),
+        ('dispatch-helper-other-area', 'active', '${otherArea}'),
+        ('dispatch-helper-suspended', 'suspended', '${area}');
+
+      INSERT INTO public.donations (
+        id, generator_organization_id, receiver_organization_id, service_area_id, created_by,
+        name, category, food_type, quantity, unit, prepared_at, best_before_at,
+        pickup_earliest_at, pickup_latest_at, storage_instructions, pickup_city, policy_version, status
+      ) VALUES (
+        '${donation}', '${generator}', '${receiver}', '${area}', 'dispatch-ops',
+        'Fixture dispatch meal', 'produce', 'vegetarian', 10, 'servings', now() - interval '1 hour',
+        now() + interval '4 hours', now() - interval '10 minutes', now() + interval '40 minutes',
+        'Fixture only', 'Fixture only', 'fixture-policy', 'reserved'
+      );
+
+      INSERT INTO public.donation_offers (id, donation_id, receiver_organization_id, status, expires_at)
+      VALUES ('${offer}', '${donation}', '${receiver}', 'accepted', now() + interval '1 hour');
+
+      INSERT INTO public.delivery_jobs (
+        id, donation_id, offer_id, generator_organization_id, receiver_organization_id, status, created_at
+      ) VALUES (
+        '${job}', '${donation}', '${offer}', '${generator}', '${receiver}', 'open', now() - interval '45 minutes'
+      );
+    `);
+  });
+
+  it("adds the escalation bookkeeping columns without granting them to the app role", async () => {
+    const columns = await database.query<{ table_name: string; column_name: string; app_can_update: boolean }>(`
+      SELECT table_name, column_name,
+        has_column_privilege('annapurna_app', format('public.%I', table_name), column_name, 'UPDATE') AS app_can_update
+      FROM information_schema.columns
+      WHERE (table_name = 'delivery_jobs' AND column_name = 'escalated_at')
+         OR (table_name = 'private_documents' AND column_name = 'expiry_notified_at')
+      ORDER BY table_name
+    `);
+    expect(columns.rows).toHaveLength(2);
+    expect(columns.rows.every((row) => row.app_can_update === false)).toBe(true);
+  });
+
+  it("grants the new functions to the roles that need them and to nobody else", async () => {
+    const grants = await database.query<{
+      signature: string;
+      app: boolean;
+      worker: boolean;
+      public_execute: boolean;
+    }>(`
+      SELECT p.oid::regprocedure::text AS signature,
+        has_function_privilege('annapurna_app', p.oid, 'EXECUTE') AS app,
+        has_function_privilege('annapurna_worker', p.oid, 'EXECUTE') AS worker,
+        EXISTS (SELECT 1 FROM aclexplode(p.proacl) a JOIN pg_roles r ON r.oid = a.grantee
+                WHERE r.rolname = 'public' AND a.privilege_type = 'EXECUTE') AS public_execute
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public'
+        AND p.proname IN ('app_notify_area_helpers', 'app_escalate_delivery_backlog')
+      ORDER BY p.proname
+    `);
+    expect(grants.rows).toHaveLength(2);
+    const byName = new Map(grants.rows.map((row) => [row.signature.split("(")[0], row]));
+    expect(byName.get("app_escalate_delivery_backlog")).toMatchObject({ app: true, worker: true, public_execute: false });
+    expect(byName.get("app_notify_area_helpers")).toMatchObject({ app: true, worker: false, public_execute: false });
+  });
+
+  it("notifies only active, approved Helpers in the donation's service area", async () => {
+    await withRole("annapurna_app", "dispatch-ops", async () => {
+      const result = await database.query<{ count: number }>(
+        `SELECT public.app_notify_area_helpers($1::uuid, 'delivery.available', 'A delivery needs a Helper', 'Fixture body', $2) AS count`,
+        [donation, `/app/deliveries/${job}`],
+      );
+      expect(Number(result.rows[0]?.count)).toBe(1);
+    });
+
+    const recipients = await database.query<{ user_id: string }>(`
+      SELECT user_id FROM public.notifications WHERE kind = 'delivery.available' ORDER BY user_id
+    `);
+    expect(recipients.rows.map((row) => row.user_id)).toEqual(["dispatch-helper"]);
+  });
+
+  it("refuses the Helper fan-out for a caller with no relationship to the donation", async () => {
+    await expect(
+      withRole("annapurna_app", "dispatch-outsider", async () => {
+        await database.query(
+          `SELECT public.app_notify_area_helpers($1::uuid, 'delivery.available', 'A delivery needs a Helper', 'Fixture body', $2)`,
+          [donation, `/app/deliveries/${job}`],
+        );
+      }),
+    ).rejects.toThrow(/not authorized/i);
+  });
+
+  it("escalates an unclaimed job to operations exactly once", async () => {
+    const first = await withRole("annapurna_worker", null, async () => {
+      const result = await database.query<{ unclaimed_jobs: number; expiring_documents: number }>(
+        "SELECT * FROM public.app_escalate_delivery_backlog(30, 14)",
+      );
+      return result.rows[0]!;
+    });
+    expect(Number(first.unclaimed_jobs)).toBe(1);
+    expect(Number(first.expiring_documents)).toBe(0);
+
+    const escalated = await database.query<{ escalated_at: string | null }>(
+      "SELECT escalated_at FROM public.delivery_jobs WHERE id = $1", [job],
+    );
+    expect(escalated.rows[0]?.escalated_at).not.toBeNull();
+
+    const second = await withRole("annapurna_worker", null, async () => {
+      const result = await database.query<{ unclaimed_jobs: number }>(
+        "SELECT * FROM public.app_escalate_delivery_backlog(30, 14)",
+      );
+      return result.rows[0]!;
+    });
+    expect(Number(second.unclaimed_jobs)).toBe(0);
+  });
+
+  it("refuses a signed-in caller who is not an operations or safety human", async () => {
+    await expect(
+      withRole("annapurna_app", "dispatch-outsider", async () => {
+        await database.query("SELECT * FROM public.app_escalate_delivery_backlog(30, 14)");
+      }),
+    ).rejects.toThrow(/not authorized/i);
+  });
+
+  it("keeps the operations release transition narrow", async () => {
+    const transitions = await database.query<{ source: string }>(`
+      SELECT pg_get_functiondef('public.app_guard_delivery_update()'::regprocedure) AS source
+    `);
+    const source = transitions.rows[0]?.source ?? "";
+    // The only permitted route back to `open` requires a cleared Helper and a
+    // platform operations role; ordinary open/assigned/collected paths remain.
+    expect(source).toMatch(/NEW\.status::text = 'open'[\s\S]*NEW\.helper_user_id IS NULL[\s\S]*app_has_platform_role/);
   });
 });

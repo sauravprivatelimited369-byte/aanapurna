@@ -161,6 +161,27 @@ async function notifyOrganization(
   `);
 }
 
+/**
+ * Fans a notification out to every approved, active Helper in the donation's
+ * service area. The database function performs the recipient selection and the
+ * caller check, so a client cannot address arbitrary users.
+ */
+async function notifyAreaHelpers(
+  tx: AppTransaction,
+  donationId: string,
+  kind: string,
+  title: string,
+  body: string,
+  href: string,
+): Promise<number> {
+  const result = await tx.execute<{ app_notify_area_helpers: number }>(sql`
+    select public.app_notify_area_helpers(
+      ${donationId}::uuid, ${kind}, ${title}, ${body}, ${href}
+    ) as app_notify_area_helpers
+  `);
+  return Number(result.rows[0]?.app_notify_area_helpers ?? 0);
+}
+
 async function notifyUser(
   tx: AppTransaction,
   userId: string,
@@ -644,6 +665,19 @@ export async function respondToOffer(identity: Identity, offerId: string, input:
     });
     await audit(tx, identity, "offer.accepted", "donation_offer", offer.id, undefined, { donationId: offer.donationId, deliveryJobId: job?.id }, offer.receiverOrganizationId);
     await notifyOrganization(tx, offer.generatorOrganizationId, offer.donationId, "offer.accepted", "A Receiver accepted your offer", `${offer.donationName} is reserved. A Helper can now claim the delivery.`, `/app/listings/${offer.donationId}`);
+    // A job that only becomes visible when somebody opens the app depends on
+    // volunteers guessing. Tell the approved Helpers in this service area that
+    // there is work, at the moment it becomes claimable.
+    if (job?.id) {
+      await notifyAreaHelpers(
+        tx,
+        offer.donationId,
+        "delivery.available",
+        "A delivery needs a Helper",
+        `${offer.donationName} is reserved and waiting for collection in your service area. Claim it only if you can complete the collection window.`,
+        `/app/deliveries/${job.id}`,
+      );
+    }
     return { status: "accepted" as const, deliveryJobId: job?.id };
   });
 }
@@ -709,8 +743,84 @@ export async function claimDelivery(identity: Identity, jobId: string) {
   });
 }
 
-export async function confirmPickup(identity: Identity, jobId: string, input: PickupInput) {
+/**
+ * Operations release of an uncollected assignment.
+ *
+ * A Helper who claims a job and then becomes unreachable used to leave the food
+ * with no legitimate path forward: the state machine forbade `assigned -> open`
+ * and the only remaining options were a hold or a cancelled delivery. This
+ * returns the job to the open pool with a recorded reason, a custody event, an
+ * audit entry and fresh notifications, and it deliberately fails once food has
+ * been collected — after collection the incident and hold process applies.
+ */
+export async function releaseDeliveryAssignment(identity: Identity, jobId: string, input: { reason: string }) {
   assertOperationsEnabled();
+  if (!hasAnyRole(identity, ["operations_admin", "safety_officer"])) {
+    throw new HttpError(403, "Only an authorised operations or safety role can release an assignment.", "RELEASE_NOT_PERMITTED");
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 10 || reason.length > 500) {
+    throw new HttpError(422, "Record why the assignment is being released (at least 10 characters).", "RELEASE_REASON_REQUIRED");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const [job] = await tx.select({
+      id: deliveryJobs.id,
+      donationId: deliveryJobs.donationId,
+      status: deliveryJobs.status,
+      helperUserId: deliveryJobs.helperUserId,
+      collectedAt: deliveryJobs.collectedAt,
+      generatorOrganizationId: deliveryJobs.generatorOrganizationId,
+      receiverOrganizationId: deliveryJobs.receiverOrganizationId,
+      name: donations.name,
+      donationStatus: donations.status,
+    }).from(deliveryJobs)
+      .innerJoin(donations, eq(donations.id, deliveryJobs.donationId))
+      .where(eq(deliveryJobs.id, jobId)).for("update");
+    if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
+    if (job.collectedAt || job.status === "collected") {
+      throw new HttpError(409, "The food has already been collected. Record an incident and hold instead of releasing the assignment.", "DELIVERY_ALREADY_COLLECTED");
+    }
+    if (job.status !== "assigned") throw new HttpError(409, "Only an assigned delivery can be released.", "DELIVERY_NOT_ASSIGNED");
+
+    const now = new Date();
+    const previousHelperUserId = job.helperUserId;
+    await tx.update(deliveryJobs).set({
+      status: "open",
+      helperUserId: null,
+      claimedAt: null,
+      claimExpiresAt: null,
+      // A released job is unclaimed again, so the backlog sweep may escalate it.
+      escalatedAt: null,
+      updatedAt: now,
+    }).where(eq(deliveryJobs.id, job.id));
+    if (job.donationStatus === "assigned") {
+      await tx.update(donations).set({ status: "reserved", updatedAt: now }).where(eq(donations.id, job.donationId));
+    }
+    await tx.insert(custodyEvents).values({
+      donationId: job.donationId,
+      deliveryJobId: job.id,
+      actorUserId: identity.id,
+      eventType: "operations.assignment_released",
+      occurredAt: now,
+      details: { reason, previousHelperUserId },
+    });
+    await audit(tx, identity, "delivery.assignment_released", "delivery_job", job.id, reason, { previousHelperUserId });
+    if (previousHelperUserId) {
+      await notifyUser(tx, previousHelperUserId, null, "delivery.released", "Your assignment was released",
+        `${job.name} was returned to the open pool by operations. Recorded reason: ${reason}`, `/app/deliveries/${job.id}`);
+    }
+    await notifyOrganization(tx, job.generatorOrganizationId, job.donationId, "delivery.released",
+      "A delivery was reassigned", `${job.name} is waiting for a new Helper. Reason: ${reason}`, `/app/deliveries/${job.id}`);
+    await notifyOrganization(tx, job.receiverOrganizationId, job.donationId, "delivery.released",
+      "Your delivery was reassigned", `${job.name} is waiting for a new Helper. Reason: ${reason}`, `/app/deliveries/${job.id}`);
+    await notifyAreaHelpers(tx, job.donationId, "delivery.available", "A delivery needs a Helper",
+      `${job.name} is available again after a reassignment. Claim it only if you can complete the collection window.`,
+      `/app/deliveries/${job.id}`);
+    return { status: "open" as const, previousHelperUserId };
+  });
+}
+
+export async function confirmPickup(identity: Identity, jobId: string, input: PickupInput) {  assertOperationsEnabled();
   return withDomainContext(identity.id, async (tx) => {
     const [job] = await tx.select({
       id: deliveryJobs.id,
@@ -1095,6 +1205,9 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       canVerify: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "collected" && Boolean(job.inspectionConfirmedAt),
       canViewCode: process.env.OPERATIONS_ENABLED === "true" && receiverOperator && job.status === "collected" && Boolean(job.inspectionConfirmedAt),
       canReportIncident: generatorMember || receiverMember || assignedHelper || operations,
+      // Operations may return an uncollected assignment to the pool when a
+      // Helper stops responding. Not offered once food has been collected.
+      canReleaseAssignment: process.env.OPERATIONS_ENABLED === "true" && operations && job.status === "assigned" && !job.collectedAt,
     };
   });
 }

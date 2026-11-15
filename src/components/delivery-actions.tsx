@@ -12,6 +12,7 @@ export function DeliveryActions({
   canVerify,
   canViewCode,
   canReportIncident,
+  canReleaseAssignment,
 }: {
   jobId: string;
   canClaim: boolean;
@@ -21,6 +22,7 @@ export function DeliveryActions({
   canVerify: boolean;
   canViewCode: boolean;
   canReportIncident: boolean;
+  canReleaseAssignment: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -34,6 +36,7 @@ export function DeliveryActions({
   const [incidentType, setIncidentType] = useState("quality_concern");
   const [severity, setSeverity] = useState("moderate");
   const [incidentDescription, setIncidentDescription] = useState("");
+  const [releaseReason, setReleaseReason] = useState("");
 
   async function request(method: "POST", path: string, body?: Record<string, unknown>) {
     const response = await fetch(path, { method, cache: "no-store", headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
@@ -87,6 +90,13 @@ export function DeliveryActions({
     finally { setBusy(false); }
   }
 
+  async function releaseAssignment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(""); setMessage("");
+    try { await request("POST", `/api/jobs/${jobId}/release`, { reason: releaseReason.trim() }); setReleaseReason(""); setMessage("The assignment was released back to the open pool. The reason, the previous Helper and the time are recorded in the custody and audit records."); router.refresh(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "The assignment could not be released."); }
+    finally { setBusy(false); }
+  }
+
   async function reportIncident(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(""); setMessage("");
     try { await request("POST", `/api/jobs/${jobId}/incident`, { incidentType, severity, description: incidentDescription.trim() }); setIncidentDescription(""); setMessage("The concern was recorded. Follow the approved hold and escalation procedure; operations and safety staff were notified."); router.refresh(); }
@@ -101,6 +111,7 @@ export function DeliveryActions({
     {canConfirmInspection && <form className="form-stack" onSubmit={confirmInspection}><p className="form-hint">Check the delivery using your approved operating procedure. If you cannot accept it, report a concern below and contact operations instead. The platform does not certify food safety.</p><div className="form-field"><label htmlFor="inspection-notes">Acceptance check observations</label><textarea className="form-control" id="inspection-notes" required maxLength={500} value={inspectionNotes} onChange={(event) => setInspectionNotes(event.target.value)} placeholder="Record relevant packaging and handling observations" /></div><label><input type="checkbox" checked={acceptanceConfirmed} onChange={(event) => setAcceptanceConfirmed(event.target.checked)} required /> I confirm the Helper has physically arrived, my organisation has completed its checks, and we accept this delivery.</label><button className="button button--primary" type="submit" disabled={busy || !acceptanceConfirmed || !inspectionNotes.trim()}>{busy ? "Recording…" : "Record checks and acceptance"}</button></form>}
     {canViewCode && <div className="form-stack"><p className="form-hint">Only request this when the Helper has physically arrived and your acceptance checks are complete. Never share the code earlier.</p><button className="button button--secondary" type="button" onClick={() => void revealCode()} disabled={busy}>{code ? "Refresh delivery code" : "Show delivery code"}</button>{code && <div className="otp-display" aria-label="One-time delivery code"><span>{code.slice(0,3)}</span><span>{code.slice(3)}</span></div>}</div>}
     {canVerify && <form className="form-stack" onSubmit={verify}><div className="form-field"><label htmlFor="delivery-code">Receiver&apos;s six-digit code</label><input className="form-control otp-input" id="delivery-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} minLength={6} required value={verificationCode} onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" /></div><span className="form-hint">This field is sent only to the verification endpoint; the code is never returned to the Helper.</span><button className="button button--primary" type="submit" disabled={busy || verificationCode.length !== 6}>{busy ? "Verifying…" : "Verify delivery"}</button></form>}
+    {canReleaseAssignment && <details className="incident-details"><summary>Operations: release this assignment</summary><form className="form-stack" onSubmit={releaseAssignment}><p className="form-hint">Use this when the assigned Helper cannot complete the collection. The delivery returns to the open pool and the Helper is notified. Once food has been collected, this is unavailable — record an incident and a hold instead.</p><div className="form-field"><label htmlFor="release-reason">Why is this being released?</label><textarea className="form-control" id="release-reason" required minLength={10} maxLength={500} value={releaseReason} onChange={(event) => setReleaseReason(event.target.value)} placeholder="For example: Helper unreachable after 40 minutes and collection window closes in 25 minutes" /></div><button className="button button--secondary" type="submit" disabled={busy || releaseReason.trim().length < 10}>{busy ? "Releasing…" : "Release assignment"}</button></form></details>}
     {canReportIncident && <details className="incident-details"><summary>Report a concern or incident</summary><form className="form-stack" onSubmit={reportIncident}><div className="form-field"><label htmlFor="incident-type">Concern type</label><select className="form-control" id="incident-type" value={incidentType} onChange={(event) => setIncidentType(event.target.value)}><option value="damaged_packaging">Damaged packaging</option><option value="temperature_concern">Temperature concern</option><option value="allergen_mismatch">Allergen or label mismatch</option><option value="quality_concern">Quality concern</option><option value="delay">Delay</option><option value="failed_collection">Failed collection</option><option value="other">Other</option></select></div><div className="form-field"><label htmlFor="incident-severity">Severity</label><select className="form-control" id="incident-severity" value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option><option value="critical">Critical</option></select></div><div className="form-field"><label htmlFor="incident-description">What happened?</label><textarea className="form-control" id="incident-description" required maxLength={1000} value={incidentDescription} onChange={(event) => setIncidentDescription(event.target.value)} /></div><button className="button button--danger" type="submit" disabled={busy}>{busy ? "Submitting…" : "Submit report"}</button></form></details>}
     {error && <div className="auth-error" role="alert">{error}</div>}{message && <div className="auth-status" role="status">{message}</div>}
   </div>;

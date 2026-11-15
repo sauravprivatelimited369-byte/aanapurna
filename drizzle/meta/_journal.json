@@ -92,6 +92,13 @@
       "when": 1794610800000,
       "tag": "20261114150000_recall_records_and_worker_heartbeat",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794720000000,
+      "tag": "20261115090000_helper_dispatch_and_escalation",
+      "breakpoints": true
     }
   ]
 }

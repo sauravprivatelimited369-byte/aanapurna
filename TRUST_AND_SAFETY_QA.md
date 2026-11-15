@@ -87,22 +87,35 @@ The system handles the *no-show* case; it does not solve the *not enough people*
   the job stays open to an exception, and `INCIDENT_RESPONSE.md` defines that path.
 - Active helpers are refused if their approval lapses mid-delivery (`HELPER_NOT_APPROVED`).
 
-**Known gap, stated plainly: when a delivery job becomes `open`, the application does not notify
-available helpers.** Notifications go to the generator and receiver organisations when an offer is
-accepted and when a helper claims. A helper finds work by opening the app. There is no broadcast, no
-standby rota, no escalation timer, and no "nobody claimed this in 20 minutes, page the coordinator"
-rule. `OPERATING_MODEL.md` relies on "the first Helper whose conditional claim succeeds", which
-assumes a pool that is already looking.
+**Fixed in code (migration 14):** the three parts of this that software can carry now exist.
 
-**Also true:** every handover currently needs a helper to claim the job. There is no
-"receiver collects it themselves" path in the workflow.
+1. **Dispatch fan-out.** When an accepted offer creates a claimable job, every approved, active
+   Helper in that service area is notified (`app_notify_area_helpers`). The recipient list is chosen
+   inside a `SECURITY DEFINER` function with its own caller check — a client cannot address arbitrary
+   users, and suspended Helpers are excluded.
+2. **Unclaimed-job escalation.** A sweep (`app_escalate_delivery_backlog`) tells operations and
+   safety staff once about any job that has sat unclaimed past a threshold (default 30 minutes) or
+   whose claim has expired. Each job is reported once, tracked by `delivery_jobs.escalated_at`.
+3. **Operations release.** An uncollected assignment can be returned to the open pool with a
+   recorded reason (`POST /api/jobs/[id]/release`, operations or safety roles only). Before this,
+   the state machine forbade `assigned -> open` and a Helper who vanished left the food with no path
+   except a hold. The release writes a custody event, an audit record, notifies the parties and the
+   previous Helper, and re-broadcasts to the area.
 
-**What would actually produce more helpers (people, not code):** a named coordinator per area; a
-published pickup window people can plan around; short, local, low-friction jobs; a standby rota with
-named backups; reciprocal obligation between generators and receivers; recognition that does not
-pretend to be payment. **And a small code fix:** notify active helpers in the service area when a job
-opens, and escalate to operations when an open job passes a threshold unclaimed. That is a
-straightforward addition, and it is tracked in the gap register below — not yet built.
+The sweep runs from the Graphile Worker crontab (`*/5 * * * *`) and, on this hosted deployment where
+no long-lived worker exists, from the same scheduled `/api/worker/drain` invocation that drains the
+mail outbox. Thresholds are configurable with `ESCALATION_THRESHOLD_MINUTES` and
+`ESCALATION_DOCUMENT_HORIZON_DAYS`.
+
+**Still true, and not fixable in code:** every handover needs a Helper to claim the job; there is no
+"receiver collects it themselves" path. Software can notify, escalate and reassign — it cannot create
+volunteers. A standby rota, a named coordinator per area and published pickup windows are people
+decisions, not features.
+
+**What would actually produce more helpers:** a named coordinator per area; a published pickup window
+people can plan around; short, local, low-friction jobs; a standby rota with named backups;
+reciprocal obligation between generators and receivers; recognition that does not pretend to be
+payment.
 
 ---
 
@@ -122,6 +135,11 @@ geocoding and paid maps (`PRODUCT_REQUIREMENTS.md`). There is no radius check, n
 estimate, and no feasibility check that the pickup and drop-off are reachable inside the food's
 remaining window. For the current pilot — Joka · IIM Calcutta, Kolkata — that is defensible because
 distances are short and known to the people involved. It is not defensible for "vast" distances.
+
+**What now catches the symptom rather than the cause:** a job nobody claims is escalated to
+operations within the threshold window (migration 14), so a delivery that stalls because the distance
+or the timing was unrealistic is visible while the food is still inside its pickup window, instead of
+being discovered after it expires. That is a backstop, not a routing engine.
 
 **The honest rule before expanding:** if a route cannot be completed well inside the declared
 shelf-life and pickup window by a named person with a known vehicle, do not list that food in that
@@ -330,18 +348,26 @@ those values in GitHub, chat, or a committed `.env`.
 
 Everything below is a real, open gap. None of it is solved by adding copy to the website.
 
-| # | Gap | Impact | Kind | Owner |
-|---|---|---|---|---|
-| G1 | Hosted email is a capture sink; password reset and verification reach nobody | Locked-out users cannot recover without operator help | Config | Owner: SMTP provider credential |
-| G2 | No notification when a delivery job opens; no standby rota, no unclaimed-job escalation | Jobs sit unclaimed; the "too busy" failure mode is unmitigated | Code + people | Engineering + operations |
-| G3 | No distance, travel time or ETA; only service-area equality. No receiver self-collection path | Unsafe to expand beyond a compact pilot area | Code | Product decision |
-| G4 | No second factor; CSP report-only; RLS not `FORCE`'d; no independent penetration test | Account takeover and defence-in-depth gaps remain | Code + review | Engineering + external reviewer |
-| G5 | No legal entity, insurance, liability position or signed partner agreement | Nobody is contractually answerable for harm | Legal | Owner |
-| G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | Incident response is a document, not a capability | People | Owner |
-| G7 | Backups scripted but hosted restore unproven | Data loss could be unrecoverable | Ops | Owner |
-| G8 | No human account-recovery path or published response time | "Our team will help" is not currently true | People | Owner |
-| G9 | File scanning not configured; partner evidence re-validation is a manual list | Upload and stale-approval risk | Code + ops | Engineering + operations |
-| G10 | Food-safety policy is `draft`; no qualified professional has signed it or the area rules | No real food may move | Professional review | Owner |
+| # | Gap | Status | Impact | Kind | Owner |
+|---|---|---|---|---|---|
+| G1 | Hosted email is a capture sink; password reset and verification reach nobody | **Open** | Locked-out users cannot recover without operator help | Config | Owner: SMTP provider credential |
+| G2a | No notification when a delivery job opens | **Fixed (migration 14)** — area Helpers are notified inside a checked database function | — | Code | — |
+| G2b | No unclaimed-job escalation | **Fixed (migration 14)** — sweep notifies operations once per stale job or lapsed claim | — | Code + schedule | — |
+| G2c | An unresponsive Helper blocked the delivery; `assigned -> open` was forbidden | **Fixed (migration 14)** — audited operations release, pre-collection only | — | Code | — |
+| G2d | No standby rota, named coordinator or published pickup window | **Open** | Dispatch still depends on people being reachable | People | Operations |
+| G3 | No distance, travel time or ETA; only service-area equality. No receiver self-collection path | **Open** — stall backstop added, routing not | Unsafe to expand beyond a compact pilot area | Code | Product decision |
+| G4 | No second factor; CSP report-only; RLS not `FORCE`'d; no independent penetration test | **Open** | Account takeover and defence-in-depth gaps remain | Code + review | Engineering + external reviewer |
+| G5 | No legal entity, insurance, liability position or signed partner agreement | **Open** | Nobody is contractually answerable for harm | Legal | Owner |
+| G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | **Open** | Incident response is a document, not a capability | People | Owner |
+| G7 | Backups scripted but hosted restore unproven | **Open** | Data loss could be unrecoverable | Ops | Owner |
+| G8 | No human account-recovery path or published response time | **Open** | "Our team will help" is not currently true | People | Owner |
+| G9a | Partner evidence expiring while the organisation stays verified | **Partially fixed (migration 14)** — operations are now reminded 14 days ahead, once per document | Re-validation decision is still manual | Code + ops | Operations |
+| G9b | File scanning not configured | **Open** (uploads stay blocked when scanning is disabled) | Upload risk | Code + ops | Engineering |
+| G10 | Food-safety policy is `draft`; no qualified professional has signed it or the area rules | **Open** | No real food may move | Professional review | Owner |
+
+"Fixed" here means the code, migration and tests exist and the migration is applied to the hosted
+database. It does not mean the hosted deployment has been exercised end to end with real accounts —
+`OPERATIONS_ENABLED` is still `false`.
 
 ---
 

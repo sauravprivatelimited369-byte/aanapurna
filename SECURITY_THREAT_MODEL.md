@@ -40,6 +40,9 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
 | 15 | Queue poisoning / replay | Graphile Worker job table plus idempotent handlers; `/api/worker/drain` requires GitHub OIDC | `src/worker`, `/api/worker/drain` |
 | 16 | Credential exposure in logs | Tokens and codes are never logged; `/api/auth/*` is excluded from request logging because verification URLs carry one-time credentials | `next.config.ts` |
 | 17 | Secret leakage in the browser bundle | No secret is referenced outside server-only modules; `server-only` guards domain and db modules | `src/domain`, `src/db` |
+| 18 | Notification fan-out used to spam or address arbitrary users | `app_notify_area_helpers` selects recipients itself (active, approved, same service area, capped) and checks the caller is a party to the donation or platform staff; no user list crosses the wire | `drizzle/20261115090000_*.sql` |
+| 19 | Escalation sweep driven by an ordinary user | A signed-in caller must hold `operations_admin` or `safety_officer`; a background caller is authorised only by the EXECUTE grant on the worker role; each job is reported once | same migration, `src/worker/escalation.ts` |
+| 20 | Releasing a delivery to hijack or delay it | Only `operations_admin`/`safety_officer`; only before collection; reason required; custody event, audit record and notifications written | `releaseDeliveryAssignment`, `POST /api/jobs/[id]/release` |
 
 ## Residual risks (accepted, documented, not fixed)
 

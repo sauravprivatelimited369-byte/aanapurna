@@ -1,11 +1,17 @@
 # Database implementation and limits
 
-PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and twelve ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
+PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and fourteen ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
 `20261114120000_revoke_public_api_privileges.sql`, removes every table, sequence
 and function privilege held by Supabase's `anon` and `authenticated` PostgREST
 roles and resets the matching default privileges, so a future object cannot
 inherit them. It is guarded so it is a no-op on plain PostgreSQL, where those
-roles do not exist.
+roles do not exist. Migration 14, `20261115090000_helper_dispatch_and_escalation.sql`, adds the
+Helper dispatch fan-out (`app_notify_area_helpers`), the idempotent backlog and evidence-expiry
+sweep (`app_escalate_delivery_backlog`), the two bookkeeping columns those functions own
+(`delivery_jobs.escalated_at`, `private_documents.expiry_notified_at`), and one narrow additional
+state transition: operations may release an uncollected assignment (`assigned -> open`). The columns
+are deliberately not granted to the application role; only the `SECURITY DEFINER` functions write
+them. `npm run db:check` now requires both functions and at least fourteen migrations.
 
 ## Existing model
 

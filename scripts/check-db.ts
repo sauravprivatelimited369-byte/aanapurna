@@ -47,7 +47,8 @@ async function main(): Promise<void> {
               'app_consume_delivery_code','app_mark_user_verified','app_find_receiver_candidates',
               'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
               'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
-              'app_guard_user_profile_status'
+              'app_guard_user_profile_status',
+              'app_notify_area_helpers','app_escalate_delivery_backlog'
             )) AS required_functions,
         (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations,
         -- Supabase's public PostgREST roles must not reach application objects.
@@ -73,8 +74,8 @@ async function main(): Promise<void> {
     const problems: string[] = [];
     if (row.bypass_rls) problems.push("runtime database role has BYPASSRLS");
     if (row.rls_tables < 23) problems.push(`expected at least 23 RLS-protected tables, found ${row.rls_tables}`);
-    if (row.required_functions !== 10) problems.push(`expected required database functions, found ${row.required_functions}/10`);
-    if (row.migrations < 12) problems.push(`expected at least 12 applied migrations, found ${row.migrations}`);
+    if (row.required_functions !== 12) problems.push(`expected required database functions, found ${row.required_functions}/12`);
+    if (row.migrations < 14) problems.push(`expected at least 14 applied migrations, found ${row.migrations}`);
     if (row.exposed_tables > 0) problems.push(`Supabase public API roles can reach ${row.exposed_tables} application table(s); apply 20261114120000_revoke_public_api_privileges`);
     if (row.exposed_functions > 0) problems.push(`Supabase public API roles can execute ${row.exposed_functions} application function(s); apply 20261114120000_revoke_public_api_privileges`);
     console.info(JSON.stringify({

@@ -38,9 +38,12 @@ inspection exists.
    is verified and whose declared capability matches the category. A Receiver accepts (wholly or
    partly) or declines with a reason inside the response window. Acceptance is not a safety finding;
    it is a capacity commitment.
-5. **Dispatch.** The first Helper whose conditional claim succeeds owns the job. A second Helper is
-   told it is taken. Before collection a Helper may release a job; after collection, only an
-   operations exception can reassign. The delivery code is not available to the Helper at any point.
+5. **Dispatch.** Every approved, active Helper in the service area is notified when a delivery
+   becomes claimable. The first Helper whose conditional claim succeeds owns the job; a second Helper
+   is told it is taken. If nobody claims it, or a claim expires, the backlog sweep tells operations
+   once. Before collection, operations can release a stalled assignment back to the open pool with a
+   recorded reason; after collection, only an incident and a hold can stop it. The delivery code is
+   not available to the Helper at any point.
 6. **Collection.** The Helper records collection with condition observations and any temperature
    reading the policy requires. A concern raised here can put the donation on hold instead of
    proceeding.
@@ -89,5 +92,10 @@ otherwise is a defect.
 - The launch gate `OPERATIONS_ENABLED` stops every donation action at once.
 - A recall stops a batch immediately without a deploy.
 - Any organisation can be suspended, which blocks its listings and offers on the next request.
+- An uncollected assignment can be released and re-broadcast when the assigned Helper cannot
+  complete it (`POST /api/jobs/[id]/release`, operations or safety role, reason recorded). Once food
+  has been collected this is deliberately unavailable: record an incident and a hold instead.
+- A job that stays unclaimed past `ESCALATION_THRESHOLD_MINUTES` (default 30) is escalated to
+  operations and safety staff exactly once, so no delivery waits silently.
 - Notifications are not a delivery mechanism for safety decisions: a recall notice is a courtesy,
   a phone call is the actual control.

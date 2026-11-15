@@ -191,6 +191,11 @@ export const incidentSchema = z.object({
   description: safeText(1_000),
 }).strict();
 
+/** Operations release of an uncollected assignment; the reason is the record. */
+export const deliveryReleaseSchema = z.object({
+  reason: safeText(500),
+}).strict();
+
 export const adminDecisionSchema = z.object({
   decision: z.enum(["approve", "request_information", "reject", "suspend"]),
   reason: safeText(500),
