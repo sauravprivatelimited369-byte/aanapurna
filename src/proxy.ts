@@ -53,6 +53,11 @@ const BASE_DIRECTIVES = [
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "connect-src 'self'",
+  // The service worker that shows a notification while the site is closed. It is same-origin, so
+  // `default-src 'self'` would already permit it, but naming it means a future tightening of the
+  // default cannot silently disable device notifications. `worker-src 'self'` is the directive that
+  // governs `navigator.serviceWorker.register`.
+  "worker-src 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",

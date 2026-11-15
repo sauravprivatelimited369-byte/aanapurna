@@ -64,3 +64,15 @@ describe("the endpoint this server will POST to", () => {
     expect(isUsableEndpoint(42)).toBe(false);
   });
 });
+
+describe("the security policy allows the worker that shows a notification", () => {
+  it("names worker-src explicitly rather than relying on default-src", async () => {
+    // `navigator.serviceWorker.register("/sw.js")` is governed by worker-src. It happens to be covered
+    // by `default-src 'self'` today, which is exactly why it needs naming: a future tightening of the
+    // default would silently switch off device notifications, and nothing would fail until somebody
+    // noticed they were not arriving.
+    const { buildCsp, buildPreRenderedCsp } = await import("@/proxy");
+    expect(buildCsp("test-nonce", { upgradeInsecureRequests: false })).toContain("worker-src 'self'");
+    expect(buildPreRenderedCsp({ upgradeInsecureRequests: false })).toContain("worker-src 'self'");
+  });
+});
