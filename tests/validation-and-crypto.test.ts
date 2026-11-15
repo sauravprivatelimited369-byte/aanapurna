@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  donationCreateSchema,
-  helperDecisionSchema,
-  inspectionSchema,
-  onboardingSchema,
-  policyDraftSchema,
-  serviceAreaSchema,
-} from "@/domain/validation";
+import { donationCreateSchema, helperDecisionSchema, incidentClosureSchema, incidentSchema, inspectionSchema, onboardingSchema, organizationInsuranceSchema, policyDraftSchema, serviceAreaSchema } from "@/domain/validation";
 import {
   createDeliveryCode,
   decryptValue,
@@ -85,10 +78,58 @@ describe("request validation", () => {
   });
 
   it("requires a Receiver's explicit acceptance and recorded inspection observations", () => {
-    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "Packaging checked" }).success).toBe(true);
-    expect(inspectionSchema.safeParse({ acceptanceConfirmed: false, notes: "Packaging checked" }).success).toBe(false);
-    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "  " }).success).toBe(false);
-    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "ok", ignored: true }).success).toBe(false);
+    const checks = { sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true };
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "Packaging checked", ...checks }).success).toBe(true);
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: false, notes: "Packaging checked", ...checks }).success).toBe(false);
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "  ", ...checks }).success).toBe(false);
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "ok", ...checks, ignored: true }).success).toBe(false);
+  });
+
+  it("will not accept an inspection that skips the arrival checks", () => {
+    // The question a receiver asks - was the seal intact, did the label match - cannot be answered
+    // by a note alone, so the structured checks are required rather than optional.
+    expect(inspectionSchema.safeParse({ acceptanceConfirmed: true, notes: "Packaging checked" }).success).toBe(false);
+    expect(inspectionSchema.safeParse({
+      acceptanceConfirmed: true, notes: "Checked",
+      sealIntact: true, packagingIntact: true, labelMatched: true,
+    }).success).toBe(false);
+    // A failed check is still a recorded decision, not a validation error: the receiver may accept
+    // knowingly, and that choice is what the record has to show.
+    expect(inspectionSchema.safeParse({
+      acceptanceConfirmed: true, notes: "Seal was broken but food looked fine",
+      sealIntact: false, packagingIntact: true, labelMatched: true, withinWindow: true,
+    }).success).toBe(true);
+  });
+
+  it("bounds a temperature reading to values a thermometer could plausibly show", () => {
+    const base = { acceptanceConfirmed: true, notes: "Checked", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true };
+    expect(inspectionSchema.safeParse({ ...base, temperatureC: 63.5 }).success).toBe(true);
+    expect(inspectionSchema.safeParse({ ...base, temperatureC: -18 }).success).toBe(true);
+    expect(inspectionSchema.safeParse({ ...base, temperatureC: 999 }).success).toBe(false);
+    expect(inspectionSchema.safeParse({ ...base, temperatureC: -100 }).success).toBe(false);
+    expect(inspectionSchema.safeParse({ ...base, photoSha256: "not-a-digest" }).success).toBe(false);
+    expect(inspectionSchema.safeParse({ ...base, photoSha256: "a".repeat(64) }).success).toBe(true);
+  });
+
+  it("records harm only with a description of it", () => {
+    const base = { incidentType: "other" as const, severity: "high" as const, description: "Reported by a receiver" };
+    expect(incidentSchema.safeParse({ ...base, harmReported: true }).success).toBe(false);
+    expect(incidentSchema.safeParse({ ...base, harmReported: true, harmDetails: "Two people reported pain" }).success).toBe(true);
+    expect(incidentSchema.safeParse(base).data?.harmReported).toBe(false);
+  });
+
+  it("will not close an incident without saying what changed", () => {
+    const base = { resolution: "Investigated with both organisations", harmReported: false };
+    expect(incidentClosureSchema.safeParse(base).success).toBe(false);
+    expect(incidentClosureSchema.safeParse({ ...base, correctiveAction: "Too short" }).success).toBe(false);
+    expect(incidentClosureSchema.safeParse({ ...base, correctiveAction: "Cold-holding limit added to the approved policy and re-briefed" }).success).toBe(true);
+    expect(incidentClosureSchema.safeParse({ ...base, correctiveAction: "Cold-holding limit added to the approved policy", harmReported: true }).success).toBe(false);
+  });
+
+  it("requires an insurance declaration to have a real, future expiry", () => {
+    expect(organizationInsuranceSchema.safeParse({ insurancePolicyReference: "POL-1", insuranceExpiresOn: "2020-01-01" }).success).toBe(false);
+    expect(organizationInsuranceSchema.safeParse({ insurancePolicyReference: "POL-1", insuranceExpiresOn: "2999-01-01" }).success).toBe(true);
+    expect(organizationInsuranceSchema.safeParse({ insurancePolicyReference: "", insuranceExpiresOn: "2999-01-01" }).success).toBe(false);
   });
 
   it("requires an IANA-like timezone string and uppercase ISO country code shape", () => {

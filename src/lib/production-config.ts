@@ -213,5 +213,29 @@ export function validateProductionConfig(
     warnings.push("OPERATIONS_ENABLED=true must not be used until human food-safety, legal, privacy and security approvals are recorded");
   }
 
+  // Web Push is optional: a deployment without keys is a deployment where nobody can turn on
+  // notifications, which is a lesser failure than a web app that will not start. It is reported
+  // rather than enforced so a build log answers "is push on here?" without anyone guessing, and so
+  // a half-configured pair — a public key with no private key signs nothing — is called out loudly
+  // instead of showing a button that fails when a person taps it.
+  const vapidPublic = env.WEB_PUSH_PUBLIC_KEY?.trim();
+  const vapidPrivate = env.WEB_PUSH_PRIVATE_KEY?.trim();
+  if (vapidPublic || vapidPrivate) {
+    if (!vapidPublic || !vapidPrivate) {
+      warnings.push("WEB_PUSH_PUBLIC_KEY and WEB_PUSH_PRIVATE_KEY must be set together; with only one of them push stays off");
+    } else if (vapidPublic.length < 40 || vapidPrivate.length < 20) {
+      warnings.push("WEB_PUSH_PUBLIC_KEY or WEB_PUSH_PRIVATE_KEY has the wrong shape for a VAPID key; push stays off");
+    } else {
+      const subject = env.WEB_PUSH_SUBJECT?.trim();
+      if (!subject) {
+        warnings.push("WEB_PUSH_SUBJECT is unset; push services are told to contact an unroutable default address");
+      } else if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) {
+        warnings.push("WEB_PUSH_SUBJECT must be a mailto: address or an https: URL");
+      }
+    }
+  } else {
+    warnings.push("WEB_PUSH_PUBLIC_KEY and WEB_PUSH_PRIVATE_KEY are not set; notifications to a person's device are off");
+  }
+
   return { ok: problems.length === 0, problems, warnings };
 }

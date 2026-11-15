@@ -93,3 +93,27 @@ export async function runEscalationSweep(
     expiringDocuments: Number(rows[0]?.expiring_documents ?? 0),
   };
 }
+
+export type RetentionSweepResult = {
+  totalAffected: number;
+  totalHeld: number;
+  categories: number;
+};
+
+/**
+ * Run the retention windows. Separate from every other sweep because a bug here deletes data, and
+ * a failing mail drain must never take the retention job down with it — or the reverse.
+ *
+ * The work happens inside `app_apply_retention`, which logs one row per category and skips anything
+ * under an active legal hold. This function only reports what happened.
+ */
+export async function runRetentionSweep(pool: Pool): Promise<RetentionSweepResult> {
+  const { rows } = await pool.query<{ category: string; action: string; affected_rows: number; skipped_by_hold: number }>(
+    "select * from public.app_apply_retention(false)",
+  );
+  return {
+    totalAffected: rows.reduce((sum, row) => sum + Number(row.affected_rows), 0),
+    totalHeld: rows.reduce((sum, row) => sum + Number(row.skipped_by_hold), 0),
+    categories: rows.length,
+  };
+}

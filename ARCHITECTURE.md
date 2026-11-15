@@ -11,8 +11,8 @@ Current as of commit `52e71ec` on branch `arena/5b937561-aanapurna`.
 | Component | Where | Responsibility |
 |---|---|---|
 | Web application | `src/app` (Next.js 16.4.6 App Router, React 19.3.1, TypeScript strict) | Server-rendered pages, route handlers, server-side session checks. No privileged database call is exported to the browser. |
-| Domain services | `src/domain/service.ts`, `src/domain/validation.ts` | Every state transition, policy check, authorisation decision and audit write. Zod schemas validate all input. |
-| Database access | `src/db/index.ts`, `src/db/schema.ts`, `drizzle/*.sql` | 31 tables, 13 checked-in migrations, Drizzle ORM. Three pools: `annapurna_app` (runtime), `annapurna_auth` (Better Auth), `annapurna_worker` (queue + outbox). Migrations run as a fourth, separate role. |
+| Domain services | `src/domain/service.ts`, `src/domain/validation.ts`, `src/domain/partner-agreement.ts` | Every state transition, policy check, authorisation decision and audit write; the versioned partner agreement text. Zod schemas validate all input. |
+| Database access | `src/db/index.ts`, `src/db/schema.ts`, `drizzle/*.sql` | 38 tables, 21 checked-in migrations, Drizzle ORM. Three pools: `annapurna_app` (runtime), `annapurna_auth` (Better Auth), `annapurna_worker` (queue + outbox). Migrations run as a fourth, separate role. |
 | Identity | `src/lib/auth.ts`, `src/lib/identity.ts` | Better Auth 1.7.21: email/password, verification, reset, database-backed rate limits, HTTP-only session cookies. `getIdentity()` returns the server-side role and membership picture, never a browser-supplied one. |
 | Background worker | `src/worker` | Graphile Worker 0.18.0 on PostgreSQL. Cron `drain-email-outbox` every minute, heartbeat every 30 seconds, graceful shutdown on SIGTERM/SIGINT. |
 | Outbox | `src/worker/outbox-drain.ts`, `/api/worker/drain` | Transactional email outbox with bounded retries. The same drain code runs as a long-lived worker or as a short-lived authenticated scheduler call (GitHub OIDC). |
@@ -43,6 +43,8 @@ Receiver accepts (partial ok)    → donation_offers (accepted) + job (open)
 Helper claims                    → delivery_jobs (assigned) via one conditional UPDATE
 Helper collects                  → delivery_jobs (collected) + custody event + inspection record
 Helper records arrival           → delivery_jobs (arrived); the code becomes visible to the Receiver
+Receiver records four checks   → inspection columns written once, guarded by a trigger and a CHECK;
+                                   a failed check is recorded, escalated and does not block acceptance
 Receiver shares 6-digit code     → app_consume_delivery_code() verifies hash, consumes, 5-attempt lock
 Helper submits code              → delivery_jobs (delivered) + exactly one delivery_receipts row
                                  → custody event + outbox notifications + impact aggregate
@@ -92,3 +94,7 @@ donation stays recalled.
   hosted where long-lived processes are allowed (Docker topology).
 - Account erasure is not possible under the append-only audit guard. A documented anonymisation
   path is required before real personal data is processed.
+- The partner agreement is plain-language and unreviewed by counsel. It is a record of what a partner
+  accepted, not a contract, and the readiness gate treats it as a stored declaration, not as proof.
+- Insurance is declared per organisation and never verified with an insurer. Readiness reports the
+  declarations, not the cover.

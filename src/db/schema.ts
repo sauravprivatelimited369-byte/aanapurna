@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -223,6 +224,14 @@ export const organizations = pgTable(
     receivingCapacity: numeric("receiving_capacity", { precision: 12, scale: 3 }),
     capacityUnit: text("capacity_unit"),
     foodCapabilities: text("food_capabilities").array().notNull().default([]),
+    // Evidence a human reviewed before the organisation was verified. These are declarations with a
+    // date and a reference, not certificates the platform issued, and they expire on their own.
+    insurancePolicyReference: text("insurance_policy_reference"),
+    insuranceExpiresOn: date("insurance_expires_on", { mode: "string" }),
+    // The agreement version this organisation accepted. Bumping the published agreement makes every
+    // previous acceptance visibly stale instead of silently grandfathered.
+    agreementVersion: text("agreement_version"),
+    agreementAcceptedAt: instant("agreement_accepted_at"),
     createdBy: text("created_by").notNull().references(() => user.id),
     reviewedBy: text("reviewed_by").references(() => user.id),
     reviewReason: text("review_reason"),
@@ -348,6 +357,15 @@ export const deliveryJobs = pgTable(
     inspectionConfirmedAt: instant("inspection_confirmed_at"),
     inspectionConfirmedBy: text("inspection_confirmed_by").references(() => user.id),
     inspectionNotes: text("inspection_notes"),
+    // The structured acceptance checks a Receiver performs on arrival. Kept separate from the free
+    // text so that "was a temperature read and recorded" is a fact the database can answer, not a
+    // sentence somebody wrote. Each column is nullable for deliveries that predate the checklist.
+    inspectionTemperatureC: numeric("inspection_temperature_c", { precision: 5, scale: 2 }),
+    inspectionSealIntact: boolean("inspection_seal_intact"),
+    inspectionPackagingIntact: boolean("inspection_packaging_intact"),
+    inspectionLabelMatched: boolean("inspection_label_matched"),
+    inspectionWithinWindow: boolean("inspection_within_window"),
+    inspectionPhotoSha256: text("inspection_photo_sha256"),
     deliveredAt: instant("delivered_at"),
     collectionCondition: text("collection_condition"),
     deliveryCondition: text("delivery_condition"),
@@ -584,6 +602,13 @@ export const safetyIncidents = pgTable(
     status: text("status").notNull().default("open"),
     holdApplied: boolean("hold_applied").notNull().default(false),
     resolution: text("resolution"),
+    // Harm assessment. "Was anyone made ill, and did they need care?" is the first question after a
+    // recall, and the answer has to be recorded by a person with a name and a time, not inferred.
+    harmReported: boolean("harm_reported").notNull().default(false),
+    harmDetails: text("harm_details"),
+    // The repair, as opposed to the closure: what changed so that the same failure cannot recur.
+    correctiveAction: text("corrective_action"),
+    correctiveActionOwner: text("corrective_action_owner").references(() => user.id),
     closedBy: text("closed_by").references(() => user.id),
     closedAt: instant("closed_at"),
     createdAt: instant("created_at").notNull().defaultNow(),
@@ -651,6 +676,11 @@ export const dataRequests = pgTable(
     resolution: text("resolution"),
     reviewedBy: text("reviewed_by").references(() => user.id),
     completedAt: instant("completed_at"),
+    // A completed erasure must carry the redaction it performed, enforced by a CHECK constraint in
+    // migration 22. Without these three columns `completed` was a status with nothing behind it.
+    redactedAt: instant("redacted_at"),
+    redactedBy: text("redacted_by").references(() => user.id, { onDelete: "set null" }),
+    redactionDetail: jsonb("redaction_detail"),
     createdAt: instant("created_at").notNull().defaultNow(),
   },
   (table) => [index("data_requests_user_status_idx").on(table.userId, table.status)],
@@ -667,3 +697,156 @@ export const policyVersions = pgTable("policy_versions", {
   effectiveFrom: instant("effective_from"),
   createdAt: instant("created_at").notNull().defaultNow(),
 });
+
+/**
+ * The written partner agreement, versioned and accepted in the application.
+ *
+ * `OPERATING_MODEL.md` says the operator needs "a written partner agreement stating who is
+ * responsible for which stage, and what happens on harm". This table is the record that a named
+ * member of an organisation read a specific version and accepted it. It is not a contract: the
+ * version text lives in `src/domain/partner-agreement.ts`, the acceptance records who and when, and
+ * a legal review is still required before anyone relies on it.
+ *
+ * There is deliberately no DELETE policy. An acceptance is evidence.
+ */
+export const partnerAgreementAcceptances = pgTable(
+  "partner_agreement_acceptances",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    version: text("version").notNull(),
+    acceptedBy: text("accepted_by").notNull().references(() => user.id),
+    acceptedAt: instant("accepted_at").notNull().defaultNow(),
+    // What the person was shown, hashed, so a later edit to the text cannot rewrite the record of
+    // what was accepted.
+    contentSha256: text("content_sha256").notNull(),
+  },
+  (table) => [
+    uniqueIndex("partner_agreement_org_version_uq").on(table.organizationId, table.version),
+    index("partner_agreement_org_idx").on(table.organizationId, table.acceptedAt),
+  ],
+);
+
+/**
+ * Account-recovery intake for a person who is not signed in.
+ *
+ * The existing operator-assisted reset (`/api/admin/account-recovery`) requires the person to reach
+ * an operator by some other channel. This table is that channel: a locked-out person states which
+ * address needs help and what happened, operations see it in the queue, and the resolution column
+ * records the outcome. It cannot be used to enumerate accounts because the success response is
+ * identical either way, and the recorded request is rate-limited per address and per IP.
+ */
+export const accountRecoveryRequests = pgTable(
+  "account_recovery_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reference: text("reference").notNull().unique(),
+    email: text("email").notNull(),
+    detail: text("detail").notNull(),
+    status: text("status").notNull().default("submitted"),
+    resolvedBy: text("resolved_by").references(() => user.id),
+    resolution: text("resolution"),
+    resolvedAt: instant("resolved_at"),
+    createdAt: instant("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("account_recovery_status_idx").on(table.status, table.createdAt)],
+);
+
+/**
+ * The retention windows the sweeper obeys, in one row.
+ *
+ * The privacy page quotes these numbers and `public.app_apply_retention` reads them, so the sentence
+ * a person reads and the deletion that happens cannot drift apart. `id = 1` is enforced by a CHECK.
+ */
+export const dataRetentionSettings = pgTable("data_retention_settings", {
+  id: integer("id").primaryKey().default(1),
+  notificationsDays: integer("notifications_days").notNull().default(90),
+  otpDays: integer("otp_days").notNull().default(1),
+  deliveryCodesDays: integer("delivery_codes_days").notNull().default(30),
+  closedIncidentsDays: integer("closed_incidents_days").notNull().default(730),
+  failedJobsDays: integer("failed_jobs_days").notNull().default(30),
+  auditYears: integer("audit_years").notNull().default(6),
+  updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+  updatedAt: instant("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * A legal or investigative hold. While a hold is unreleased, every retention window is skipped for
+ * the rows that belong to its scope. Held rows are still visible to staff, never deleted.
+ */
+export const retentionHolds = pgTable(
+  "retention_holds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scopeType: text("scope_type").notNull(),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
+    deliveryJobId: uuid("delivery_job_id").references(() => deliveryJobs.id, { onDelete: "cascade" }),
+    donationId: uuid("donation_id").references(() => donations.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    placedBy: text("placed_by").notNull().references(() => user.id),
+    placedAt: instant("placed_at").notNull().defaultNow(),
+    releasedBy: text("released_by").references(() => user.id),
+    releasedAt: instant("released_at"),
+    releaseReason: text("release_reason"),
+  },
+  (table) => [
+    index("retention_holds_active_user_idx").on(table.userId),
+    index("retention_holds_active_org_idx").on(table.organizationId),
+  ],
+);
+
+/**
+ * One row per retention action that ran, including previews and hold-skips. Append-only: the
+ * application has SELECT and nothing else, and the sweep writes through a SECURITY DEFINER function.
+ */
+export const dataScrubLog = pgTable(
+  "data_scrub_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id").notNull(),
+    category: text("category").notNull(),
+    action: text("action").notNull(),
+    windowDays: integer("window_days"),
+    affectedRows: integer("affected_rows").notNull().default(0),
+    skippedByHold: integer("skipped_by_hold").notNull().default(0),
+    dryRun: boolean("dry_run").notNull().default(false),
+    executedAt: instant("executed_at").notNull().defaultNow(),
+  },
+  (table) => [index("data_scrub_log_time_idx").on(table.executedAt)],
+);
+
+/**
+ * A browser or phone that has agreed to receive notifications while the site is closed.
+ *
+ * One row per device, not per person: somebody with a phone and a laptop has two, and a notification
+ * that reaches only the one they happen to be looking at is the problem this table exists to solve.
+ * The endpoint is the push service's URL and is the identity of the subscription — it is unique, and
+ * re-subscribing the same browser updates the keys rather than creating a second row.
+ *
+ * `endpoint` and the two keys are secrets of a sort: anyone holding them can send that device a push.
+ * They are readable only to the owning account through RLS, and the application never returns them to
+ * a browser.
+ */
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    /** A short label so somebody can recognise which device they are revoking. Never a full UA string. */
+    deviceLabel: text("device_label"),
+    createdAt: instant("created_at").notNull().defaultNow(),
+    lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
+    /** Set when a push service says the subscription is gone (404/410). Kept for the record, unused. */
+    revokedAt: instant("revoked_at"),
+    /** Last delivery failure, for the health screen. Never contains the endpoint or the payload. */
+    lastError: text("last_error"),
+  },
+  (table) => [
+    uniqueIndex("push_subscriptions_endpoint_key").on(table.endpoint),
+    index("push_subscriptions_user_idx").on(table.userId, table.revokedAt),
+  ],
+);

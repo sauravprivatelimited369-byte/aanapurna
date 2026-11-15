@@ -20,6 +20,9 @@ const goodScanner = { mode: "clamav", hostConfigured: true };
 
 const fullInput: ReadinessInput = {
   now,
+  // The two partner gates are counts over rows the pilot produces, not declarations, so a "complete"
+  // deploy has to report them as satisfied.
+  declared: { partner_insurance: true, partner_agreement: true, subject_rights: true, grievance_window: true },
   attestations: [
     attestation("legal_entity", { entityName: "Fictional Foods", jurisdiction: "IN-OD" }),
     attestation("insurance", { policyReference: "POL-1" }, "2027-01-01T00:00:00.000Z"),
@@ -47,6 +50,12 @@ describe("launch readiness", () => {
       "data_protection_contact",
       "on_call",
       "penetration_test",
+      "partner_insurance",
+      "partner_agreement",
+      // Both are computed from the schema and from the request queues, not declared by a person.
+      // They are named here because an empty deployment genuinely has not met them.
+      "subject_rights",
+      "grievance_window",
     ]);
     for (const item of result.items) expect(item.ownerAction.length).toBeGreaterThan(20);
   });
@@ -101,8 +110,32 @@ describe("launch readiness", () => {
   });
 
   it("accepts a declared gate that the stored records already satisfy", () => {
-    const result = evaluateReadiness({ ...fullInput, declared: { on_call: true } });
+    const result = evaluateReadiness({
+      ...fullInput,
+      declared: {
+        on_call: true,
+        partner_insurance: true,
+        partner_agreement: true,
+        subject_rights: true,
+        grievance_window: true,
+      },
+    });
     expect(result.missing).toEqual([]);
+  });
+
+  it("will not call the pilot ready when no partner holds insurance or has accepted the agreement", () => {
+    // This is the honest answer to "who is covered if someone is harmed": nobody, yet.
+    const result = evaluateReadiness({ ...fullInput, declared: { partner_insurance: false, partner_agreement: false } });
+    expect(result.missing).toEqual(["partner_insurance", "partner_agreement", "subject_rights", "grievance_window"]);
+    for (const key of result.missing) {
+      const item = result.items.find((entry) => entry.key === key);
+      expect(item?.ownerAction.length).toBeGreaterThan(20);
+    }
+  });
+
+  it("treats a missing database answer as unmet rather than assumed", () => {
+    const result = evaluateReadiness({ ...fullInput, declared: undefined });
+    expect(result.missing).toEqual(["partner_insurance", "partner_agreement", "subject_rights", "grievance_window"]);
   });
 
   it("reports only names and instructions, never the stored values", () => {
@@ -111,6 +144,8 @@ describe("launch readiness", () => {
       expect(item.detail).not.toContain("privacy@example.test");
       expect(item.detail).not.toContain("POL-");
     }
-    expect(Object.keys(OWNER_ACTIONS)).toHaveLength(7);
+    // Eleven: the nine readiness keys plus subject_rights and grievance_window, which are computed
+    // from the schema rather than declared but still need a named action when they are unmet.
+    expect(Object.keys(OWNER_ACTIONS)).toHaveLength(11);
   });
 });

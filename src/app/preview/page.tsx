@@ -27,7 +27,7 @@ function when(value: string): string {
   }).format(date);
 }
 
-export default function PreviewPage() {
+export default async function PreviewPage() {
   const demo = DEMO_WORKSPACE;
   const generator = demo.organizations.find((organization) => organization.type === "generator");
   const receiver = demo.organizations.find((organization) => organization.type === "receiver");

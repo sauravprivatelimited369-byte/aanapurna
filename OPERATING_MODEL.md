@@ -15,7 +15,7 @@ inspection exists.
 | **Receiver** (NGO, shelter, community kitchen) | Confirming capacity, performing acceptance checks, sharing the code only after inspection | What happens to the food after receipt | Judge suitability on the Receiver's behalf |
 | **Helper** (volunteer or staff) | Collecting on time, keeping the food as instructed, recording condition | The handling of the food in transit | Guarantee cold chain or vehicle fitness |
 | **Operations administrator** | Verifying partners, service areas, dispatch exceptions, recalls | Consistent, documented decisions | Grant itself safety or legal authority |
-| **Safety officer** | Food-category policy, holds, recalls, incident closure | The content of a policy version and each closure note | Replace a food authority or regulator |
+| **Safety officer** | Food-category policy, holds, recalls, incident closure | The content of a policy version, each closure note and each recorded corrective action | Replace a food authority or regulator |
 | **Support agent** | Support cases and correction requests | Handling personal data minimally | See codes, passwords or unrestricted documents |
 | **Security administrator** | Privileged access and audit review | Keeping access least-privilege | Inspect food or recipient personal data |
 
@@ -44,12 +44,15 @@ inspection exists.
    once. Before collection, operations can release a stalled assignment back to the open pool with a
    recorded reason; after collection, only an incident and a hold can stop it. The delivery code is
    not available to the Helper at any point.
-6. **Collection.** The Helper records collection with condition observations and any temperature
-   reading the policy requires. A concern raised here can put the donation on hold instead of
-   proceeding.
-7. **Delivery.** After physical arrival, the Receiver inspects the food, then shares the single-use
-   code with the Helper. Five wrong attempts lock the delivery and require an audited operations
-   reset.
+6. **Collection.** The collector — a Helper, or the receiving organisation collecting its own food —
+   records collection with condition observations. A concern raised here can put the donation on hold
+   instead of proceeding.
+7. **Delivery.** After physical arrival, the Receiver records four structured checks (seal, packaging,
+   label against the declaration, inside the declared window) and a temperature reading whenever the
+   listing declared a temperature requirement. Only then does it share the single-use code. A failed
+   check is recorded as a knowing acceptance and escalated to both organisations; it does not block
+   the Receiver from acting on its own judgement. Five wrong code attempts lock the delivery and
+   require an audited operations reset.
 8. **Receipt.** Verification writes exactly one receipt, one custody event and one set of notices.
    Only this step counts toward impact.
 9. **Exception.** Refusal, no-show, failed collection, damaged packaging, suspected contamination,
@@ -68,6 +71,26 @@ Before any real listing: the organisation's legal name, the responsible person, 
 address, the food it handles, the receiving or collection window, and the evidence it is entitled to
 operate are recorded and reviewed by a human who is not the applicant. Re-validation on document
 expiry is a manual step today. See `PARTNER_ONBOARDING.md`.
+
+Two further declarations are now records rather than prose, and both feed the launch gate:
+
+- **The partner agreement.** A named member of the organisation accepts a specific published version
+  (`src/domain/partner-agreement.ts`). The acceptance stores who, when, and the SHA-256 of exactly
+  what was shown. Changing the text is a new version, so every partner is asked again instead of
+  being silently grandfathered. **It has not been reviewed by counsel** and must not be described as
+  a contract, a licence or insurance.
+- **Insurance.** The organisation records its own policy reference and expiry. `app_launch_readiness()`
+  reports partner cover as unmet until every verified organisation holds a current declaration, so a
+  lapsed policy re-opens the gate without anyone editing a document. A declaration is not cover, and
+  the platform operator's own entity and policy are separate, still-open owner gates.
+
+## When harm is reported
+
+Any participant on a delivery may flag that a person was harmed or became unwell. The description is
+required, and the report notifies operations, the safety officer and security immediately — it does
+not wait in an ordinary notification queue. The incident it creates cannot be closed until somebody
+records what changed so the same failure cannot recur. A closure is a record of a decision, never a
+finding that food was safe, and it does not release a hold.
 
 ## Refusal, hold and recall
 

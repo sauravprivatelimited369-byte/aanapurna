@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkDatabase, pool } from "@/db";
 import { getEmailDeliveryStatus } from "@/email/config";
+import { pushConfigured } from "@/push/vapid";
 import { evaluateReadiness } from "@/domain/readiness";
 import { evaluateWorkerHealth, WORKER_SERVICE_KEY, type WorkerHealth } from "@/worker/heartbeat";
 
@@ -26,8 +27,12 @@ async function readWorkerHealth(): Promise<WorkerHealth> {
  */
 async function readDeclaredReadiness(): Promise<Record<string, boolean> | null> {
   try {
+    // `app_launch_readiness()` returns a table, so it must be expanded. Writing
+    // `select app_launch_readiness() as readiness` yields a Postgres *record*, which the driver hands
+    // back with numeric keys — the endpoint then reports `{"0": true, "1": false}` and every named
+    // requirement disappears. `to_jsonb` gives one object with the column names as keys.
     const { rows } = await pool.query<{ readiness: Record<string, boolean> }>(
-      "select app_launch_readiness() as readiness",
+      "select to_jsonb(app_launch_readiness()) as readiness",
     );
     return rows[0]?.readiness ?? null;
   } catch {
@@ -84,6 +89,9 @@ export async function GET() {
       lastEvent: typeof worker.details.event === "string" ? worker.details.event : null,
       lastError: typeof worker.details.lastError === "string" ? worker.details.lastError : null,
     },
+    // Whether a person can turn on notifications to their own device. A boolean, deliberately: the
+    // subscription key is handed out by the authenticated account API, never by this public page.
+    push: { configured: pushConfigured() },
     realOperationsEnabled: process.env.OPERATIONS_ENABLED === "true",
     // Names of unmet requirements only, never their values.
     launchReadiness: {

@@ -1,5 +1,54 @@
 # Build status
 
+## Odia removed, notifications that reach the device, and the email that never sent — 2026-11-15
+
+- **Odia removed on the owner's instruction.** The switcher offers **English, Hindi and Bengali**; Odia is gone from the locale set, the dictionaries, the privacy notice, the timeline, the date formats and the `<html lang>` mapping. English is now the default — making an unreviewed translation the baseline would hand a first-time reader unreviewed prose as a default rather than as a choice. `isLocale("or")` is asserted false and the privacy notice is asserted to carry no Odia translation, so a stale selector cannot creep back.
+- **Notifications now arrive on the device the person is holding.** Web Push, end to end: `public/sw.js` receives a push and shows a notification even when the site is closed; `src/components/push-toggle.tsx` asks permission and subscribes with the key from the server; `POST/DELETE /api/account/push` register and revoke a device; `src/worker/push-drain.ts` sweeps unpushed notifications every minute. Migration 26 adds `push_subscriptions` (RLS enabled and **forced**, per device, one row each) plus `app_push_targets`, `app_unpushed_notifications`, `app_mark_push_delivered` and `app_revoke_push_subscription`.
+- **Push is driven from the notification rows, not from each call site.** Every notification is written by one of four database functions; wiring push into each would mean a new kind is silently push-less until somebody remembers. The sweep covers all of them, including future ones, and is bounded to the last fifteen minutes so a worker that was down overnight cannot fire stale pushes about food collected yesterday.
+- **The notification email was never sending, and nothing said so.** `enqueueNotificationEmail` stored a site-relative path like `/app/offers`; the drain validates the payload with `new URL(...)`, which rejects a relative path, so every notification email failed as `EMAIL_ACTION_URL_INVALID` on every retry, forever. The queue said `pending`, the drain said `failed`, and the log deliberately hid the reason. Found by running the drain against a real SMTP sink and reading what landed in the mailbox, not by reading the code.
+- **Verified in this sandbox against real infrastructure:**
+  - **26 migrations from scratch** and the full domain suite end to end.
+  - **A real encrypted push delivered**: VAPID-signed, `aes128gcm`, `TTL 3600`, accepted by an HTTPS endpoint, through the shipping `sendPushToUser` with a real row in `push_subscriptions`.
+  - **A dead device revoked rather than retried**: a 410 from the push service set `revoked_at` and `last_error = push_service_410`.
+  - **A real notification email delivered**: queued through the shipping `enqueueNotificationEmail`, drained by the shipping `drainEmailOutboxOnce` against an SMTP sink — status `sent`, message in the mailbox, link `http://localhost:3000/app/offers`.
+  - **A session cannot read another person's device**: `app_push_targets('other-user')` refused for a signed-in caller and allowed for the identity-less worker.
+  - `tsc --noEmit` clean, `eslint .` clean, **350 tests / 33 files**, `next build` green.
+
+### Two bugs this caught that would each have shipped dead
+
+**`web-push` has no ESM default export.** `webpush.default.setVapidDetails(...)` compiled, typechecked and would have thrown `Cannot read properties of undefined` on every single push. Fixed, and the guard now returns early rather than throwing.
+
+**`app_push_targets` was granted to the worker only.** The web process sends pushes too, so every push from the application failed with `permission denied for function app_push_targets`. Granting it to the app role then opened a hole — any session could read anyone's endpoint and keys by passing their id — so the function now authorises per caller: a session may ask only about itself, the identity-less worker may ask about anybody.
+
+### Open
+
+- **No native Hindi or Bengali speaker has reviewed any translated text.** Odia's removal does not change this; it narrows the surface but the two remaining translations are still unreviewed drafts and the DRAFT banners stay.
+- **Push keys exist, but the deployment must be redeployed to pick them up.** A VAPID pair was generated and written to the local `.env` (git-ignored) and to the Vercel project as `WEB_PUSH_PUBLIC_KEY`, `WEB_PUSH_PRIVATE_KEY` (encrypted) and `WEB_PUSH_SUBJECT` for production, preview and development. `pushConfigured()` now returns true, and the public `/api/health` endpoint reports it as `push.configured` — a boolean, never the key — so a deployment can be checked from outside without signing in. Verified in a running server: `{"push":{"configured":true}}`, with no base64 run of key length anywhere in the payload. Verified off: with the pair absent, or with only the public half, or with a key of the wrong shape, `pushConfigured()` returns false. Nothing in the repository contains either key, and the private half is a credential — rotating it invalidates every existing device subscription. Any environment that is not this Vercel project still needs the three variables set by whoever runs it; without them push is off and the interface says so rather than showing a button that cannot work.
+- **The permission prompt and a real OS notification were not observed, and cannot be in this sandbox.** A Chromium was obtainable here after all (npm-distributed `@sparticuz/chromium`, not added as a dependency). In it: the service worker installed, activated and controlled the page in a secure context under the production CSP (`worker-src 'self'`), and a push delivered through the browser's own push-message path reached the shipped handler. The **click behaviour, payload parsing, off-origin refusal and fallback were then verified** by executing `public/sw.js` itself in that browser — see `tests/service-worker.test.ts`, five permanent tests. What remains unobservable is headless Chrome's notification permission: every API reports success while `Notification.permission` stays `denied`, so `pushManager.subscribe()` fails with "permission denied" and no OS-level notification can appear. That is a limit of the headless browser, not of the code — but it means **the prompt and a real device notification must be confirmed once on real hardware before anyone claims push works end to end.**
+- **The production preflight cannot currently pass against the live Vercel project, and is therefore not part of its build.** `check:production-config` is wired into the Compose stack but deliberately not into `vercel.json`: the Vercel project sends mail through `smtp.ethereal.email`, which the preflight correctly classifies as a capture service and refuses. Adding it to the Vercel build would fail every deployment until a real mail provider is configured. Confirmed by running the preflight against Vercel's own settings: it exits 1 on that one line and nothing else.
+- **The email drain still needs SMTP credentials in production**, and the link resolution requires `APP_URL` to be set — without it the message is skipped rather than queued undeliverable.
+- Every human launch approval remains outstanding.
+
+## Distance matching, notification email, four languages and a shorter home page — 2026-11-15
+
+Four requests from the owner, on `arena/5f99cb20-aanapurna` (PR #13). All CI green at `09f0869`:
+[run 43722103785](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43722103785)
+— **all eight checks pass**, including both Windows jobs and the browser suites.
+
+- **Matching uses real distance.** `app_find_receiver_candidates` matched on category, service area and capacity but returned candidates in planner order, so a Receiver two streets away and one 158 km away were indistinguishable. It now returns `distance_km` and `distance_source` alongside the order those produced, ranks nearest-first, reports `capacity_adequate` instead of silently filtering on it, and answers `unknown` rather than `0` when a coordinate is missing. `app_org_coordinates` resolves either a declared organisation point or the city centroid from the gazetteer, and a `precedence` column makes the exact point win — a `LIMIT 1` at the end of a `UNION ALL` does not, which was a real bug caught before merge. Migration `20261117090000_distance_ranked_matching.sql`.
+- **The map is a schematic and labels itself as one.** `src/components/transit-map.tsx` draws two points and a line in inline SVG. No tile provider and no routing service is used, called or implied: the component prints the straight-line distance and the road estimate as the different numbers they are, marks a gazetteer match as "city centre, not an exact address", and draws nothing at all when a coordinate is missing. Straight-line km are labelled "straight line" wherever they appear.
+- **Notification email now leaves the application.** In-app notifications existed with unread counts; the outbox carried authentication mail only, so a food offer expiring in an hour notified nobody who was not already looking at the app. `enqueueNotificationEmail` sends the same news to the people whose notification list was just written. Migration `20261117100000_notification_email_recipients.sql` adds `app_notification_recipients(uuid, uuid)`, a security-definer function so the app role still cannot read `user.email`, and widens the outbox insert policy by exactly one kind.
+- **Hindi and Bengali join Odia and English.** Navigation, hero, role cards, privacy banner and the response-window sentence are translated in all four; **untranslated surfaces say so on screen** in the reader's own language rather than silently reverting to English. Odia remains the default. The switcher is one native `<select>`; four names in three scripts do not fit a 320px header as pills.
+- **The home page is three sections instead of seven.** Process moved to `/how-it-works`, promises to `/about` and `/food-safety`, impact figures to a new `/impact`. Nothing was removed, only relocated and linked; `/impact` also joins the automated accessibility sweep.
+- **Verified in this sandbox against real PostgreSQL 16 and 17:** 25 migrations from scratch, the domain suite end to end (onboarding/review, matching, competing claims, pickup window, RLS code privacy, OTP lock/replay, one receipt/impact, incident hold, launch readiness), the dump/restore drill, and the ranked order measured as **2.4 km → 157.6 km → unknown** with the source recorded. `tsc --noEmit` clean, `eslint .` clean, `vitest run` **337 tests / 31 files**, `next build` green.
+
+### Open
+
+- **No native Odia, Hindi or Bengali speaker has reviewed any translated text.** The languages were written by an engineer and marked as drafts. This gap widens with every language added and must be closed before any non-English surface is presented as reviewed. DRAFT banners stay until a human reads them.
+- **Notification email is only verified as far as the outbox.** 29 rows were confirmed written through the real domain flow, but no message was delivered to a real mailbox in this session: SMTP credentials are the owner's to provide, and the drain was not run against a live relay.
+- **The map draws no route.** It is a straight line by design; there is no routing service and none is pretended.
+- Every human launch approval remains outstanding.
+
 ## Heartbeat, recall records, account security and the missing documents — 2026-11-14
 
 - **Worker heartbeat.** `src/worker/heartbeat.ts` writes `service_health` on start, after every drain, every 30 seconds and on shutdown; failures to record a beat are logged and never stop the worker. `/api/health` now returns `worker: { status, ageSeconds, lastEvent, lastError }` where status is `ok`, `stale` (>180s) or `never_seen`. Migration 13 grants the worker role INSERT/UPDATE on `service_health` and the web role SELECT only, asserted in the migration suite.
@@ -78,7 +127,7 @@ Production SMTP has not been tested: an operator must configure a provider priva
 
 Historical checkpoint; the GitHub-hosted results above supersede pending checks below.
 
-- Added a guarded disposable PostgreSQL custom-format `pg_dump`/`pg_restore` drill. A real PostgreSQL 14.24 run with fictional domain fixtures passed: restored donation, receipt, inspection and migration counts, selected RLS/grants, and worker schema ownership. A separate run proved an existing restore target is refused and preserved. This is not a production backup, upload recovery, off-host encryption, point-in-time recovery or a complete restore verification. PostgreSQL 16 execution is now defined in CI but has not yet been observed.
+- Added a guarded disposable PostgreSQL custom-format `pg_dump`/`pg_restore` drill. A real PostgreSQL 14.24 run with fictional domain fixtures passed: restored donation, receipt, inspection and migration counts, selected RLS/grants, and worker schema ownership. A separate run proved an existing restore target is refused and preserved. This is not a production backup, upload recovery, off-host encryption, point-in-time recovery or a complete restore verification. PostgreSQL 16 execution has now been observed: a matched 16.2 server and client were stood up in the sandbox and the drill passed end to end after the domain fixtures were created against the same cluster — dump, clean restore to a fresh database, and matching counts and selected RLS/grants. Version matters here: `pg_dump` refuses a server newer than itself, so the first attempt against the 18.6 server failed until client and server were matched at 16.2, the same major version CI uses.
 - Added a Windows 2025 GitHub-hosted native PostgreSQL/start.bat/authentication smoke job, and a no-email-sent, explicit authenticated TLS SMTP connection probe (`npm run smtp:verify`) for a human operator's own provider. Neither Windows nor a real SMTP provider has been tested here; verification requires actual infrastructure and credentials, and successful connectivity alone is not delivery validation.
 - The sandbox cannot reach Docker's binary download or container registry, and Docker Engine is absent. Compose and GitHub-hosted jobs remain unverified until the branch is run on GitHub. Human safety/legal/partner approvals and real production backup, mail delivery and deployment remain mandatory; no authorization is implied and operations remain disabled.
 
@@ -325,3 +374,18 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   remains incomplete on every deployment. The difference is that each one is now a named, dated,
   alerted record rather than a paragraph. See the status column in
   [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).
+
+## Language and request visibility (2026-11-15)
+
+- **Done:** a privacy request now shows where it has got to, read from `audit_events` rather than
+  inferred from the status column: what happened, when, how long it has waited, and what happens next.
+  A stage appears only if it occurred. See [`ACCESSIBILITY_LANGUAGE.md`](ACCESSIBILITY_LANGUAGE.md).
+- **Done:** `/privacy`, the response-window statement and the request timeline are published in Odia
+  **and** English, with Odia as the default, a server-rendered `<html lang>`, and a switcher that is
+  remembered in a cookie so it works before signing in.
+- **Still open:** `/answers`, `/terms`, `/food-safety`, `/how-it-works`, the request forms, and every
+  transactional email remain English only. The rights-bearing pages are translated; the surrounding
+  pages are not, and the boundary is stated in the document rather than left to be discovered.
+- **Still open:** no native Odia speaker has reviewed the text. Vocabulary follows published
+  dictionaries, but fluency is not something a dictionary check establishes. Both notices carry the
+  DRAFT banner in their own language until a fluent reviewer signs off.

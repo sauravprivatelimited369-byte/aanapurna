@@ -1,42 +1,51 @@
 import Link from "next/link";
 import { ArrowUpRight, Menu, ShieldCheck, X } from "lucide-react";
 import { BrandMark } from "@/components/brand";
+import { LocaleSwitcher } from "@/components/locale-switcher";
+import { currentLocale } from "@/lib/locale-server";
+import { htmlLang, translator, type Locale, type MessageKey } from "@/lib/i18n";
 
-const primaryLinks = [
-  { href: "/", label: "Home" },
-  { href: "/how-it-works", label: "How it works" },
-  { href: "/#impact", label: "Our impact" },
-  { href: "/food-safety", label: "Food safety" },
-  { href: "/about", label: "About us" },
-  { href: "/contact", label: "Contact" },
+const primaryLinks: { href: string; key: MessageKey }[] = [
+  { href: "/", key: "nav.home" },
+  { href: "/how-it-works", key: "nav.howItWorks" },
+  { href: "/impact", key: "nav.impact" },
+  { href: "/food-safety", key: "nav.foodSafety" },
+  { href: "/answers", key: "nav.answers" },
+  { href: "/about", key: "nav.about" },
+  { href: "/contact", key: "nav.contact" },
 ];
 
-function NavigationLinks({ active, mobile = false }: { active?: string; mobile?: boolean }) {
+function NavigationLinks({ active, mobile = false, locale }: { active?: string; mobile?: boolean; locale: Locale }) {
+  const t = translator(locale);
   return <>
     {primaryLinks.map((link) => <Link
       key={link.href}
       className={`${mobile ? "mobile-nav-link" : "nav-link"}${active === link.href ? " is-active" : ""}`}
       href={link.href}
+      lang={htmlLang(locale)}
       aria-current={active === link.href ? "page" : undefined}
-    >{link.label}</Link>)}
+    >{t(link.key)}</Link>)}
   </>;
 }
 
-export function PublicHeader({ active }: { active?: string }) {
+export async function PublicHeader({ active }: { active?: string }) {
+  const locale = await currentLocale();
+  const t = translator(locale);
   return (
     <>
-      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <a className="skip-link" href="#main-content">{t("common.skipToContent")}</a>
       <header className="site-header">
         <div className="container header-inner">
           <BrandMark />
           <nav className="desktop-nav" aria-label="Main navigation">
-            <NavigationLinks active={active} />
+            <NavigationLinks active={active} locale={locale} />
           </nav>
           <div className="header-actions">
-            <Link href="/preview" className="nav-login">Preview</Link>
-            <Link href="/login" className="nav-login">Log in</Link>
+            <LocaleSwitcher current={locale} />
+            <Link href="/preview" className="nav-login">{t("nav.preview")}</Link>
+            <Link href="/login" className="nav-login">{t("nav.login")}</Link>
             <Link href="/signup" className="button button--small button--primary header-join">
-              <span className="header-join-full">Join Annapurna</span>
+              <span className="header-join-full">{t("nav.join")}</span>
               <span className="header-join-short">Join</span>
               <ArrowUpRight size={16} aria-hidden="true" />
             </Link>
@@ -48,10 +57,13 @@ export function PublicHeader({ active }: { active?: string }) {
               <span className="sr-only">Site navigation</span>
             </summary>
             <nav className="mobile-nav-panel" aria-label="Mobile navigation">
-              <NavigationLinks active={active} mobile />
-              <Link className="mobile-nav-link" href="/preview">Preview the workspace</Link>
-              <Link className="mobile-nav-link" href="/login">Log in</Link>
-              <Link className="mobile-nav-join" href="/signup">Join Annapurna <ArrowUpRight size={17} aria-hidden="true" /></Link>
+              {/* The header switcher collapses below 380px, so the menu carries its own. Without
+                  this a phone user would lose the only way to change language. */}
+              <LocaleSwitcher current={locale} />
+              <NavigationLinks active={active} mobile locale={locale} />
+              <Link className="mobile-nav-link" href="/preview">{t("nav.preview")}</Link>
+              <Link className="mobile-nav-link" href="/login">{t("nav.login")}</Link>
+              <Link className="mobile-nav-join" href="/signup">{t("nav.join")} <ArrowUpRight size={17} aria-hidden="true" /></Link>
             </nav>
           </details>
         </div>
@@ -70,7 +82,7 @@ export function PublicFooter() {
           <p className="footer-launch-note"><ShieldCheck size={15} aria-hidden="true" /> Controlled launch · human approvals pending</p>
         </div>
         <div className="footer-links">
-          <div><span className="footer-heading">Explore</span><Link href="/">Home</Link><Link href="/how-it-works">How it works</Link><Link href="/#impact">Our impact</Link><Link href="/near-iim-calcutta">Local discovery</Link><Link href="/joka">Joka directory</Link><Link href="/preview">Sample handover</Link></div>
+          <div><span className="footer-heading">Explore</span><Link href="/">Home</Link><Link href="/how-it-works">How it works</Link><Link href="/impact">Our impact</Link><Link href="/near-iim-calcutta">Local discovery</Link><Link href="/joka">Joka directory</Link><Link href="/preview">Sample handover</Link></div>
           <div><span className="footer-heading">The work</span><Link href="/about">About us</Link><Link href="/food-safety">Food safety disclaimer</Link><Link href="/contact">Contact</Link><Link href="/login">Account support</Link></div>
           <div><span className="footer-heading">Policies</span><Link href="/privacy">Privacy <small>Draft</small></Link><Link href="/terms">Terms <small>Draft</small></Link><Link href="/accessibility">Accessibility</Link></div>
         </div>

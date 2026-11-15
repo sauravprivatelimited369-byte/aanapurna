@@ -141,6 +141,48 @@
       "when": 1794845400000,
       "tag": "20261115213000_directory_phone_consent",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794848400000,
+      "tag": "20261115230000_food_safety_attestation_and_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794873600000,
+      "tag": "20261116090000_data_retention_and_holds",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1794880800000,
+      "tag": "20261116120000_privacy_subject_rights",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794906000000,
+      "tag": "20261117090000_distance_ranked_matching",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794909600000,
+      "tag": "20261117100000_notification_email_recipients",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794913200000,
+      "tag": "20261117110000_push_subscriptions",
+      "breakpoints": true
     }
   ]
 }

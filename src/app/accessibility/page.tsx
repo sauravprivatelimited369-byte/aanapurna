@@ -14,7 +14,7 @@ const practices = [
   { title: "Reduced motion", text: "Decorative animation should respect the reduced-motion preference configured on your device.", Icon: PersonStanding },
 ];
 
-export default function AccessibilityPage() {
+export default async function AccessibilityPage() {
   return <PublicLayout>
     <section className="page-hero"><div className="container">
       <span className="eyebrow"><span className="eyebrow-line" /> Access for more people</span>

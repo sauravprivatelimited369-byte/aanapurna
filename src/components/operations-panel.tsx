@@ -3,12 +3,15 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { LaunchReadinessPanel } from "@/components/launch-readiness-panel";
 import { DirectoryPanel } from "@/components/directory-panel";
+import { RetentionPanel } from "@/components/retention-panel";
+import { GrievanceClock } from "@/components/grievance-clock";
 import { OrganizationDocuments } from "@/components/organization-documents";
 
 type ServiceArea = { id: string; label: string; countryCode: string; stateOrRegion: string | null; cityOrDistrict: string | null; timezone: string; active: boolean };
 type OrganizationReview = { id: string; name: string; type: string; status: string; serviceAreaId: string | null; serviceAreaLabel: string | null; cityOrDistrict: string; stateOrRegion: string | null; contactName: string; contactEmail: string; submittedAt: string };
 type HelperReview = { userId: string; displayName: string | null; status: string; serviceAreaId: string | null; serviceAreaLabel: string | null; availabilityNotes: string | null; trainingAcknowledgedAt: string | null; submittedAt: string; reviewedAt: string | null };
-type Incident = { id: string; donationId: string; deliveryJobId: string | null; donationName: string; incidentType: string; severity: string; description: string; status: string; holdApplied: boolean; resolution: string | null; createdAt: string; closedAt: string | null };
+type Incident = { id: string; donationId: string; deliveryJobId: string | null; donationName: string; incidentType: string; severity: string; description: string; status: string; holdApplied: boolean; resolution: string | null; harmReported: boolean; harmDetails: string | null; correctiveAction: string | null; createdAt: string; closedAt: string | null };
+type RecoveryRequest = { id: string; reference: string; email: string; detail: string; status: string; resolution: string | null; resolvedAt: string | null; createdAt: string };
 type Policy = { id: string; version: string; status: string; rules: unknown; createdBy: string | null; approvedBy: string | null; approvedAt: string | null; effectiveFrom: string | null; createdAt: string };
 type SupportCase = { id: string; reference: string; subject: string; description: string; status: string; organizationId: string | null; createdBy: string; createdByName: string | null; assignedTo: string | null; createdAt: string; updatedAt: string };
 type DataRequest = { id: string; userId: string; userName: string | null; requestType: string; description: string | null; status: string; resolution: string | null; assignedTo: string | null; reviewedBy: string | null; completedAt: string | null; createdAt: string };
@@ -37,6 +40,7 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
   const [organizations, setOrganizations] = useState<OrganizationReview[]>([]);
   const [helpers, setHelpers] = useState<HelperReview[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [recoveryRequests, setRecoveryRequests] = useState<RecoveryRequest[]>([]);
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [supportCases, setSupportCases] = useState<SupportCase[]>([]);
   const [dataRequests, setDataRequests] = useState<DataRequest[]>([]);
@@ -61,6 +65,7 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
     }
     if (canReviewSafety) {
       work.push(loadJson<Incident[]>("/api/admin/incidents").then(setIncidents));
+      work.push(loadJson<RecoveryRequest[]>("/api/account/recovery-queue").then(setRecoveryRequests));
       work.push(loadJson<Policy[]>("/api/admin/policies").then(setPolicies));
       work.push(loadJson<{ recalls: Recall[] }>("/api/admin/recalls").then((data) => setRecalls(data.recalls)));
       work.push(loadJson<{ donations: RecallableDonation[] }>("/api/admin/donations").then((data) => setRecallable(data.donations)));
@@ -152,6 +157,7 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
       {(isOperations || isSecurity) && <a href="#launch-readiness">Launch readiness</a>}
       {(isOperations || isSecurity) && <a href="#directory-places">Nearby food sources</a>}
       {(isOperations || isSecurity) && <a href="#account-recovery">Account recovery</a>}
+      {(isOperations || isSupport || isSecurity) && <a href="#recovery-requests">Locked-out requests</a>}
     </nav>}
 
     {overview && <section className="app-grid">
@@ -188,15 +194,45 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
       </article>)}</div> : <div className="empty-state"><div><strong>No Helper requests to review</strong><p>Applicants will appear here after submitting onboarding.</p></div></div>}
     </section>}
 
+    {(isOperations || isSupport || isSecurity) && <section id="recovery-requests" className="app-card app-card--full">
+      <div className="app-card-title"><div><h2>Locked-out requests</h2><p>Filed by people who cannot receive the reset email. Answer one by issuing the single-use link below, then record what you did here so nobody is silently dropped.</p></div><span className="status-pill status-pill--pending">{recoveryRequests.filter((request) => request.status === "submitted" || request.status === "in_review").length} open</span></div>
+      {recoveryRequests.length ? <div className="data-list">{recoveryRequests.map((request) => <article className="operation-record" key={request.id}>
+        <div className="operation-record-head"><div><strong>{request.reference} · {request.email}</strong><small>filed {formatDate(request.createdAt)}</small><small>{request.detail}</small></div><span className={`status-pill status-pill--${request.status === "resolved" ? "completed" : request.status === "declined" ? "rejected" : "pending"}`}>{request.status.replaceAll("_", " ")}</span></div>
+        {request.resolution && <p className="form-hint">Resolution: {request.resolution}</p>}
+        {request.status !== "resolved" && request.status !== "declined" && <form className="form-stack" onSubmit={(event) => submitForm(event, `recovery-${request.id}`, `/api/account/recovery-queue/${request.id}`, (form) => ({
+          status: form.get("status"),
+          resolution: form.get("resolution") || null,
+        }), "Recovery request updated. Issue the single-use link from the account recovery panel if the identity check passes.", "PATCH")}>
+          <div className="app-grid">
+            <div className="form-field app-card--span-4"><label htmlFor={`recovery-status-${request.id}`}>Decision</label><select className="form-control" id={`recovery-status-${request.id}`} name="status" defaultValue="in_review"><option value="in_review">Under review</option><option value="resolved">Resolved</option><option value="declined">Declined</option></select></div>
+            <div className="form-field app-card--span-8"><label htmlFor={`recovery-note-${request.id}`}>What was done, or why it was declined</label><textarea className="form-control" id={`recovery-note-${request.id}`} name="resolution" maxLength={500} rows={2} /></div>
+          </div>
+          <button className="button button--secondary button--small" type="submit" disabled={busyId === `recovery-${request.id}`}>{busyId === `recovery-${request.id}` ? "Saving…" : "Record decision"}</button>
+        </form>}
+      </article>)}</div> : <div className="empty-state"><div><strong>No locked-out requests</strong><p>A person who cannot receive the reset email can file one from the sign-in screen. It appears here.</p></div></div>}
+    </section>}
+
     {canReviewSafety && <section id="safety-incidents" className="app-card app-card--full">
       <div className="app-card-title"><div><h2>Safety incident register</h2><p>Close the incident record only. Any applied hold stays in place; a resolution is not a finding that food is safe.</p></div></div>
       {incidents.length ? <div className="data-list">{incidents.map((incident) => <article className="operation-record" key={incident.id}>
         <div className="operation-record-head"><div><strong>{incident.donationName} · {incident.incidentType.replaceAll("_", " ")}</strong><small>{incident.severity} severity · reported {formatDate(incident.createdAt)}</small><small>{incident.description}</small></div><span className={`status-pill status-pill--${incident.status}`}>{incident.status}</span></div>
         {incident.holdApplied && <div className="inline-notice"><strong>Safety hold applied.</strong> This workflow will not release the hold or restore delivery operations.</div>}
-        {incident.status === "open" ? <form className="form-stack" onSubmit={(event) => submitForm(event, incident.id, `/api/admin/incidents/${incident.id}/resolve`, (form) => ({ resolution: form.get("resolution") }), "Incident record closed. Any applied safety hold remains active.")}>
-          <div className="form-field"><label htmlFor={`incident-resolution-${incident.id}`}>Human review note</label><textarea className="form-control" id={`incident-resolution-${incident.id}`} name="resolution" required maxLength={800} rows={3} /></div>
+        {incident.harmReported && <div className="inline-notice inline-notice--danger"><strong>Harm was reported.</strong> {incident.harmDetails ?? "See the incident record."} Contact the affected organisation by phone; a notification in this console is a courtesy, a call is the control.</div>}
+        {incident.status === "open" ? <form className="form-stack" onSubmit={(event) => submitForm(event, incident.id, `/api/admin/incidents/${incident.id}/resolve`, (form) => ({
+          resolution: form.get("resolution"),
+          correctiveAction: form.get("correctiveAction"),
+          harmReported: form.get("harmReported") === "on",
+          harmDetails: form.get("harmDetails") || null,
+        }), "Incident record closed. Any applied safety hold remains active.")}>
+          <div className="form-field"><label htmlFor={`incident-resolution-${incident.id}`}>Human review note</label><textarea className="form-control" id={`incident-resolution-${incident.id}`} name="resolution" required maxLength={800} rows={3} placeholder="What the record shows, and what was concluded" /></div>
+          <div className="form-field"><label htmlFor={`incident-corrective-${incident.id}`}>What changed so this cannot recur?</label><textarea className="form-control" id={`incident-corrective-${incident.id}`} name="correctiveAction" required minLength={20} maxLength={1000} rows={3} placeholder="For example: cold-holding limit added to the policy and re-briefed to every kitchen" /><span className="form-hint">Required. A closure that does not name a change is how the same failure happens twice.</span></div>
+          <label><input type="checkbox" name="harmReported" defaultChecked={incident.harmReported} /> A person was harmed or became unwell</label>
+          <div className="form-field"><label htmlFor={`incident-harm-${incident.id}`}>Who was affected, and how?</label><textarea className="form-control" id={`incident-harm-${incident.id}`} name="harmDetails" maxLength={1000} rows={2} defaultValue={incident.harmDetails ?? ""} /></div>
           <button className="button button--secondary button--small" type="submit" disabled={busyId === incident.id}>{busyId === incident.id ? "Saving…" : "Close incident record"}</button>
-        </form> : incident.resolution && <p className="form-hint">Reviewer note: {incident.resolution}</p>}
+        </form> : <>
+          {incident.resolution && <p className="form-hint">Reviewer note: {incident.resolution}</p>}
+          {incident.correctiveAction && <p className="form-hint">Corrective action: {incident.correctiveAction}</p>}
+        </>}
       </article>)}</div> : <div className="empty-state"><div><strong>No safety incidents recorded</strong><p>Incident reports will be visible to authorised safety staff.</p></div></div>}
     </section>}
 
@@ -264,6 +300,13 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
 
     {(isOperations || isSecurity) && <DirectoryPanel canWrite={isOperations || isSecurity} />}
 
+    {(isOperations || isSupport || isSecurity || isSafety) && <GrievanceClock />}
+
+    {/* Retention is readable by safety officers too, but only operations and security may act. */}
+    {(isOperations || isSecurity || isSafety) && (
+      <RetentionPanel canWrite={isOperations || isSecurity} canErase={isSecurity} />
+    )}
+
     {(isOperations || isSecurity) && <section id="account-recovery" className="app-card app-card--full">
       <div className="app-card-title"><div><h2>Account recovery</h2><p>Issue the single-use password-reset link for an account and hand it over yourself. Use this when this deployment cannot deliver mail. Your second factor is required and the reason is audited.</p></div></div>
       <form className="form-stack" onSubmit={issueRecovery}>
@@ -304,9 +347,9 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
     </section>}
 
     {(isOperations || isSupport || isSecurity) && <section id="privacy-requests" className="app-card app-card--full">
-      <div className="app-card-title"><div><h2>Personal-data request queue</h2><p>Requests remain under review until authorised privacy/security staff record an outcome. Do not infer deletion or export completion.</p></div></div>
+      <div className="app-card-title"><div><h2>Personal-data request queue</h2><p>Requests remain under review until authorised privacy/security staff record an outcome. Recording an <strong>erasure</strong> request as completed now performs the redaction in the same transaction: it overwrites the person&apos;s name, email and credentials and cannot be undone. Every other request type is a decision you carry out by hand.</p></div></div>
       {dataRequests.length ? <div className="data-list">{dataRequests.map((request) => <article className="operation-record" key={request.id}>
-        <div className="operation-record-head"><div><strong>{request.requestType.replaceAll("_", " ")}</strong><small>{request.userName || request.userId} · submitted {formatDate(request.createdAt)}</small><small>{request.description || "No additional details"}</small>{request.resolution && <small>Reviewer note: {request.resolution}</small>}</div><span className={`status-pill status-pill--${request.status}`}>{request.status.replaceAll("_", " ")}</span></div>
+        <div className="operation-record-head"><div><strong>{request.requestType.replaceAll("_", " ")}</strong><small>{request.userName || request.userId} · submitted {formatDate(request.createdAt)}</small><small>{request.description || "No additional details"}</small>{request.resolution && <small>Reviewer note: {request.resolution}</small>}{request.requestType === "erasure" && request.status !== "completed" && request.status !== "rejected" && <small><strong>Choosing Completed below erases this account immediately and permanently.</strong> Their receipts and the audit trail are kept.</small>}</div><span className={`status-pill status-pill--${request.status}`}>{request.status.replaceAll("_", " ")}</span></div>
         {(isOperations || isSecurity) && <form className="form-stack" onSubmit={(event) => submitForm(event, `data-${request.id}`, `/api/data-requests/${request.id}`, (form) => ({ status: form.get("status"), resolution: form.get("resolution") }), "Privacy request review recorded.", "PATCH")}>
           <div className="form-field"><label htmlFor={`data-status-${request.id}`}>Decision status</label><select className="form-control" id={`data-status-${request.id}`} name="status" defaultValue={request.status === "submitted" ? "in_review" : request.status}><option value="in_review">In review</option><option value="awaiting_user">Awaiting user</option><option value="completed">Completed</option><option value="rejected">Rejected</option></select></div>
           <div className="form-field"><label htmlFor={`data-resolution-${request.id}`}>Reviewer response</label><textarea className="form-control" id={`data-resolution-${request.id}`} name="resolution" required maxLength={800} rows={2} /></div>

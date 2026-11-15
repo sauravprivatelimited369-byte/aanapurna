@@ -14,7 +14,7 @@ import type { ReadinessItem } from "@/domain/readiness";
 
 type Readiness = { items: ReadinessItem[]; complete: boolean; missing: string[] };
 
-type FormKind = "legal_entity" | "insurance" | "data_protection_contact" | "penetration_test" | "on_call";
+type FormKind = "legal_entity" | "insurance" | "data_protection_contact" | "penetration_test" | "on_call" | "support_response_window";
 
 const formTitles: Record<FormKind, string> = {
   legal_entity: "Record the legal entity",
@@ -22,6 +22,7 @@ const formTitles: Record<FormKind, string> = {
   data_protection_contact: "Record the data-protection contact",
   penetration_test: "Record the independent test",
   on_call: "Schedule on-call coverage",
+  support_response_window: "Record the privacy response window",
 };
 
 function statusLabel(item: ReadinessItem): string {
@@ -73,7 +74,12 @@ export function LaunchReadinessPanel({ canWrite }: { canWrite: boolean }) {
     setBusy(kind);
     void (async () => {
       try {
-        if (kind === "on_call") {
+        if (kind === "support_response_window") {
+          await send("/api/admin/attestations", {
+            key: kind, evidenceReference, expiresAt: null,
+            value: { hours: Number(field("hours")), staffedBy: field("staffedBy") },
+          });
+        } else if (kind === "on_call") {
           await send("/api/admin/on-call", {
             email: field("email"),
             startsAt: new Date(field("startsAt")).toISOString(),
@@ -151,7 +157,7 @@ export function LaunchReadinessPanel({ canWrite }: { canWrite: boolean }) {
     <div className="app-card-title">
       <div>
         <h2>Launch readiness</h2>
-        <p>Seven requirements stand between this build and real operations. Four are declarations only a named person can make, one is a staffed rota, and two depend on values only the owner can supply. Readiness is computed from the stored records and their expiry, so a lapsed policy re-opens the gap without anyone editing a document.</p>
+        <p>Nine requirements stand between this build and real operations. Five are declarations only a named person can make, one is a staffed rota, two depend on values only the owner can supply, and two are computed from the schema itself. Readiness is computed from the stored records and their expiry, so a lapsed policy re-opens the gap without anyone editing a document.</p>
       </div>
       <span className={`status-pill status-pill--${readiness?.complete ? "active" : "pending"}`}>
         {readiness ? `${readiness.missing.length} unmet` : "loading"}
@@ -178,6 +184,22 @@ export function LaunchReadinessPanel({ canWrite }: { canWrite: boolean }) {
         {canWrite && item.key === "penetration_test" && <button className="button button--secondary button--small" type="button" onClick={() => setOpenForm(openForm === "penetration_test" ? "" : "penetration_test")}>{openForm === "penetration_test" ? "Close" : "Record"}</button>}
         {canWrite && item.key === "on_call" && <button className="button button--secondary button--small" type="button" onClick={() => setOpenForm(openForm === "on_call" ? "" : "on_call")}>{openForm === "on_call" ? "Close" : "Schedule"}</button>}
       </article>)}
+
+      {canWrite && readiness && <div className="app-card" style={{ marginTop: 14 }}>
+        <h3>Privacy response window</h3>
+        <p className="muted">
+          How long a privacy request or support case may wait before the operations screen counts it as
+          overdue. Recording a window is what starts the grievance clock; until then nothing can be
+          shown as late, and the readiness check says so rather than assuming a number.
+        </p>
+        <button
+          className="button button--secondary button--small"
+          type="button"
+          onClick={() => setOpenForm(openForm === "support_response_window" ? "" : "support_response_window")}
+        >
+          {openForm === "support_response_window" ? "Close" : "Record a window"}
+        </button>
+      </div>}
 
       {canWrite && openForm && <form className="form-stack" onSubmit={(event) => submit(openForm, event)} aria-label={formTitles[openForm]}>
         <h3>{formTitles[openForm]}</h3>
@@ -206,6 +228,11 @@ export function LaunchReadinessPanel({ canWrite }: { canWrite: boolean }) {
           <div className="form-field"><label htmlFor="pt-report">Report reference</label><input className="form-control" id="pt-report" name="reportReference" required maxLength={160} /></div>
           <div className="form-field"><label htmlFor="pt-date">Date completed</label><input className="form-control" id="pt-date" name="completedOn" type="date" required /></div>
           <div className="form-field"><label htmlFor="pt-scope">Scope tested</label><textarea className="form-control" id="pt-scope" name="scopeSummary" required maxLength={1000} rows={2} /></div>
+        </>}
+        {openForm === "support_response_window" && <>
+          <div className="form-field"><label htmlFor="rw-hours">Answer within how many hours?</label><input className="form-control" id="rw-hours" name="hours" type="number" min={1} max={2160} required /></div>
+          <div className="form-field"><label htmlFor="rw-staffed">Who staffs it?</label><input className="form-control" id="rw-staffed" name="staffedBy" required maxLength={200} placeholder="Two operations administrators during business hours" /></div>
+          <p className="muted">This is how long a complaint may wait before the operations screen shows it as overdue. It is not a service level and nothing is published to a person on the strength of it.</p>
         </>}
         {openForm === "on_call" && <>
           <div className="form-field"><label htmlFor="oc-email">Person on call (account email)</label><input className="form-control" id="oc-email" name="email" type="email" required maxLength={320} /></div>

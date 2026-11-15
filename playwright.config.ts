@@ -21,6 +21,10 @@ export default defineConfig({
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000",
     headless: true,
+    // Playwright defaults this to no limit, so a locator whose control was renamed or disabled waits
+    // until the whole test times out and reports "Test timeout exceeded" with no mention of the
+    // control. Fifteen seconds is far longer than any of these pages needs once it has rendered.
+    actionTimeout: 15_000,
     trace: process.env.RUN_LOCAL_AUTH_E2E === "true" || process.env.RUN_LOCAL_WORKFLOW_E2E === "true" ? "off" : "retain-on-failure",
     launchOptions: executablePath ? { executablePath, ...(launchArgs ? { args: launchArgs } : {}) } : undefined,
   },

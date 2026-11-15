@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -23,6 +25,12 @@ const migrationFiles = [
   "20261115193000_readiness_escalation.sql",
   "20261115203000_joka_directory.sql",
   "20261115213000_directory_phone_consent.sql",
+  "20261115230000_food_safety_attestation_and_recovery.sql",
+  "20261116090000_data_retention_and_holds.sql",
+  "20261116120000_privacy_subject_rights.sql",
+  "20261117090000_distance_ranked_matching.sql",
+  "20261117100000_notification_email_recipients.sql",
+  "20261117110000_push_subscriptions.sql",
 ];
 
 let database: PGlite;
@@ -116,11 +124,15 @@ describe("PostgreSQL migration and authorization contracts", () => {
             'app_consume_delivery_code','app_mark_user_verified','app_find_receiver_candidates',
             'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
             'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
-            'app_guard_user_profile_status'
+            'app_guard_user_profile_status',
+            'app_notify_platform_roles','app_current_agreement_version',
+            'app_org_coordinates','app_normalize_place','app_notification_recipients','app_push_targets','app_unpushed_notifications','app_mark_push_delivered','app_revoke_push_subscription'
           )) AS required_functions
     `);
-    expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(23);
-    expect(result.rows[0]?.required_functions).toBe(10);
+    // Migration 20 added two forced-RLS tables and two functions; migration 24 added the two functions
+    // that resolve an organisation's coordinates. Both floors rise so removing one fails the suite.
+    expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(25);
+    expect(result.rows[0]?.required_functions).toBe(19);
   });
 
   it("adds recall records as append-only, policy-protected evidence with one open recall per donation", async () => {
@@ -793,5 +805,991 @@ describe("Transit limits and receiver self-collection", () => {
     `);
     expect(definition.rows[0]?.prosrc).toContain("receiver_collection");
     expect(definition.rows[0]?.prosrc).toContain("app_has_org_role");
+  });
+
+  it("refuses a partial arrival inspection and records a complete one", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('inspect-gen', 'Generator', 'inspect-gen@example.test', true),
+        ('inspect-rec', 'Receiver', 'inspect-rec@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('inspect-gen', 'active'), ('inspect-rec', 'active');
+      INSERT INTO public.organizations (id, name, type, status, operating_address, city_or_district, contact_name, contact_email, created_by)
+      VALUES ('00000000-0000-4000-8000-0000000000b1', 'Inspect Gen', 'generator', 'verified', 'Address', 'Cuttack', 'Contact', 'g@example.test', 'inspect-gen'),
+             ('00000000-0000-4000-8000-0000000000b2', 'Inspect Rec', 'receiver', 'verified', 'Address', 'Cuttack', 'Contact', 'r@example.test', 'inspect-rec');
+      INSERT INTO public.donations (id, generator_organization_id, pickup_city, created_by, name, category, food_type,
+        quantity, unit, prepared_at, best_before_at, pickup_earliest_at, pickup_latest_at, storage_instructions, policy_version)
+      VALUES ('00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b1', 'Cuttack', 'inspect-gen',
+        'Meals', 'cooked', 'vegetarian', 10, 'servings', now() - interval '1 hour', now() + interval '6 hours',
+        now() - interval '10 minutes', now() + interval '4 hours', 'Keep hot', '0.1.0');
+      INSERT INTO public.donation_offers (id, donation_id, receiver_organization_id, status, expires_at)
+      VALUES ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b2', 'accepted', now() + interval '1 hour');
+      INSERT INTO public.delivery_jobs (id, donation_id, offer_id, generator_organization_id, receiver_organization_id, status, collected_at)
+      VALUES ('00000000-0000-4000-8000-0000000000e1', '00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000d1',
+        '00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000b2', 'collected', now() - interval '5 minutes');
+      ALTER TABLE public.delivery_jobs DISABLE TRIGGER delivery_arrival_inspection_guard;
+      UPDATE public.delivery_jobs SET arrived_at = now() - interval '2 minutes', arrival_reported_by = 'inspect-rec'
+        WHERE id = '00000000-0000-4000-8000-0000000000e1';
+      ALTER TABLE public.delivery_jobs ENABLE TRIGGER delivery_arrival_inspection_guard;
+    `);
+
+    // The trigger is the outer guard: a caller who is not this delivery's receiving organisation is
+    // refused before the shape of what they wrote is even considered. That ordering is deliberate -
+    // the rejection says "not yours", not "your data looks odd".
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/only the receiving organisation may record inspection/);
+
+    // Behind it, the CHECK constraints are what stop a partial or impossible inspection existing at
+    // all, even if the trigger were dropped by a future migration. Exercise them directly.
+    await database.exec(`ALTER TABLE public.delivery_jobs DISABLE TRIGGER delivery_arrival_inspection_guard;`);
+
+    // One check alone is a fragment of an inspection, not an inspection.
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/delivery_inspection_checks_together/);
+
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true, inspection_packaging_intact = true,
+         inspection_label_matched = true, inspection_within_window = true, inspection_temperature_c = 900
+       WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/delivery_inspection_temperature_range/);
+
+    // A photo fingerprint has to be a fingerprint.
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_photo_sha256 = 'not-a-hash' WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/delivery_inspection_photo_hash_format/);
+
+    // A real handover: frozen, chilled or hot-holding readings all fit inside the sanity bound.
+    await database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true, inspection_packaging_intact = true,
+         inspection_label_matched = true, inspection_within_window = true, inspection_temperature_c = 63.5,
+         inspection_photo_sha256 = $1
+       WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+      ["a".repeat(64)],
+    );
+    const stored = await database.query<{ temperature: string; seal: boolean }>(
+      `SELECT inspection_temperature_c::text AS temperature, inspection_seal_intact AS seal
+       FROM public.delivery_jobs WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    );
+    expect(stored.rows[0]).toEqual({ temperature: "63.50", seal: true });
+    await database.exec(`ALTER TABLE public.delivery_jobs ENABLE TRIGGER delivery_arrival_inspection_guard;`);
+  });
+
+  it("requires harm to be described and a closure to say what changed", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES ('harm-user', 'Reporter', 'harm@example.test', true);
+      INSERT INTO public.donations (id, generator_organization_id, pickup_city, created_by, name, category, food_type,
+        quantity, unit, prepared_at, best_before_at, pickup_earliest_at, pickup_latest_at, storage_instructions, policy_version)
+      VALUES ('00000000-0000-4000-8000-0000000000c2', '00000000-0000-4000-8000-0000000000b1', 'Cuttack', 'harm-user',
+        'Meals 2', 'cooked', 'vegetarian', 10, 'servings', now() - interval '1 hour', now() + interval '6 hours',
+        now() - interval '10 minutes', now() + interval '4 hours', 'Keep hot', '0.1.0');
+    `);
+    await expect(database.query(`
+      INSERT INTO public.food_safety_incidents (donation_id, reported_by, incident_type, severity, description, harm_reported)
+      VALUES ('00000000-0000-4000-8000-0000000000c2', 'harm-user', 'other', 'high', 'Something happened', true)
+    `)).rejects.toThrow(/food_safety_incidents_harm_detail_check/);
+
+    await database.exec(`
+      INSERT INTO public.food_safety_incidents (id, donation_id, reported_by, incident_type, severity, description, harm_reported, harm_details)
+      VALUES ('00000000-0000-4000-8000-0000000000f2', '00000000-0000-4000-8000-0000000000c2', 'harm-user', 'other', 'high',
+        'Reported by a receiver', true, 'Two people reported stomach pain');
+    `);
+    // "We looked into it" is not a closure. Something has to be different afterwards.
+    await expect(database.query(`
+      UPDATE public.food_safety_incidents
+      SET status = 'closed', resolution = 'Reviewed and nothing further found', closed_by = 'harm-user', closed_at = now()
+      WHERE id = '00000000-0000-4000-8000-0000000000f2'
+    `)).rejects.toThrow(/food_safety_incidents_closure_corrective/);
+
+    await database.query(`
+      UPDATE public.food_safety_incidents
+      SET status = 'closed', resolution = 'Reviewed in full', closed_by = 'harm-user', closed_at = now(),
+          corrective_action = 'Cold-holding requirement added to the policy and re-briefed to every kitchen'
+      WHERE id = '00000000-0000-4000-8000-0000000000f2'
+    `);
+  });
+
+  it("keeps insurance declarations paired and agreements immutable", async () => {
+    await expect(database.query(
+      `UPDATE public.organizations SET insurance_policy_reference = 'POL-1'
+       WHERE id = '00000000-0000-4000-8000-0000000000b1'`,
+    )).rejects.toThrow(/organizations_insurance_paired/);
+
+    await expect(database.query(
+      `UPDATE public.organizations SET insurance_policy_reference = 'POL-1', insurance_expires_on = current_date - 1
+       WHERE id = '00000000-0000-4000-8000-0000000000b1'`,
+    )).rejects.toThrow(/organizations_insurance_not_backdated/);
+
+    await database.query(
+      `UPDATE public.organizations SET insurance_policy_reference = 'POL-1', insurance_expires_on = current_date + 90
+       WHERE id = '00000000-0000-4000-8000-0000000000b1'`,
+    );
+
+    await database.query(
+      `INSERT INTO public.partner_agreement_acceptances (organization_id, version, accepted_by, content_sha256)
+       VALUES ('00000000-0000-4000-8000-0000000000b1', '2026-11-15', 'inspect-gen', $1)`,
+      ["b".repeat(64)],
+    );
+    await expect(database.query(
+      `INSERT INTO public.partner_agreement_acceptances (organization_id, version, accepted_by, content_sha256)
+       VALUES ('00000000-0000-4000-8000-0000000000b1', '2026-11-15', 'inspect-gen', $1)`,
+      ["c".repeat(64)],
+    )).rejects.toThrow(/partner_agreement_org_version_uq/);
+
+    // An acceptance is evidence: no grant to rewrite it exists for the runtime role.
+    const grants = await database.query<{ can_update: boolean; can_delete: boolean }>(`
+      SELECT has_table_privilege('annapurna_app', 'public.partner_agreement_acceptances', 'UPDATE') AS can_update,
+             has_table_privilege('annapurna_app', 'public.partner_agreement_acceptances', 'DELETE') AS can_delete
+    `);
+    expect(grants.rows[0]).toEqual({ can_update: false, can_delete: false });
+  });
+
+  it("reports partner coverage and the agreement as unmet until partners hold them", async () => {
+    const empty = await database.query<Record<string, boolean>>("SELECT * FROM public.app_launch_readiness()");
+    // Migration 22 appended two columns. Pinning the exact list means adding a third requires
+    // deliberately editing this test, which is the point: a readiness check that grows silently is
+    // a readiness check nobody reads.
+    expect(Object.keys(empty.rows[0] ?? {}).sort()).toEqual([
+      "data_protection_contact", "grievance_window", "insurance", "legal_entity", "on_call",
+      "partner_agreement", "partner_insurance", "penetration_test", "subject_rights",
+    ]);
+    // Verified partners exist in this fixture and at least one has not accepted the agreement, so
+    // the gate must not claim coverage it cannot show.
+    expect(empty.rows[0]?.partner_agreement).toBe(false);
+
+    const version = await database.query<{ app_current_agreement_version: string }>(
+      "SELECT public.app_current_agreement_version()",
+    );
+    expect(version.rows[0]?.app_current_agreement_version).toBe("2026-11-15");
+
+    // A full agreement + insurance declaration on every verified partner closes those two gates.
+    await database.query(`
+      UPDATE public.organizations
+      SET agreement_version = public.app_current_agreement_version(), agreement_accepted_at = now()
+      WHERE status::text = 'verified'
+    `);
+    const covered = await database.query<{ partner_agreement: boolean; partner_insurance: boolean }>(
+      "SELECT partner_agreement, partner_insurance FROM public.app_launch_readiness()",
+    );
+    expect(covered.rows[0]?.partner_agreement).toBe(true);
+    // Insurance is only on one of the verified organisations, so cover is still incomplete.
+    expect(covered.rows[0]?.partner_insurance).toBe(false);
+  });
+
+  it("lets any signed-in person reach the roles accountable for harm, and nobody else", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('safety-lead', 'Safety lead', 'safety@example.test', true),
+        ('ops-lead', 'Ops lead', 'ops@example.test', true),
+        ('outsider', 'Outsider', 'outsider@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('safety-lead', 'active'), ('ops-lead', 'active'), ('outsider', 'active');
+      INSERT INTO public.platform_roles (user_id, role, reason) VALUES
+        ('safety-lead', 'safety_officer', 'Fixture: named safety officer for an escalation test'),
+        ('ops-lead', 'operations_admin', 'Fixture: named operations lead for an escalation test');
+    `);
+
+    // Earlier fixtures in this file appoint their own administrators, so the assertion is that every
+    // active holder of the named roles received it - counted, not assumed to be exactly two.
+    const expected = await database.query<{ recipients: number }>(`
+      SELECT count(DISTINCT grant_row.user_id)::int AS recipients
+      FROM public.platform_roles grant_row
+      JOIN public.user_profiles profile ON profile.user_id = grant_row.user_id
+      WHERE grant_row.role::text IN ('operations_admin','safety_officer')
+        AND profile.account_status::text = 'active'
+    `);
+    const delivered = await withRole("annapurna_app", "outsider", async () =>
+      database.query<{ delivered: number }>(`
+        SELECT public.app_notify_platform_roles(
+          ARRAY['operations_admin','safety_officer'], 'safety.harm_reported',
+          'Suspected harm to a person reported', 'Incident needs attention', '/admin#incidents'
+        ) AS delivered
+      `));
+    expect(Number(delivered.rows[0]?.delivered)).toBe(Number(expected.rows[0]?.recipients));
+    expect(Number(delivered.rows[0]?.delivered)).toBeGreaterThan(0);
+
+    // A role name outside the known set is refused rather than silently ignored.
+    await expect(withRole("annapurna_app", "outsider", async () =>
+      database.query(`SELECT public.app_notify_platform_roles(ARRAY['superuser'], 'x', 'x', 'x', '/admin')`),
+    )).rejects.toThrow(/unknown platform role/);
+
+    // An anonymous caller cannot inject a notification with no account behind it.
+    await expect(withRole("annapurna_app", null, async () =>
+      database.query(`SELECT public.app_notify_platform_roles(ARRAY['safety_officer'], 'x', 'Title', 'Body', '/admin')`),
+    )).rejects.toThrow(/not authorized/);
+  });
+
+  it("accepts a locked-out request from nobody, and shows it only to staff", async () => {
+    // The intake is unauthenticated by necessity. What protects it is that the insert needs a domain
+    // transition, the filer can read nothing back, and the queue is visible only to platform roles.
+    const inserted = await withRole("annapurna_app", null, async () => {
+      await database.query("SELECT set_config('app.domain_transition', 'true', true)");
+      return database.query(`
+        INSERT INTO public.account_recovery_requests (reference, email, detail, status)
+        VALUES ('AL-REC-2026-FIXTURE01', 'locked-out@example.test', 'Changed email provider and cannot sign in', 'submitted')
+      `);
+    });
+    expect(inserted.rowCount).toBe(1);
+
+    const anonymousRead = await withRole("annapurna_app", "00000000-0000-0000-0000-000000000000", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.account_recovery_requests"));
+    expect(anonymousRead.rows[0]?.count).toBe(0);
+
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('recovery-staff', 'Ops', 'recovery-staff@example.test', true),
+        ('recovery-plain', 'Plain user', 'recovery-plain@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('recovery-staff', 'active'), ('recovery-plain', 'active');
+      INSERT INTO public.platform_roles (user_id, role, reason)
+      VALUES ('recovery-staff', 'operations_admin', 'Fixture: queue reader');
+    `);
+
+    const staffRead = await withRole("annapurna_app", "recovery-staff", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.account_recovery_requests"));
+    expect(Number(staffRead.rows[0]?.count)).toBeGreaterThan(0);
+
+    const plainRead = await withRole("annapurna_app", "recovery-plain", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.account_recovery_requests"));
+    expect(plainRead.rows[0]?.count).toBe(0);
+
+    // A resolution cannot exist without its author, its time and the status that implies them.
+    await expect(database.query(`
+      UPDATE public.account_recovery_requests
+      SET status = 'resolved', resolution = 'Link issued after an identity check by phone'
+      WHERE reference = 'AL-REC-2026-FIXTURE01'
+    `)).rejects.toThrow(/account_recovery_resolution_fields_check/);
+  });
+});
+
+/**
+ * Migration 21's controls, exercised as the application role rather than by reading its source.
+ * The point of these is the part most likely to be wrong in a way nobody notices: that a legal hold
+ * actually stops a deletion, and that the row count in the preview is the count that then happens.
+ */
+describe("retention controls in the database", () => {
+  beforeAll(async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('retention-held', 'Held', 'retention-held@example.test', true),
+        ('retention-free', 'Free', 'retention-free@example.test', true),
+        ('retention-admin', 'Admin', 'retention-admin@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('retention-held', 'active'), ('retention-free', 'active'), ('retention-admin', 'active');
+      INSERT INTO public.notifications (user_id, kind, title, body, created_at) VALUES
+        ('retention-held', 'test', 'held old', 'body', now() - interval '400 days'),
+        ('retention-free', 'test', 'free old', 'body', now() - interval '400 days'),
+        ('retention-free', 'test', 'free new', 'body', now());
+    `);
+  });
+
+  it("ships exactly one settings row and refuses a second", async () => {
+    const rows = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.data_retention_settings",
+    );
+    expect(rows.rows[0]?.count).toBe(1);
+    await expect(
+      database.query("INSERT INTO public.data_retention_settings (id) VALUES (2)"),
+    ).rejects.toThrow(/data_retention_settings_singleton/);
+  });
+
+  it("refuses a window outside the audit floor", async () => {
+    await expect(
+      database.query("UPDATE public.data_retention_settings SET audit_years = 0 WHERE id = 1"),
+    ).rejects.toThrow(/data_retention_settings_windows/);
+  });
+
+  it("refuses a hold whose declared scope contradicts the column it fills", async () => {
+    await expect(database.query(`
+      INSERT INTO public.retention_holds (scope_type, user_id, organization_id, reason, placed_by)
+      VALUES ('user', 'retention-held', gen_random_uuid(), 'Scope does not match the row', 'retention-admin')
+    `)).rejects.toThrow(/retention_holds_scope_matches/);
+  });
+
+  it("refuses a release that leaves out who released it or why", async () => {
+    await database.query(`
+      INSERT INTO public.retention_holds (scope_type, user_id, reason, placed_by)
+      VALUES ('user', 'retention-held', 'Litigation hold, counsel reference LX-44', 'retention-admin')
+    `);
+    await expect(database.query(`
+      UPDATE public.retention_holds SET released_at = now() WHERE user_id = 'retention-held'
+    `)).rejects.toThrow(/retention_holds_release_complete/);
+  });
+
+  it("previews the same counts it then applies, and lets a hold win both times", async () => {
+    const preview = await database.query<{ category: string; affected_rows: number; skipped_by_hold: number }>(
+      "SELECT category, affected_rows, skipped_by_hold FROM public.app_apply_retention(true)",
+    );
+    const previewNotifications = preview.rows.find((row) => row.category === "notifications");
+    // Two old rows qualify, but one belongs to a held person and is counted as skipped.
+    expect(Number(previewNotifications?.affected_rows)).toBe(1);
+    expect(Number(previewNotifications?.skipped_by_hold)).toBe(1);
+
+    // The preview must not have deleted anything.
+    const before = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.notifications WHERE title LIKE '%old%'",
+    );
+    expect(before.rows[0]?.count).toBe(2);
+
+    const applied = await database.query<{ category: string; affected_rows: number; skipped_by_hold: number }>(
+      "SELECT category, affected_rows, skipped_by_hold FROM public.app_apply_retention(false)",
+    );
+    const appliedNotifications = applied.rows.find((row) => row.category === "notifications");
+    expect(Number(appliedNotifications?.affected_rows)).toBe(1);
+    expect(Number(appliedNotifications?.skipped_by_hold)).toBe(1);
+
+    const survivors = await database.query<{ title: string }>(
+      "SELECT title FROM public.notifications WHERE title LIKE '%old%' ORDER BY title",
+    );
+    // The held person's row survives; the unheld person's does not. This is the whole promise.
+    expect(survivors.rows.map((row) => row.title)).toEqual(["held old"]);
+  });
+
+  it("records what it did, including the rows it deliberately skipped", async () => {
+    const log = await database.query<{ category: string; dry_run: boolean; skipped_by_hold: number }>(
+      "SELECT category, dry_run, skipped_by_hold FROM public.data_scrub_log ORDER BY executed_at",
+    );
+    expect(log.rows.some((row) => row.dry_run)).toBe(true);
+    expect(log.rows.some((row) => !row.dry_run)).toBe(true);
+    expect(log.rows.some((row) => Number(row.skipped_by_hold) > 0)).toBe(true);
+  });
+
+  it("keeps audit rows and only scrubs their free text past the window", async () => {
+    await database.query(`
+      INSERT INTO public.audit_events (actor_user_id, action, entity_type, entity_id, reason, details, created_at)
+      VALUES ('retention-free', 'test.ancient', 'user', 'retention-free', 'An old note',
+              '{"note":"someone private"}'::jsonb, now() - interval '8 years');
+    `);
+    await database.query("SELECT * FROM public.app_apply_retention(false)");
+    const row = await database.query<{ action: string; details: unknown; reason: string | null }>(
+      "SELECT action, details, reason FROM public.audit_events WHERE action = 'test.ancient'",
+    );
+    // The row is still there — the trail survives — but the private note inside it is gone.
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0]?.details).toEqual({});
+    expect(row.rows[0]?.reason).toBe("[scrubbed]");
+  });
+
+  it("redacts a person without deleting the accountability around them", async () => {
+    const result = await database.query<{
+      redacted_users: number;
+      redacted_accounts: number;
+      redacted_notifications: number;
+    }>("SELECT * FROM public.app_redact_user('retention-free', 'Erasure request DR-2026-004 fulfilled')");
+    expect(Number(result.rows[0]?.redacted_users)).toBe(1);
+
+    const person = await database.query<{ name: string; email: string }>(
+      "SELECT name, email FROM public.\"user\" WHERE id = 'retention-free'",
+    );
+    expect(person.rows[0]?.name).toBe("Redacted account");
+    expect(person.rows[0]?.email).toContain("@invalid");
+
+    // The erasure itself is audited: an erasure nobody can see is indistinguishable from data loss.
+    const audit = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.audit_events WHERE action = 'identity.redacted' AND entity_id = 'retention-free'",
+    );
+    expect(audit.rows[0]?.count).toBe(1);
+  });
+
+  it("refuses a redaction with no reason recorded", async () => {
+    await expect(
+      database.query("SELECT * FROM public.app_redact_user('retention-held', 'short')"),
+    ).rejects.toThrow(/at least 10 characters/);
+  });
+
+  it("stops the application role from deleting a hold or rewriting the log", async () => {
+    // Seeded as the owner: the application role holds no INSERT on platform_roles, which is the point.
+    await database.query(`
+      INSERT INTO public.platform_roles (user_id, role, reason)
+      VALUES ('retention-admin', 'security_admin', 'Fixture: retention operator')
+    `);
+    // The log is read-only for the application: there is no DELETE policy and no grant.
+    await expect(
+      withRole("annapurna_app", "retention-admin", async () =>
+        database.query("DELETE FROM public.data_scrub_log"),
+      ),
+    ).rejects.toThrow(/permission denied|row-level security/);
+    // A hold is never destroyed; releasing it is the only exit.
+    await expect(
+      withRole("annapurna_app", "retention-admin", async () =>
+        database.query("DELETE FROM public.retention_holds"),
+      ),
+    ).rejects.toThrow(/permission denied|row-level security/);
+  });
+
+  it("gives a person with no platform role no sight of retention state", async () => {
+    const result = await withRole("annapurna_app", "retention-free", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.data_retention_settings"),
+    );
+    expect(result.rows[0]?.count).toBe(0);
+  });
+});
+
+/**
+ * The append-only guarantee is the one control a retention feature is most likely to weaken by
+ * accident. These tests exist to make sure it stayed a guarantee: a scrub may remove information
+ * and nothing else, and an audit row can never be deleted or rewritten.
+ */
+describe("the audit trail stays append-only after migration 21", () => {
+  const rewrite = (sqlText: string) =>
+    database.transaction(async (tx) => {
+      await tx.exec("SELECT set_config('app.retention_scrub', 'true', true)");
+      await tx.exec(sqlText);
+    });
+
+  it("refuses an update that does not declare itself a retention scrub", async () => {
+    await expect(
+      database.query("UPDATE public.audit_events SET details = '{\"x\":1}'::jsonb"),
+    ).rejects.toThrow(/append-only records cannot be changed or deleted/);
+  });
+
+  it("refuses a content rewrite even when the scrub flag is set", async () => {
+    await expect(
+      rewrite("UPDATE public.audit_events SET details = '{\"secret\":\"rewritten\"}'::jsonb"),
+    ).rejects.toThrow(/may only empty audit details/);
+  });
+
+  it("refuses to change who did what, even inside a scrub", async () => {
+    await expect(
+      rewrite("UPDATE public.audit_events SET action = 'something.else' WHERE action = 'identity.redacted'"),
+    ).rejects.toThrow(/append-only|may not alter/);
+  });
+
+  it("refuses a delete even when the scrub flag is set", async () => {
+    await expect(
+      rewrite("DELETE FROM public.audit_events"),
+    ).rejects.toThrow(/append-only records cannot be changed or deleted/);
+  });
+
+  it("still allows the one narrowing change the retention window needs", async () => {
+    await rewrite("UPDATE public.audit_events SET details = '{}'::jsonb, reason = '[scrubbed]'");
+    const result = await database.query<{ details: unknown }>(
+      "SELECT details FROM public.audit_events WHERE action = 'identity.redacted'",
+    );
+    expect(result.rows[0]?.details).toEqual({});
+  });
+});
+
+/**
+ * Migration 22: the three promises that were previously prose.
+ *
+ * Each test here corresponds to a sentence that used to be a claim and is now a constraint. The
+ * erasure test is the important one: before migration 22 an operator could mark an erasure request
+ * `completed` having done nothing at all, and the person would be told their data was erased.
+ */
+describe("privacy subject rights", () => {
+  const person = "subject-rights-person";
+  const operator = "subject-rights-operator";
+
+  beforeAll(async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('subject-rights-person', 'Meera Nair', 'meera.nair@example.test', true),
+        ('subject-rights-operator', 'Ops Lead', 'privacy-ops@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status, display_name) VALUES
+        ('subject-rights-person', 'active', 'Meera'),
+        ('subject-rights-operator', 'active', 'Ops');
+      INSERT INTO public.platform_roles (user_id, role, reason) VALUES
+        ('subject-rights-operator', 'security_admin', 'Fixture: privacy operator');
+      INSERT INTO public.notifications (user_id, kind, title, body) VALUES
+        ('subject-rights-person', 'test', 'A notification', 'with a body');
+      INSERT INTO public.data_requests (user_id, request_type, description, status) VALUES
+        ('subject-rights-person', 'erasure', 'Please erase my account', 'submitted');
+    `);
+  });
+
+  it("refuses to mark an erasure complete without a redaction behind it", async () => {
+    await expect(database.query(
+      "UPDATE public.data_requests SET status = 'completed', completed_at = now() WHERE user_id = $1 AND request_type = 'erasure'",
+      [person],
+    )).rejects.toThrow(/data_requests_erasure_requires_redaction/);
+  });
+
+  it("allows every other request type to complete without a redaction", async () => {
+    await database.query(`
+      INSERT INTO public.data_requests (user_id, request_type, description, status, completed_at)
+      VALUES ($1, 'access', 'Send me my data', 'completed', now())
+    `, [person]);
+    const rows = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.data_requests WHERE user_id = $1 AND request_type = 'access'",
+      [person],
+    );
+    expect(rows.rows[0]?.count).toBe(1);
+  });
+
+  it("produces an export that contains the person's own rows and nothing else", async () => {
+    const result = await database.query<{ document: Record<string, unknown> }>(
+      "SELECT public.app_export_person($1) AS document", [person],
+    );
+    const document = result.rows[0]?.document as Record<string, unknown> & {
+      account: { email: string };
+      notifications: unknown[];
+      privacyRequests: unknown[];
+      about: { whatThisIsNot: string };
+    };
+    expect(document.account.email).toBe("meera.nair@example.test");
+    expect(document.notifications).toHaveLength(1);
+    // The erasure request and the completed access request are both in the person's own record.
+    expect(document.privacyRequests.length).toBeGreaterThanOrEqual(2);
+    // The document says what it is not, rather than implying it is the whole truth.
+    expect(document.about.whatThisIsNot).toMatch(/free text/);
+  });
+
+  it("records the export as a disclosure, because an export is one", async () => {
+    const rows = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.audit_events WHERE action = 'privacy.export_generated' AND entity_id = $1",
+      [person],
+    );
+    expect(Number(rows.rows[0]?.count)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("refuses to export an account that does not exist instead of returning an empty document", async () => {
+    await expect(database.query("SELECT public.app_export_person('no-such-person')"))
+      .rejects.toThrow(/no account exists/);
+  });
+
+  it("lets a person correct their own display name but nothing that belongs to somebody else", async () => {
+    await database.query("UPDATE public.user_profiles SET display_name = 'Meera N.' WHERE user_id = $1", [person]);
+    await database.query("SELECT public.app_record_profile_correction($1, 'display_name')", [person]);
+
+    const audit = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.audit_events WHERE action = 'privacy.self_correction' AND entity_id = $1",
+      [person],
+    );
+    expect(Number(audit.rows[0]?.count)).toBe(1);
+
+    // The audited list is an allow-list of one, enforced in the function.
+    await expect(database.query("SELECT public.app_record_profile_correction($1, 'account_status')", [person]))
+      .rejects.toThrow(/not self-service correctable/);
+  });
+
+  it("gives the application role no way to change an account status through the profile grant", async () => {
+    const grants = await database.query<{ can_update_status: boolean; can_update_name: boolean }>(`
+      SELECT has_column_privilege('annapurna_app', 'public.user_profiles', 'account_status', 'UPDATE') AS can_update_status,
+             has_column_privilege('annapurna_app', 'public.user_profiles', 'display_name', 'UPDATE') AS can_update_name
+    `);
+    expect(grants.rows[0]).toEqual({ can_update_status: false, can_update_name: true });
+  });
+
+  it("measures how long a complaint has waited, and calls it overdue past the window", async () => {
+    await database.query("UPDATE public.data_requests SET created_at = now() - interval '10 days' WHERE user_id = $1", [person]);
+    const result = await database.query<{ open_requests: number; overdue_requests: number; oldest_overdue_hours: number }>(
+      "SELECT * FROM public.app_overdue_privacy_requests(72)",
+    );
+    expect(Number(result.rows[0]?.overdue_requests)).toBeGreaterThanOrEqual(1);
+    expect(Number(result.rows[0]?.oldest_overdue_hours)).toBeGreaterThan(200);
+  });
+
+  it("treats an unrecorded window as unmade rather than assuming a default", async () => {
+    const window = await database.query<{ hours: number | null }>(
+      "SELECT public.app_privacy_response_window_hours() AS hours",
+    );
+    expect(window.rows[0]?.hours).toBeNull();
+
+    const readiness = await database.query<{ grievance_window: boolean; subject_rights: boolean }>(
+      "SELECT grievance_window, subject_rights FROM public.app_launch_readiness()",
+    );
+    // No window recorded, so the grievance gate cannot be met — whatever the request queue looks like.
+    expect(readiness.rows[0]?.grievance_window).toBe(false);
+    // The subject-rights machinery is present from the schema alone.
+    expect(readiness.rows[0]?.subject_rights).toBe(true);
+  });
+
+  it("goes green once a window is recorded and nothing has waited past it", async () => {
+    await database.query(`
+      INSERT INTO public.platform_attestations (key, label, value, recorded_by, evidence_reference)
+      VALUES ('support_response_window', 'Privacy response window', '{"hours": 720}'::jsonb, $1, 'Two operators, not a service level')
+    `, [operator]);
+    const readiness = await database.query<{ grievance_window: boolean }>(
+      "SELECT grievance_window FROM public.app_launch_readiness()",
+    );
+    // A 720-hour window comfortably covers the 10-day-old fixture.
+    expect(readiness.rows[0]?.grievance_window).toBe(true);
+
+    // Tighten the window below the age of the open request and the gate reopens by itself.
+    await database.query(`
+      UPDATE public.platform_attestations SET value = '{"hours": 1}'::jsonb WHERE key = 'support_response_window'
+    `);
+    const reopened = await database.query<{ grievance_window: boolean }>(
+      "SELECT grievance_window FROM public.app_launch_readiness()",
+    );
+    expect(reopened.rows[0]?.grievance_window).toBe(false);
+  });
+
+  it("performs the redaction when the erasure is finally completed properly", async () => {
+    const redacted = await database.query<{ redacted_users: number; redacted_notifications: number }>(
+      "SELECT * FROM public.app_redact_user($1, 'Erasure request DR-2026-011, identity verified by phone')",
+      [person],
+    );
+    expect(Number(redacted.rows[0]?.redacted_users)).toBe(1);
+
+    // Only now can the request move to completed, and it carries the redaction it performed.
+    await database.query(`
+      UPDATE public.data_requests
+      SET status = 'completed', completed_at = now(), redacted_at = now(), redacted_by = $2,
+          redaction_detail = '{"redactedUsers": 1}'::jsonb,
+          resolution = 'Erasure request DR-2026-011 fulfilled after an identity check.'
+      WHERE user_id = $1 AND request_type = 'erasure'
+    `, [person, operator]);
+
+    const request = await database.query<{ status: string; redacted_at: string | null }>(
+      "SELECT status, redacted_at FROM public.data_requests WHERE user_id = $1 AND request_type = 'erasure'",
+      [person],
+    );
+    expect(request.rows[0]?.status).toBe("completed");
+    expect(request.rows[0]?.redacted_at).not.toBeNull();
+
+    const account = await database.query<{ name: string; email: string }>(
+      "SELECT name, email FROM public.\"user\" WHERE id = $1", [person],
+    );
+    expect(account.rows[0]?.name).toBe("Redacted account");
+    expect(account.rows[0]?.email).toContain("@invalid");
+  });
+});
+
+/**
+ * `app_launch_readiness()` returns a *table*, so selecting it as if it were a scalar yields a
+ * Postgres record rather than an object. The driver hands a record back with numeric keys, so the
+ * public health endpoint silently reported `{"0": true, "1": false, ...}` and every named
+ * requirement vanished — including, later, `subject_rights` and `grievance_window`.
+ *
+ * This is the shape the caller depends on. Both forms are asserted so the difference is recorded
+ * rather than rediscovered: the composite has numeric keys, and `to_jsonb` has the column names.
+ */
+describe("launch readiness has to be read as a table", () => {
+  it("returns one row with the column names as keys", async () => {
+    const { rows } = await database.query<{ readiness: Record<string, unknown> }>(
+      "select to_jsonb(app_launch_readiness()) as readiness",
+    );
+    const readiness = rows[0]!.readiness;
+    expect(Object.keys(readiness).sort()).toEqual([
+      "data_protection_contact", "grievance_window", "insurance", "legal_entity",
+      "on_call", "partner_agreement", "partner_insurance", "penetration_test", "subject_rights",
+    ]);
+    for (const value of Object.values(readiness)) expect(typeof value).toBe("boolean");
+  });
+
+  it("does not yield an object when selected as a scalar", async () => {
+    // Documents the trap. If a future Postgres changed this to an object this assertion would fail
+    // and the comment above would be wrong, which is worth knowing.
+    const { rows } = await database.query<{ readiness: Record<string, unknown> }>(
+      "select app_launch_readiness() as readiness",
+    );
+    const keys = Object.keys(rows[0]!.readiness);
+    expect(keys).not.toContain("legal_entity");
+    expect(keys.every((key) => /^\d+$/.test(key))).toBe(true);
+  });
+});
+
+describe("matching ranks by real distance, not by nothing", () => {
+  /**
+   * The failure this guards against is quiet: `app_find_receiver_candidates` returned receivers in
+   * whatever order the planner felt like, so a Receiver 2 km away and one 158 km away looked equally
+   * suitable and the offer a Helper could not realistically collect was indistinguishable from the
+   * one next door. Nothing threw; the food simply went to whoever sorted first.
+   */
+  it("orders a near receiver before a far one, and says how far each is", async () => {
+    const area = (await database.query<{ id: string }>(
+      "INSERT INTO public.service_areas (label,country_code,timezone,active) VALUES ('Ranking test','IN','Asia/Kolkata',true) RETURNING id",
+    )).rows[0]!.id;
+    const donorId = "aaaaaaaa-0000-0000-0000-000000000001";
+    const nearId = "aaaaaaaa-0000-0000-0000-000000000002";
+    const farId = "aaaaaaaa-0000-0000-0000-000000000003";
+    const noCoordId = "aaaaaaaa-0000-0000-0000-000000000004";
+    // Sambalpur, a point about 2 km north of it, Rourkela (~158 km), and one with no coordinates.
+    const orgs: [string, string, "generator" | "receiver", number | null, number | null][] = [
+      [donorId, "donor", "generator", 21.4669, 83.9812],
+      [nearId, "near", "receiver", 21.484, 83.9812],
+      [farId, "far", "receiver", 22.2604, 84.8536],
+      // A city that is not in the gazetteer, so this receiver is genuinely unlocatable. Naming a city
+      // that *is* in the gazetteer would resolve it to that city's centre, and if it matched the
+      // donor's city the distance would correctly be about zero — which is not the case being tested.
+      [noCoordId, "unlocated", "receiver", null, null],
+    ];
+    const cities: Record<string, string> = { [noCoordId]: "Unmapped Village" };
+    for (const [id, name, type, lat, lon] of orgs) {
+      await database.query('INSERT INTO public."user" (id,name,email,email_verified) VALUES ($1,$2,$3,true)', [id, name, `${name}@example.test`]);
+      await database.query(
+        `INSERT INTO public.organizations (id,name,type,status,service_area_id,operating_address,city_or_district,contact_name,contact_email,food_capabilities,created_by,latitude,longitude,receiving_capacity,capacity_unit)
+         VALUES ($1::uuid,$2::text,$3::organization_type,'verified',$4::uuid,'test address',$7::text,'c','c@example.test',ARRAY['produce'],$1::text,$5::numeric,$6::numeric,50,'servings')`,
+        [id, name, type, area, lat, lon, cities[id] ?? "Sambalpur"],
+      );
+      await database.query("INSERT INTO public.organization_memberships (organization_id,user_id,role,status) VALUES ($1,$2,'owner','active')", [id, id]);
+    }
+    await database.query(
+      `INSERT INTO public.donations (generator_organization_id,service_area_id,category,quantity,unit,food_type,name,status,created_by,packed_at,best_before_at,pickup_earliest_at,pickup_latest_at,policy_version,prepared_at,storage_instructions,pickup_city)
+       VALUES ($1::uuid,$2::uuid,'produce',10,'servings','vegetarian','Ranking test donation','offered',$3::text,now(),now()+interval '4 hours',now(),now()+interval '3 hours','test',now()-interval '1 hour','refrigerate','Sambalpur')`,
+      [donorId, area, donorId],
+    );
+
+    const rows = await withRole("annapurna_app", donorId, async () => (await database.query<{
+      id: string; distance_km: string | null; distance_source: string; capacity_adequate: boolean;
+    }>("SELECT * FROM public.app_find_receiver_candidates($1,$2,'produce',10,'servings')", [donorId, area])).rows);
+
+    // Nearest first, and the unlocated receiver last rather than dropped: an organisation with a
+    // blank coordinate is not disqualified from food, it just cannot be ranked by distance.
+    expect(rows.map((row) => row.id)).toEqual([nearId, farId, noCoordId]);
+    expect(Number(rows[0]!.distance_km)).toBeGreaterThan(0);
+    expect(Number(rows[0]!.distance_km)).toBeLessThan(10);
+    expect(Number(rows[1]!.distance_km)).toBeGreaterThan(100);
+    // Unknown distance is reported as unknown, never as zero — a zero would sort first and read as
+    // "right next door".
+    expect(rows[2]!.distance_km).toBeNull();
+    expect(rows[2]!.distance_source).toBe("unknown");
+    // Capacity is reported rather than used as a silent filter.
+    expect(rows.every((row) => row.capacity_adequate === true)).toBe(true);
+  });
+});
+
+describe("a city-centre match is reported as one", () => {
+  /**
+   * A receiver with no coordinates is resolved to its city's centre. When that city is the donor's
+   * city, the distance is genuinely about zero — and that is fine, but only if it is *labelled* as a
+   * city-centre estimate. The failure mode this guards against is a 0.0 km reading presented as an
+   * exact distance, which would tell a Helper the food is next door when the receiver could be at the
+   * far edge of the district. The source column is what makes that impossible to hide.
+   */
+  it("marks a gazetteer-derived distance as gazetteer, never as an exact point", async () => {
+    const area = (await database.query<{ id: string }>(
+      "INSERT INTO public.service_areas (label,country_code,timezone,active) VALUES ('Centroid test','IN','Asia/Kolkata',true) RETURNING id",
+    )).rows[0]!.id;
+    const ids = {
+      donor: "bbbbbbbb-0000-0000-0000-000000000001",
+      exact: "bbbbbbbb-0000-0000-0000-000000000002",
+      centroid: "bbbbbbbb-0000-0000-0000-000000000003",
+    };
+    // Both receivers are in Cuttack, which the gazetteer knows. One declares exact coordinates, the
+    // other only names the city.
+    for (const [key, id, lat, lon] of [
+      ["donor", ids.donor, 20.4625, 85.8830],
+      ["exact", ids.exact, 20.4700, 85.8900],
+      ["centroid", ids.centroid, null, null],
+    ] as [string, string, number | null, number | null][]) {
+      await database.query('INSERT INTO public."user" (id,name,email,email_verified) VALUES ($1,$2,$3,true)', [id, key, `${key}-centroid@example.test`]);
+      await database.query(
+        `INSERT INTO public.organizations (id,name,type,status,service_area_id,operating_address,city_or_district,contact_name,contact_email,food_capabilities,created_by,latitude,longitude,receiving_capacity,capacity_unit)
+         VALUES ($1::uuid,$2::text,$3::organization_type,'verified',$4::uuid,'test address','Cuttack','c','c@example.test',ARRAY['produce'],$1::text,$5::numeric,$6::numeric,50,'servings')`,
+        [id, key, key === "donor" ? "generator" : "receiver", area, lat, lon],
+      );
+      await database.query("INSERT INTO public.organization_memberships (organization_id,user_id,role,status) VALUES ($1,$2,'owner','active')", [id, id]);
+    }
+    await database.query(
+      `INSERT INTO public.donations (generator_organization_id,service_area_id,category,quantity,unit,food_type,name,status,created_by,packed_at,best_before_at,pickup_earliest_at,pickup_latest_at,policy_version,prepared_at,storage_instructions,pickup_city)
+       VALUES ($1::uuid,$2::uuid,'produce',10,'servings','vegetarian','Centroid donation','offered',$3::text,now(),now()+interval '4 hours',now(),now()+interval '3 hours','test',now()-interval '1 hour','refrigerate','Cuttack')`,
+      [ids.donor, area, ids.donor],
+    );
+    const rows = await withRole("annapurna_app", ids.donor, async () => (await database.query<{
+      id: string; distance_km: string | null; distance_source: string;
+    }>("SELECT * FROM public.app_find_receiver_candidates($1,$2,'produce',10,'servings')", [ids.donor, area])).rows);
+
+    const exact = rows.find((row) => row.id === ids.exact)!;
+    const centroid = rows.find((row) => row.id === ids.centroid)!;
+    expect(exact.distance_source).toBe("organization");
+    expect(centroid.distance_source).toBe("gazetteer");
+    // Both may be close — that is the point. The label is what distinguishes them.
+    expect(Number(centroid.distance_km)).toBeLessThan(1);
+  });
+});
+
+describe("notification email can actually be addressed and queued", () => {
+  /**
+   * Three separate things blocked this and each failed in a way that looked like something else:
+   * the app role cannot read `user.email`, the outbox insert policy allowed only auth kinds, and the
+   * recipient function checked the wrong organisation. Any one of them silently reduced the feature to
+   * "notifications are written and nobody is told". These assertions are the ones that would have
+   * caught each.
+   */
+  it("resolves recipients through the function, not through the auth tables", async () => {
+    // The organisation has to be one where the caller actually holds an active membership; the
+    // authorisation is about the caller's role, not about the organisation existing.
+    const org = (await database.query<{ id: string; user_id: string }>(
+      `SELECT membership.organization_id AS id, membership.user_id
+       FROM public.organization_memberships membership
+       WHERE membership.status::text = 'active'
+       ORDER BY membership.organization_id LIMIT 1`,
+    )).rows[0]!;
+    const rows = await withRole("annapurna_app", org.user_id, async () =>
+      (await database.query<{ email: string }>(
+        "SELECT email FROM public.app_notification_recipients($1, NULL)", [org.id],
+      )).rows);
+    // The member's address comes back...
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]!.email).toContain("@");
+    // ...and the application role still cannot read the table directly. If this ever passes, the
+    // security-definer function has been made redundant by a grant that exposes the email directory.
+    const direct = await withRole("annapurna_app", org.user_id, async () =>
+      database.query('SELECT email FROM public."user" LIMIT 1').then(() => "allowed").catch(() => "denied"));
+    expect(direct).toBe("denied");
+  });
+
+  it("refuses to list recipients for an organisation the caller has nothing to do with", async () => {
+    const stranger = "cccccccc-0000-0000-0000-0000000000ff";
+    await database.query('INSERT INTO public."user" (id,name,email,email_verified) VALUES ($1,$2,$3,true)', [stranger, "stranger", "stranger-notify@example.test"]);
+    const org = (await database.query<{ id: string }>("SELECT id FROM public.organizations ORDER BY created_at LIMIT 1")).rows[0]!;
+    const outcome = await withRole("annapurna_app", stranger, async () =>
+      database.query("SELECT email FROM public.app_notification_recipients($1, NULL)", [org.id])
+        .then(() => "allowed").catch(() => "denied"));
+    expect(outcome).toBe("denied");
+  });
+
+  it("lets the application queue a notification email, which the policy previously forbade", async () => {
+    const org = (await database.query<{ created_by: string }>(
+      "SELECT created_by FROM public.organizations ORDER BY created_at LIMIT 1",
+    )).rows[0]!;
+    const outcome = await withRole("annapurna_app", org.created_by, async () =>
+      database.query(
+        `INSERT INTO public.email_outbox (id, recipient, kind, encrypted_payload, message_id)
+         VALUES (gen_random_uuid(), 'notify-policy@example.test', 'notification', 'v1.placeholder', $1)`,
+        [`<notify-policy-${Date.now()}@annapurna-link.local>`],
+      ).then(() => "inserted").catch(() => "refused"));
+    expect(outcome).toBe("inserted");
+    // And a kind outside the allow-list is still refused, so the widening was by one entry, not by
+    // turning the policy off.
+    const arbitrary = await withRole("annapurna_app", org.created_by, async () =>
+      database.query(
+        `INSERT INTO public.email_outbox (id, recipient, kind, encrypted_payload, message_id)
+         VALUES (gen_random_uuid(), 'notify-policy2@example.test', 'marketing', 'v1.placeholder', $1)`,
+        [`<notify-policy2-${Date.now()}@annapurna-link.local>`],
+      ).then(() => "inserted").catch(() => "refused"));
+    expect(arbitrary).toBe("refused");
+  });
+});
+
+describe("notifications can reach the device a person is holding", () => {
+  /**
+   * Push is the only channel that arrives while somebody is standing in a kitchen. These assertions
+   * cover the parts that fail silently: a device belonging to one person visible to another, a
+   * notification pushed twice, and a stale notification pushed about food collected yesterday.
+   */
+  it("shows a person only their own devices, and refuses to register one for somebody else", async () => {
+    await database.query(
+      `INSERT INTO public."user" (id,name,email,email_verified) VALUES
+       ('push-suite-a','A','push-a-suite@example.test',true),('push-suite-b','B','push-b-suite@example.test',true)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    // A registers a device.
+    await withRole("annapurna_app", "push-suite-a", async () => {
+      await database.query(
+        `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth, device_label)
+         VALUES ('push-suite-a','https://push.example.test/suite-a','keykeykeykey','authauth','Chrome on Android')`,
+      );
+    });
+    const mine = await withRole("annapurna_app", "push-suite-a", async () =>
+      Number((await database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.push_subscriptions")).rows[0]!.count));
+    expect(mine).toBe(1);
+
+    // B sees nothing of A's, which is the whole point of the table being per person.
+    const theirs = await withRole("annapurna_app", "push-suite-b", async () =>
+      Number((await database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.push_subscriptions")).rows[0]!.count));
+    expect(theirs).toBe(0);
+
+    // B cannot write a device row owned by A.
+    const crossWrite = await withRole("annapurna_app", "push-suite-b", async () =>
+      database.query(
+        `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth)
+         VALUES ('push-suite-a','https://push.example.test/evil','keykeykeykey','authauth')`,
+      ).then(() => "allowed").catch(() => "refused"));
+    expect(crossWrite).toBe("refused");
+  });
+
+  it("delivers each notification once, and never a stale one", async () => {
+    // Written by the real notification function, so this covers the path every notification takes.
+    await withRole("annapurna_app", "push-suite-a", async () => {
+      await database.query(
+        `SELECT public.app_notify_user('push-suite-a', NULL, 'test.push', 'Offer expiring',
+           'A claim expires in 45 minutes.', '/app/offers')`,
+      );
+    });
+    const pending = await database.query<{ id: string }>("SELECT id FROM public.app_unpushed_notifications(100)");
+    expect(pending.rows.length).toBeGreaterThan(0);
+
+    await database.query("SELECT public.app_mark_push_delivered($1::uuid[])", [pending.rows.map((row) => row.id)]);
+    const after = await database.query("SELECT id FROM public.app_unpushed_notifications(100)");
+    expect(after.rows.length).toBe(0);
+
+    // A notification older than the window is skipped rather than fired late: pushing about food that
+    // was collected yesterday is noise, and the person already has it in the list and by email.
+    await database.query(
+      `INSERT INTO public.notifications (user_id, kind, title, body, href, created_at)
+       VALUES ('push-suite-a','test.stale','Old news','Two days late.','/app', now() - interval '2 days')`,
+    );
+    const stale = await database.query("SELECT id FROM public.app_unpushed_notifications(100)");
+    expect(stale.rows.length).toBe(0);
+  });
+
+  it("revokes a dead device instead of retrying it forever, and keeps the record", async () => {
+    const before = await database.query<{ id: string }>(
+      `SELECT id FROM public.push_subscriptions
+       WHERE user_id = 'push-suite-a' AND endpoint = 'https://push.example.test/suite-a'`,
+    );
+    const id = before.rows[0]!.id;
+    await database.query("SELECT public.app_revoke_push_subscription($1::uuid, 'push_service_410')", [id]);
+    const after = await database.query<{ revoked_at: Date | null; last_error: string | null }>(
+      "SELECT revoked_at, last_error FROM public.push_subscriptions WHERE id = $1::uuid", [id],
+    );
+    expect(after.rows[0]!.revoked_at).not.toBeNull();
+    expect(after.rows[0]!.last_error).toContain("410");
+    // Revoked, not deleted: "this device was registered and then stopped accepting pushes" is the fact
+    // somebody asks for when a notification is claimed never to have arrived.
+    expect((await database.query("SELECT count(*) FROM public.push_subscriptions WHERE id = $1::uuid", [id])).rows[0]).toBeTruthy();
+
+    // And a revoked device is no longer a push target.
+    const targets = await database.query("SELECT id FROM public.app_push_targets('push-suite-a')");
+    expect(targets.rows.length).toBe(0);
+  });
+});
+
+describe("a session cannot read somebody else's device", () => {
+  /**
+   * `app_push_targets` had to be granted to the app role as well as the worker, because the web process
+   * sends pushes too. That grant is only safe because the function checks the caller: the endpoint and
+   * keys are what let anybody holding them send that device a push, so reading another person's is
+   * reading their credentials.
+   */
+  it("refuses a session asking about another person's devices", async () => {
+    await database.query(
+      `INSERT INTO public."user" (id,name,email,email_verified) VALUES
+       ('authz-suite-a','A','authz-a-suite@example.test',true),('authz-suite-b','B','authz-b-suite@example.test',true)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await database.query(
+      `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth)
+       VALUES ('authz-suite-a','https://push.example.test/authz-suite','keykeykeykey','authauth')
+       ON CONFLICT (endpoint) DO NOTHING`,
+    );
+
+    const crossRead = await withRole("annapurna_app", "authz-suite-b", async () =>
+      database.query("SELECT * FROM public.app_push_targets('authz-suite-a')")
+        .then(() => "allowed").catch(() => "refused"));
+    expect(crossRead).toBe("refused");
+
+    // Its own devices are fine, and being empty is not an error.
+    const ownRead = await withRole("annapurna_app", "authz-suite-b", async () =>
+      database.query("SELECT * FROM public.app_push_targets('authz-suite-b')")
+        .then(() => "allowed").catch(() => "refused"));
+    expect(ownRead).toBe("allowed");
+
+    // The worker has no session identity and is how the drain addresses anybody. This is the check that
+    // makes the wider grant safe rather than a hole.
+    const workerRead = await database.query<{ id: string }>("SELECT * FROM public.app_push_targets('authz-suite-a')");
+    expect(workerRead.rows.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the configuration check counts the functions it actually lists", () => {
+  /**
+   * The expected count used to be a literal beside the list of required functions. The list grew to 37
+   * and the literal still said 36, so a completely healthy database failed its own configuration check
+   * and the Vercel build stopped before it ever ran. A number maintained by hand beside a list is a
+   * number that will drift; this asserts that the check derives it instead.
+   */
+  it("has no hand-written expected count left to drift", () => {
+    const source = readFileSync(resolve(process.cwd(), "scripts/check-db.ts"), "utf8");
+    // The comparison must be against the list's own length, not a number typed next to it.
+    expect(source).toContain("REQUIRED_FUNCTIONS.length");
+    expect(source).not.toMatch(/required_functions !== \d+/);
+    // And the SQL must take the list as a parameter rather than embedding a second copy of it.
+    expect(source).toContain("= ANY($1::text[])");
   });
 });

@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createConnection } from 'node:net';
 import pg from 'pg';
 import { hashPassword } from 'better-auth/crypto';
+import seededReferenceTables_manifest from '../tests/integration/seeded-reference-tables.json' with { type: 'json' };
 
 if (process.env.RUN_LOCAL_WORKFLOW_TEST !== 'true' || process.env.NODE_ENV === 'production' || process.env.OPERATIONS_ENABLED !== 'false' || process.env.APP_URL !== 'http://localhost:3000') {
   throw new Error('Requires explicit RUN_LOCAL_WORKFLOW_TEST=true, local APP_URL and operations disabled in an isolated development environment.');
@@ -29,9 +30,9 @@ await db.connect();
 const password = randomBytes(24).toString('base64url');
 try {
   const tables = await db.query("SELECT tablename FROM pg_tables WHERE schemaname='public'");
-  // Read-only reference data seeded by a migration (the gazetteer, migration 16) is not a record of
-  // anything and must not block a synthetic run. Every application table still has to be empty.
-  const seededReferenceTables = new Set(['geo_places', 'directory_places']);
+  // Data a migration itself installs is not a record of anything and must not block a synthetic run.
+  // The allow-list and its reasons live in one file both fixtures read, so this rule cannot drift.
+  const seededReferenceTables = new Set(Object.keys(seededReferenceTables_manifest.tables));
   for (const { tablename } of tables.rows) {
     if (seededReferenceTables.has(tablename)) continue;
     const result = await db.query(`SELECT count(*)::text AS count FROM public.${pg.escapeIdentifier(tablename)}`);

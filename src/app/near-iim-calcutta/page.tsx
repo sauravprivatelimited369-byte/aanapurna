@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: "A public-directory listing for Halla Bowl in Joka, with dated fallback data and clear partner-status notes.",
 };
 
-export default function NearbyIimCalcuttaPage() {
+export default async function NearbyIimCalcuttaPage() {
   return (
     <PublicLayout active="/near-iim-calcutta">
       <section className="page-hero">

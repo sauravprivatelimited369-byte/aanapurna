@@ -1,10 +1,12 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { RequestTimeline } from "@/components/request-timeline";
+import type { Locale } from "@/lib/i18n";
 
 type Membership = { organizationId: string; organizationName: string };
 type SupportCase = { id: string; reference: string; subject: string; description: string; status: string; createdAt: string; updatedAt: string };
-type DataRequest = { id: string; requestType: string; description: string | null; status: string; resolution: string | null; createdAt: string; completedAt: string | null };
+type DataRequest = { id: string; requestType: string; description: string | null; status: string; resolution: string | null; createdAt: string; completedAt: string | null; redactionDetail?: unknown };
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(value));
@@ -21,7 +23,16 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "This request list is temporarily unavailable.";
 }
 
-export function SupportPanel({ memberships, responseWindowHours }: { memberships: Membership[]; responseWindowHours: number | null }) {
+type ResponseWindow = {
+  /** What an operator recorded and the privacy page publishes. Null when nobody has committed. */
+  committedHours: number | null;
+  staffedBy: string | null;
+  /** Whether somebody is on the rota right now — a different fact from what was promised. */
+  reachableNow: boolean;
+  coverageHours: number;
+};
+
+export function SupportPanel({ memberships, responseWindow, locale }: { memberships: Membership[]; responseWindow: ResponseWindow; locale: Locale }) {
   const [cases, setCases] = useState<SupportCase[]>([]);
   const [requests, setRequests] = useState<DataRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,8 +107,15 @@ export function SupportPanel({ memberships, responseWindowHours }: { memberships
   }
 
   return <div className="app-grid">
-    {responseWindowHours !== null && <section className="app-card app-card--full"><div className="inline-notice"><strong>Response window.</strong> A named person is on call for the next {responseWindowHours} hour{responseWindowHours === 1 ? "" : "s"}, and this deployment aims to answer a support or privacy request within that window. It is derived from the recorded rota, not from a promise, and it narrows or disappears when the rota does.</div></section>}
-    {responseWindowHours === null && <section className="app-card app-card--full"><div className="inline-notice"><strong>No response window is published.</strong> Nobody is recorded as on call, so no time is promised. The request is still recorded here and is visible to the operations queue.</div></section>}
+    <section className="app-card app-card--full"><div className="inline-notice">
+      <strong>How long this takes.</strong>{" "}
+      {responseWindow.committedHours === null
+        ? "No response window has been recorded, so none is promised. Your request is still recorded here and visible to the operations queue."
+        : <>We undertake to answer within <strong>{responseWindow.committedHours} hours</strong>{responseWindow.staffedBy ? <> — {responseWindow.staffedBy} is accountable for that</> : null}. Requests past that window are counted as overdue on the operations screen rather than aging quietly.</>}{" "}
+      {responseWindow.reachableNow
+        ? `Somebody is on the rota for the next ${responseWindow.coverageHours} hour${responseWindow.coverageHours === 1 ? "" : "s"}.`
+        : "Nobody is recorded as on the rota right now, so an immediate reply is unlikely — the request is still logged."}
+    </div></section>
     <section className="app-card app-card--span-6">
       <div className="app-card-title"><div><h2>Contact support</h2><p>Share a clear description. Do not include passwords, sign-in links or unnecessary health or identity details.</p></div></div>
       <form className="form-stack" onSubmit={(event) => void submit(event, "/api/support", "Your support request was submitted. Track its reference below when the request list is available.")}>
@@ -111,6 +129,7 @@ export function SupportPanel({ memberships, responseWindowHours }: { memberships
     <section className="app-card app-card--span-6">
       <div className="app-card-title"><div><h2>Privacy and personal-data request</h2><p>Submit a request for review. The platform will not claim completion until an authorised reviewer records the outcome.</p></div></div>
       <form className="form-stack" onSubmit={(event) => void submit(event, "/api/data-requests", "Your personal-data request was submitted for review.")}>
+        <p className="muted">Erasure and rectification are reviewed by a person, not applied automatically. You can download a copy of your own data immediately from your profile page, and change your own display name there too. Erasure ends your sign-in methods; your receipts and the record of what happened to food are kept.</p>
         <div className="form-field"><label htmlFor="data-request-type">Request type</label><select className="form-control" id="data-request-type" name="requestType" required defaultValue="access"><option value="access">Access my personal data</option><option value="export">Export a copy</option><option value="rectification">Correct inaccurate data</option><option value="erasure">Request erasure</option><option value="restriction">Restrict processing</option><option value="objection">Object to processing</option><option value="other">Other privacy request</option></select></div>
         <div className="form-field"><label htmlFor="data-request-description">Details for the privacy reviewer <span className="form-hint">(optional)</span></label><textarea className="form-control" id="data-request-description" name="description" maxLength={1000} rows={4} /></div>
         <button className="button button--secondary button--small" type="submit" disabled={sending}>{sending ? "Submitting…" : "Submit privacy request"}</button>
@@ -127,7 +146,7 @@ export function SupportPanel({ memberships, responseWindowHours }: { memberships
 
     <section className="app-card app-card--span-6">
       <div className="app-card-title"><div><h2>Your privacy requests</h2><p>Track status and the recorded reviewer response.</p></div></div>
-      {loading ? <div className="skeleton" style={{ height: 80 }} aria-busy="true" role="status" aria-label="Loading privacy requests" /> : requestsError ? <div className="empty-state"><div><strong>Privacy requests are unavailable</strong><p>{requestsError}</p><button className="app-card-link" type="button" disabled={refreshing} aria-busy={refreshing} onClick={() => void refreshLists()}>{refreshing ? "Refreshing lists…" : "Retry request lists"}</button></div></div> : requests.length ? <div className="data-list">{requests.map((item) => <article className="data-row data-row--stack" key={item.id}><span className="data-main"><strong>{item.requestType.replaceAll("_", " ")}</strong><small>Submitted {formatDate(item.createdAt)}{item.description ? ` · ${item.description}` : ""}</small>{item.resolution && <small className="request-resolution">Reviewer update: {item.resolution}</small>}</span><span className={`status-pill status-pill--${item.status}`}>{item.status.replaceAll("_", " ")}</span></article>)}</div> : <div className="empty-state"><div><strong>No privacy requests</strong><p>Requests you submit will appear here until a reviewer records an outcome.</p></div></div>}
+      {loading ? <div className="skeleton" style={{ height: 80 }} aria-busy="true" role="status" aria-label="Loading privacy requests" /> : requestsError ? <div className="empty-state"><div><strong>Privacy requests are unavailable</strong><p>{requestsError}</p><button className="app-card-link" type="button" disabled={refreshing} aria-busy={refreshing} onClick={() => void refreshLists()}>{refreshing ? "Refreshing lists…" : "Retry request lists"}</button></div></div> : requests.length ? <div className="data-list">{requests.map((item) => <article className="data-row data-row--stack" key={item.id}><span className="data-main"><strong>{item.requestType.replaceAll("_", " ")}</strong><small>Submitted {formatDate(item.createdAt)}{item.description ? ` · ${item.description}` : ""}</small><RequestTimeline requestId={item.id} locale={locale} /></span><span className={`status-pill status-pill--${item.status}`}>{item.status.replaceAll("_", " ")}</span></article>)}</div> : <div className="empty-state"><div><strong>No privacy requests</strong><p>Requests you submit will appear here until a reviewer records an outcome.</p></div></div>}
     </section>
   </div>;
 }

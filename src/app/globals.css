@@ -796,3 +796,138 @@ select.form-control { appearance: auto; }
 .directory-phone small { display: block; margin-top: 3px; color: #a9a5ac; font-size: 11px; }
 .directory-tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 16px; }
 .directory-tags .status-pill { font-size: 11px; }
+
+/* ── Straight answers ────────────────────────────────────────────────────────── */
+.answers-grid { display: grid; gap: 20px; }
+.answers-card { scroll-margin-top: 84px; }
+.answers-card h2 { margin: 8px 0 12px; font-family: var(--font-display, inherit); font-size: clamp(20px, 2.4vw, 27px); line-height: 1.28; letter-spacing: -.015em; color: var(--ink); }
+.answers-card h3 { margin: 22px 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.answers-short { color: var(--ink-soft); font-size: 15px; line-height: 1.72; }
+.answers-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.answers-list li { position: relative; padding-left: 22px; font-size: 14px; line-height: 1.68; color: var(--ink-soft); }
+.answers-list li::before { content: ""; position: absolute; left: 4px; top: .62em; width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #7cc4a4); }
+.answers-limit { margin-top: 20px; padding: 15px 17px; border-left: 2px solid rgba(251,146,60,.55); border-radius: 0 11px 11px 0; background: rgba(251,146,60,.05); }
+.answers-limit strong { display: block; margin-bottom: 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #ffd09e; }
+.answers-limit p { margin: 0; font-size: 13.5px; line-height: 1.7; color: var(--ink-soft); }
+.answers-card .status-pill { margin-top: 16px; white-space: normal; line-height: 1.55; }
+
+/* ── Structured arrival checks ───────────────────────────────────────────────── */
+.inspection-checks { display: grid; gap: 11px; margin: 4px 0 8px; padding: 16px 18px 18px; border: 1px solid var(--line); border-radius: 13px; }
+.inspection-checks legend { padding: 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.inspection-check { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; font-size: 13.5px; line-height: 1.5; color: var(--ink-soft); }
+.inspection-check-options { display: flex; gap: 14px; flex: none; }
+.inspection-check-options label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+
+/* ── Locked-out recovery intake ─────────────────────────────────────────────── */
+.locked-out-help { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.locked-out-help .form-stack { margin-top: 14px; }
+
+/* ── Partner declarations (insurance + responsibility agreement) ─────────────── */
+.compliance-card h3 { margin: 0 0 6px; font-size: 16px; letter-spacing: -.01em; color: var(--ink); }
+.compliance-card .status-pill { margin-top: 12px; }
+.inline-select { flex: none; min-width: 190px; }
+.agreement-text { margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.018); }
+.agreement-text summary { padding: 12px 15px; font-size: 13px; font-weight: 600; color: var(--ink-soft); cursor: pointer; }
+.agreement-text summary:hover { color: var(--ink); }
+.agreement-body { max-height: 340px; overflow-y: auto; padding: 4px 16px 16px; border-top: 1px solid var(--line); }
+.agreement-body h4 { margin: 16px 0 5px; font-size: 12.5px; letter-spacing: .02em; color: var(--ink); }
+.agreement-body p { margin: 0; font-size: 12.5px; line-height: 1.68; color: var(--ink-soft); }
+.checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin-top: 14px; font-size: 12.5px; line-height: 1.6; color: var(--ink-soft); cursor: pointer; }
+.checkbox-row input { margin-top: .22em; flex: none; }
+
+/* ---- Language switcher ---------------------------------------------------
+   Four languages, each named in its own script, in one native select. Earlier this was a row of
+   pills that collapsed to single glyphs below 640px; that bought two languages and cost the control
+   its legibility. A select is one control at every width, cannot overflow, and hands mixed-script
+   option rendering to the platform. Kept visually quiet: somebody looking for their language should
+   find it without it competing with "Log in". */
+.locale-switcher { display: inline-flex; align-items: center; min-width: 0; }
+.locale-switcher__select {
+  appearance: none;
+  border: 1px solid var(--line, rgba(255,255,255,0.14));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg, #fff);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.34rem 1.5rem 0.34rem 0.6rem;
+  cursor: pointer;
+  max-width: 7.5rem;
+  text-overflow: ellipsis;
+  /* The chevron, drawn rather than shipped as an image so it inherits the text colour. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 0.85rem) 52%, calc(100% - 0.55rem) 52%;
+  background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
+  background-repeat: no-repeat;
+}
+.locale-switcher__select:hover { border-color: var(--line-strong, rgba(255,255,255,0.28)); }
+.locale-switcher__select:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
+.locale-switcher__select:disabled { opacity: 0.6; cursor: progress; }
+/* The option list is drawn by the operating system, so its colours are set explicitly rather than
+   inherited from a dark header — otherwise a white-on-white list is possible on some platforms. */
+.locale-switcher__select option { background: #12161c; color: #f2f5f7; }
+
+@media (max-width: 640px) {
+  .header-actions { gap: 6px; min-width: 0; }
+  .header-actions > * { flex: 0 1 auto; min-width: 0; }
+  .header-join { padding-inline: 8px; }
+  .header-inner > * { min-width: 0; }
+  .locale-switcher__select { max-width: 6.2rem; padding-inline: 0.45rem 1.25rem; font-size: 0.74rem; }
+}
+@media (max-width: 430px) {
+  /* Below 430px the header keeps only the brand, Join and the menu; the switcher moves into the
+     mobile panel, where there is room for the full names. It is never absent, only relocated. */
+  .header-actions .locale-switcher { display: none; }
+  .mobile-nav-panel .locale-switcher { display: inline-flex; margin-top: 0.75rem; }
+  .mobile-nav-panel .locale-switcher__select { max-width: none; }
+}
+
+/* ---- Request timeline ----------------------------------------------------
+   Reads as a sequence, not a dashboard. The rule down the left is what makes
+   it a timeline rather than a list of unrelated rows. */
+.request-timeline { display: block; margin-top: 0.4rem; }
+.request-timeline__body { margin-top: 0.6rem; padding-left: 0.85rem; border-left: 2px solid var(--line, rgba(255,255,255,0.14)); display: grid; gap: 0.65rem; }
+.request-timeline__facts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; font-size: 0.82rem; }
+.request-timeline__stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.request-timeline__stage { position: relative; }
+/* The dot sits on the rule. It marks a moment that actually happened. */
+.request-timeline__stage::before { content: ""; position: absolute; left: -1.12rem; top: 0.85rem; width: 7px; height: 7px; border-radius: 50%; background: var(--line, rgba(255,255,255,0.28)); }
+.request-timeline__stage.is-current::before { background: var(--accent, #7dd3fc); box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.16); }
+@media (prefers-reduced-motion: no-preference) {
+  .request-timeline__body { animation: request-timeline-open 160ms ease-out; }
+}
+@keyframes request-timeline-open { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+
+/* ---- Transit schematic ---------------------------------------------------
+   An inline SVG, not a tile map. See components/transit-map.tsx for why. Sized
+   to the card it sits in and never wider, so it cannot reintroduce the header
+   overflow bug on a narrow screen. */
+.transit-map { margin: 0; max-width: 22rem; }
+.transit-map svg { display: block; width: 100%; height: auto; }
+.transit-map__frame { fill: var(--surface-2, rgba(255,255,255,0.05)); stroke: var(--line, rgba(255,255,255,0.14)); stroke-width: 1; }
+.transit-map__route { stroke: var(--accent, #7dd3fc); stroke-width: 2; stroke-dasharray: 5 4; }
+.transit-map__point { stroke-width: 2; }
+.transit-map__point--from { fill: var(--fg, #fff); stroke: var(--accent, #7dd3fc); }
+.transit-map__point--to { fill: var(--accent, #7dd3fc); stroke: var(--fg, #fff); }
+.transit-map__label { fill: var(--muted, rgba(255,255,255,0.62)); font-size: 9px; font-family: inherit; letter-spacing: 0.04em; text-transform: uppercase; }
+.transit-map__note { margin: 0.5rem 0 0; font-size: 0.78rem; color: var(--muted, rgba(255,255,255,0.62)); line-height: 1.45; }
+.transit-map--unknown { border: 1px dashed var(--line, rgba(255,255,255,0.18)); border-radius: 10px; padding: 0.85rem; }
+.data-row--map { display: block; }
+
+/* A quiet in-body link to the impact page, now that its panel lives on its own page.
+   The inline-block and padding are not decoration: the audit measures the target, and a bare inline
+   link here came out 19px tall against a 24px minimum. Quiet is fine; un-tappable on a phone is not. */
+.closing-aside { flex-basis: 100%; margin: 0; font-size: 0.9rem; }
+.closing-aside a { display: inline-block; padding: 4px 0; line-height: 1.5; color: var(--muted, #9a9aa5); text-decoration: underline; text-underline-offset: 3px; }
+.closing-aside a:hover { color: var(--cream, #f5f1e8); }
+.final-cta-panel { flex-wrap: wrap; }
+
+/* Notifications to the device somebody is holding. */
+.push-toggle { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; justify-content: space-between; margin: 0 0 26px; padding: 22px 24px; border: 1px solid #2b2b33; border-radius: 16px; background: #14141a; }
+.push-toggle__text { flex: 1 1 340px; min-width: 0; }
+.push-toggle__text h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.push-toggle__text p { margin: 0; max-width: 62ch; color: #b9b6bd; font-size: 0.92rem; line-height: 1.6; }
+.push-toggle__action { display: flex; align-items: center; }
+.push-toggle__note { display: block; max-width: 34ch; color: #b9b6bd; font-size: 0.88rem; line-height: 1.5; }
+.push-toggle__message { flex-basis: 100%; margin: 0; color: #f2d179; font-size: 0.9rem; }
