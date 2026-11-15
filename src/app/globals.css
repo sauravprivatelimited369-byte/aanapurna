@@ -915,8 +915,10 @@ select.form-control { appearance: auto; }
 .transit-map--unknown { border: 1px dashed var(--line, rgba(255,255,255,0.18)); border-radius: 10px; padding: 0.85rem; }
 .data-row--map { display: block; }
 
-/* A quiet in-body link to the impact page, now that its panel lives on its own page. */
+/* A quiet in-body link to the impact page, now that its panel lives on its own page.
+   The inline-block and padding are not decoration: the audit measures the target, and a bare inline
+   link here came out 19px tall against a 24px minimum. Quiet is fine; un-tappable on a phone is not. */
 .closing-aside { flex-basis: 100%; margin: 0; font-size: 0.9rem; }
-.closing-aside a { color: var(--muted, #9a9aa5); text-decoration: underline; text-underline-offset: 3px; }
+.closing-aside a { display: inline-block; padding: 4px 0; line-height: 1.5; color: var(--muted, #9a9aa5); text-decoration: underline; text-underline-offset: 3px; }
 .closing-aside a:hover { color: var(--cream, #f5f1e8); }
 .final-cta-panel { flex-wrap: wrap; }
