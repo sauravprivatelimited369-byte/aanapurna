@@ -40,7 +40,7 @@ account.
 
 - Certifying, inspecting or insuring food.
 - Deciding legal compliance for a partner.
-- Live routing, ETAs or paid maps. Addresses, service areas and OpenStreetMap links only.
+- Live routing, traffic-aware ETAs or paid maps. Addresses, service areas, OpenStreetMap links, and a straight-line distance estimate with the area's average speed (migration 16) only. That estimate is labelled as an estimate and is never a promised arrival time.
 - Payments, donations of money, or tax receipts.
 - AI decisions about food.
 - Public proof pages that expose personal data.

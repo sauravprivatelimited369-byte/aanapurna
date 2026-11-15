@@ -1,5 +1,8 @@
 # Incident response
 
+> **Run the drill.** `ops/INCIDENT_READINESS.md` holds the 45-minute drill script and the evidence each
+> step must produce, and `node scripts/incident-readiness.mjs` verifies the code paths it depends on.
+
 Two kinds of incident, one escalation path. The distinction that matters in the first five minutes is
 whether food may already be unsafe, or whether data or access may already be compromised. Both stop
 operations for the affected scope until a human says otherwise.
