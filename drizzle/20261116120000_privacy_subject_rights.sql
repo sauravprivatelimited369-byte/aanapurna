@@ -333,6 +333,28 @@ REVOKE ALL ON FUNCTION public.app_privacy_response_window_hours() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_privacy_response_window_hours() TO annapurna_app;
 --> statement-breakpoint
 
+-- Who is on the other end of that window. A number with no name attached is a claim, not a promise,
+-- so the public page publishes both or neither. Restricted to the single free-text field: the
+-- attestation row also holds the hours, and a public reader has no business enumerating the rest.
+CREATE OR REPLACE FUNCTION public.app_public_response_window_contact()
+RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT nullif(btrim(a.value ->> 'staffedBy'), '')
+  FROM public.platform_attestations a
+  WHERE a.key = 'support_response_window'
+    AND coalesce(btrim(a.value ->> 'staffedBy'), '') <> ''
+  ORDER BY a.recorded_at DESC
+  LIMIT 1;
+$$;
+--> statement-breakpoint
+
+REVOKE ALL ON FUNCTION public.app_public_response_window_contact() FROM PUBLIC;
+--> statement-breakpoint
+GRANT EXECUTE ON FUNCTION public.app_public_response_window_contact() TO annapurna_app;
+--> statement-breakpoint
+
 -- 5. Readiness learns about the two things that were unmeasurable. ---------------------------
 
 -- A RETURNS TABLE signature cannot be widened in place, so the function is dropped and rebuilt with

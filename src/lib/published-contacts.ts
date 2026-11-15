@@ -55,3 +55,22 @@ export async function readOnCallCoverage(): Promise<{ coveredNow: boolean; hours
     return { coveredNow: false, hoursAhead: 0 };
   }
 }
+
+/**
+ * The response window a person is promised, as actually recorded.
+ *
+ * The privacy page used to say "the advertised window is whatever is recorded on the operations
+ * register" — which is a promise nobody outside the organisation could check. This reads the
+ * recorded number so the page can state it, and returns null when nobody has recorded one so the
+ * page can say that instead of quoting a default.
+ */
+export async function readPublishedResponseWindow(): Promise<{ hours: number | null; staffedBy: string | null }> {
+  try {
+    const { rows } = await pool.query<{ hours: number | null; staffed_by: string | null }>(
+      "select app_privacy_response_window_hours() as hours, app_public_response_window_contact() as staffed_by",
+    );
+    return { hours: rows[0]?.hours ?? null, staffedBy: rows[0]?.staffed_by ?? null };
+  } catch {
+    return { hours: null, staffedBy: null };
+  }
+}

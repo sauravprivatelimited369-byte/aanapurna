@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { PublicLayout } from "@/components/public-shell";
-import { readPublishedContacts } from "@/lib/published-contacts";
+import { readPublishedContacts, readPublishedResponseWindow } from "@/lib/published-contacts";
 
 export const metadata: Metadata = { title: "Privacy" };
 export const dynamic = "force-dynamic";
 
 export default async function PrivacyPage() {
-  const { entity, dataProtection } = await readPublishedContacts();
+  const [{ entity, dataProtection }, responseWindow] = await Promise.all([readPublishedContacts(), readPublishedResponseWindow()]);
   return (
     <PublicLayout>
       <section className="page-hero"><div className="container"><span className="eyebrow"><span className="eyebrow-line" /> Your information</span><h1>Privacy, by design.</h1><p>This draft describes the intended principles. It is not a final privacy notice and must not be used to onboard real people until reviewed and approved.</p></div></section>
@@ -22,7 +22,9 @@ export default async function PrivacyPage() {
         <p><strong>Getting your data.</strong> Any signed-in person can produce one file containing everything this service holds about their account — profile, memberships, notifications, donations, receipts, custody events, support and privacy requests, and the retention actions that ran — from their profile page. The download is recorded as a disclosure in the audit trail.</p>
         <p><strong>Correcting something.</strong> You can change your own display name, and the change is recorded. Your email address, a partner&apos;s phone number, an organisation&apos;s registered name and a verification status are records other people act on, so those go through a reviewed request instead of a silent edit.</p>
         <p><strong>Asking to be erased.</strong> Erasure is a reviewed request rather than a button, because it ends your sign-in methods and cannot be undone. When it is approved, your name, email and credentials are overwritten and your sessions destroyed, in the same step that closes the request — the two cannot come apart. Your receipts and the audit trail are kept, because they answer for what happened to the food.</p>
-        <p><strong>How long we take.</strong> The advertised window is whatever is recorded on the operations register, and the operations screen counts anything past it as overdue. If no window has been recorded, none is promised — this page will not state a number nobody committed to.</p>
+        <p><strong>How long we take.</strong> {responseWindow.hours === null
+          ? "No response window has been recorded yet, so none is promised here. A number will appear only once somebody has committed to it and can be held to it."
+          : <>We answer privacy and support requests within <strong>{responseWindow.hours} hours</strong>{responseWindow.staffedBy ? <> — {responseWindow.staffedBy} is on the other end of that window</> : null}. That number is the one recorded on the operations register, and the operations screen counts anything past it as overdue, so a request that slips the window shows up rather than aging quietly.</>}</p>
         <p><strong>What is not settled.</strong> The retention numbers above are defaults, not an approved policy, and the full period list requires qualified privacy and legal review before real operations. Rectification of an email address or partner contact details is handled by a human rather than automatically. Rectification and grievance handling have no escalation path beyond the operations screen flagging an overdue item.</p>
         <h2>Contact and rights</h2>
         {dataProtection ? (

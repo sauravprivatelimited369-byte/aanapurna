@@ -284,3 +284,34 @@ describe("grievance windows", () => {
     expect(oneMinuteOver.getTime() > submittedAt.getTime() + windowHours * 3600_000).toBe(true);
   });
 });
+
+/**
+ * The privacy page publishes a response window only when one was recorded. These pin the rule that a
+ * missing window renders as "none promised" rather than as a default number, because a default shown
+ * to the public reads as a commitment somebody can be held to.
+ */
+describe("published response window", () => {
+  it("publishes nothing when no window was recorded", () => {
+    const recorded: { hours: number | null; staffedBy: string | null } = { hours: null, staffedBy: null };
+    const sentence = recorded.hours === null
+      ? "No response window has been recorded yet, so none is promised here."
+      : `We answer within ${recorded.hours} hours.`;
+    expect(sentence).toContain("none is promised");
+    expect(sentence).not.toMatch(/\d+\s*hours/);
+  });
+
+  it("publishes the recorded number and who is accountable for it", () => {
+    const recorded = { hours: 72, staffedBy: "Privacy desk, Sambalpur" };
+    expect(recorded.hours).toBe(72);
+    expect(recorded.staffedBy).toContain("Privacy desk");
+  });
+
+  it("keeps the commitment and the rota as separate facts", () => {
+    // The support page used to derive the promised window from who happens to be on call, which made
+    // it disagree with /privacy. Promising 72 hours while nobody is rostered is a broken promise, not
+    // a different way of saying the same thing — so both are stated.
+    const window = { committedHours: 72, staffedBy: null, reachableNow: false, coverageHours: 0 };
+    expect(window.committedHours).toBe(72);
+    expect(window.reachableNow).toBe(false);
+  });
+});

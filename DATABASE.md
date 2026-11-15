@@ -94,6 +94,10 @@ Migration 21 left three promises as prose. They are now mechanisms.
 
 `app_launch_readiness()` gained two columns, `subject_rights` and `grievance_window`. The first is true from the schema alone once migration 22 is applied. The second requires a recorded window **and** nothing sitting past it, so an unanswered complaint reopens the gate by itself.
 
+`app_public_response_window_contact()` exists so `/privacy` can name who is accountable for the window it publishes. The window itself is read by `app_privacy_response_window_hours()`. Both return NULL when nothing is recorded, and the page then says no window is promised rather than quoting a default.
+
+**The commitment and the rota are separate facts.** The support page used to derive the promised window from whoever happened to be on call, which made it disagree with `/privacy` about the same promise. It now states the recorded commitment and the current rota coverage separately, because promising 72 hours while nobody is rostered is a broken promise, not the same promise stated differently.
+
 **What a completed erasure does now.** `updateDataRequest` performs the redaction in the same transaction that sets the status, through `app_redact_user`. The person's name, email and credentials are overwritten, their sessions and sign-in methods are destroyed, and their free-text profile fields are cleared. Their receipts, custody events and the audit trail stay, because those answer for what happened to the food. The erasure itself is written to the audit trail. A staff member cannot erase their own account through this path (`ERASURE_SELF_REFUSED`).
 
 **What is still not implemented.** A person cannot yet correct their own email or a partner's contact details without a reviewed request, and there is no automated rectification workflow: those are handled as `rectification` requests by a human. The export is JSON only. Grievance handling has a clock but no escalation beyond the readiness gate.

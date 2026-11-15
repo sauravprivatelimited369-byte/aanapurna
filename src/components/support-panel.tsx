@@ -21,7 +21,16 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "This request list is temporarily unavailable.";
 }
 
-export function SupportPanel({ memberships, responseWindowHours }: { memberships: Membership[]; responseWindowHours: number | null }) {
+type ResponseWindow = {
+  /** What an operator recorded and the privacy page publishes. Null when nobody has committed. */
+  committedHours: number | null;
+  staffedBy: string | null;
+  /** Whether somebody is on the rota right now — a different fact from what was promised. */
+  reachableNow: boolean;
+  coverageHours: number;
+};
+
+export function SupportPanel({ memberships, responseWindow }: { memberships: Membership[]; responseWindow: ResponseWindow }) {
   const [cases, setCases] = useState<SupportCase[]>([]);
   const [requests, setRequests] = useState<DataRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,8 +105,15 @@ export function SupportPanel({ memberships, responseWindowHours }: { memberships
   }
 
   return <div className="app-grid">
-    {responseWindowHours !== null && <section className="app-card app-card--full"><div className="inline-notice"><strong>Response window.</strong> A named person is on call for the next {responseWindowHours} hour{responseWindowHours === 1 ? "" : "s"}, and this deployment aims to answer a support or privacy request within that window. It is derived from the recorded rota, not from a promise, and it narrows or disappears when the rota does.</div></section>}
-    {responseWindowHours === null && <section className="app-card app-card--full"><div className="inline-notice"><strong>No response window is published.</strong> Nobody is recorded as on call, so no time is promised. The request is still recorded here and is visible to the operations queue.</div></section>}
+    <section className="app-card app-card--full"><div className="inline-notice">
+      <strong>How long this takes.</strong>{" "}
+      {responseWindow.committedHours === null
+        ? "No response window has been recorded, so none is promised. Your request is still recorded here and visible to the operations queue."
+        : <>We undertake to answer within <strong>{responseWindow.committedHours} hours</strong>{responseWindow.staffedBy ? <> — {responseWindow.staffedBy} is accountable for that</> : null}. Requests past that window are counted as overdue on the operations screen rather than aging quietly.</>}{" "}
+      {responseWindow.reachableNow
+        ? `Somebody is on the rota for the next ${responseWindow.coverageHours} hour${responseWindow.coverageHours === 1 ? "" : "s"}.`
+        : "Nobody is recorded as on the rota right now, so an immediate reply is unlikely — the request is still logged."}
+    </div></section>
     <section className="app-card app-card--span-6">
       <div className="app-card-title"><div><h2>Contact support</h2><p>Share a clear description. Do not include passwords, sign-in links or unnecessary health or identity details.</p></div></div>
       <form className="form-stack" onSubmit={(event) => void submit(event, "/api/support", "Your support request was submitted. Track its reference below when the request list is available.")}>
