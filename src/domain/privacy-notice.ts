@@ -1,3 +1,5 @@
+import type { Locale } from "@/lib/i18n";
+
 /**
  * The privacy notice, in Odia and English.
  *
@@ -26,7 +28,23 @@ type Notice = {
   controller: (name: string, jurisdiction: string | null) => string;
 };
 
-export const privacyNotice: Record<"or" | "en", Notice> = {
+/**
+ * The notice in the requested language, and whether it is actually in that language.
+ *
+ * Hindi and Bengali are offered by the switcher but this notice is not translated into them. Returning
+ * English silently would be the exact failure this whole file argues against — a person who asked for
+ * Hindi would read a full page of English and conclude the page is the Hindi version. So the caller is
+ * told, and the page prints a banner saying so in the reader's own language.
+ *
+ * When a translation arrives, add it to the record above and this function needs no change.
+ */
+export function noticeFor(locale: Locale): { notice: Notice; translated: boolean } {
+  const noticed = privacyNotice[locale];
+  return noticed ? { notice: noticed, translated: true } : { notice: privacyNotice.en, translated: false };
+}
+
+
+export const privacyNotice: Partial<Record<Locale, Notice>> & Record<"or" | "en", Notice> = {
   or: {
     eyebrow: "ଆପଣଙ୍କ ସୂଚନା",
     title: "ଗୋପନୀୟତା, ଡିଜାଇନ୍ ଦ୍ୱାରା।",
@@ -203,17 +221,26 @@ export const privacyNotice: Record<"or" | "en", Notice> = {
  * different order from English. A `{hours}` slot would produce word salad in one of the two.
  */
 export function responseWindowParagraph(
-  locale: "or" | "en",
+  locale: Locale,
   window: { hours: number | null; staffedBy: string | null },
 ): string {
   if (window.hours === null) {
-    return locale === "or"
-      ? "କୌଣସି ସମୟସୀମା ଲେଖା ହୋଇନାହିଁ, ତେଣୁ ଏଠାରେ କୌଣସି ପ୍ରତିଶ୍ରୁତି ନାହିଁ।"
-      : "No response window has been recorded yet, so none is promised here.";
+    if (locale === "or") return "କୌଣସି ସମୟସୀମା ଲେଖା ହୋଇନାହିଁ, ତେଣୁ ଏଠାରେ କୌଣସି ପ୍ରତିଶ୍ରୁତି ନାହିଁ।";
+    if (locale === "hi") return "अभी कोई उत्तर-समय दर्ज नहीं है, इसलिए यहाँ कोई वादा नहीं है।";
+    if (locale === "bn") return "এখনও কোনো উত্তরের সময়সীমা নথিভুক্ত হয়নি, তাই এখানে কোনো প্রতিশ্রুতি নেই।";
+    return "No response window has been recorded yet, so none is promised here.";
   }
   if (locale === "or") {
     const who = window.staffedBy ? `${window.staffedBy} ସେହି ସମୟସୀମା ପାଇଁ ଉତ୍ତର ଦାୟୀ।` : "";
     return `ଆମେ ଗୋପନୀୟତା ଓ ସହାୟତା ଅନୁରୋଧର ଉତ୍ତର ${window.hours} ଘଣ୍ଟା ଭିତରେ ଦେଉ। ${who} ଏହି ସଂଖ୍ୟା କାର୍ଯ୍ୟପରିଚାଳନା ରେଜିଷ୍ଟରରେ ଲେଖା ହୋଇଛି, ଏବଂ ସେହି ସମୟ ଅତିକ୍ରମ କରୁଥିବା ଅନୁରୋଧ କାର୍ଯ୍ୟପରିଚାଳନା ସ୍କ୍ରିନରେ ବିଳମ୍ବିତ ଭାବରେ ଦେଖାଯାଏ।`;
+  }
+  if (locale === "hi") {
+    const who = window.staffedBy ? ` — उस समयसीमा पर ${window.staffedBy} उत्तर देते हैं` : "";
+    return `हम निजता और सहायता अनुरोधों का उत्तर ${window.hours} घंटे के भीतर देते हैं${who}। यह संख्या संचालन रजिस्टर में दर्ज है, और इससे अधिक समय लेने वाला अनुरोध अतिदेय गिना जाता है — इसलिए देरी चुपचाप नहीं बढ़ती, दिखाई देती है।`;
+  }
+  if (locale === "bn") {
+    const who = window.staffedBy ? ` — ওই সময়সীমায় ${window.staffedBy} উত্তর দেন` : "";
+    return `আমরা গোপনীয়তা ও সহায়তার অনুরোধের উত্তর ${window.hours} ঘণ্টার মধ্যে দিই${who}। এই সংখ্যাটি পরিচালনা রেজিস্টারে নথিভুক্ত, এবং এর বেশি সময় নেওয়া অনুরোধ বিলম্বিত হিসেবে গণ্য হয় — তাই দেরি চুপচাপ বাড়ে না, দেখা যায়।`;
   }
   const who = window.staffedBy ? ` — ${window.staffedBy} is on the other end of that window` : "";
   return `We answer privacy and support requests within ${window.hours} hours${who}. That number is the one recorded on the operations register, and anything past it is counted as overdue, so a request that slips the window shows up rather than ageing quietly.`;

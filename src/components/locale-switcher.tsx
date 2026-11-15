@@ -1,53 +1,62 @@
 "use client";
 
 /**
- * Switch between the two languages this product publishes.
+ * Choose the language the product is read in.
  *
- * Both names are written in their own script and are never translated: an Odia reader looking for
- * their language is looking for the word ଓଡ଼ିଆ, not for "Odia". The button refreshes so the server
- * re-renders in the chosen language instead of patching text in place, which keeps a single source of
- * truth for what a page says.
+ * This used to be a row of pill buttons, one per language, and now that there are four that no
+ * longer fits: at 320px the header holds the brand, the switcher, Join and the menu, and four names
+ * in three scripts pushed the row past the viewport. The previous fix collapsed the inactive names
+ * to a glyph below 640px, which worked for two languages and becomes unreadable at four — four
+ * glyphs in a 120px strip is not a control anybody can use.
+ *
+ * A native `<select>` is the honest answer. It is one control at every width, the platform renders
+ * the option list in a way that handles mixed scripts and long names for free, keyboard and screen
+ * reader behaviour is the operating system's rather than mine, and it cannot overflow. The cost is
+ * that it cannot be styled to match the old pill row exactly, which is a fair trade for a control
+ * that works on a 320px phone.
+ *
+ * Each option carries `lang` so the list renders each name in its own script, and the names are
+ * never translated: somebody looking for Odia is looking for ଓଡ଼ିଆ.
  */
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { LOCALE_NAMES, LOCALE_SHORT_NAMES, type Locale } from "@/lib/i18n";
+import { useState, useTransition } from "react";
+import { LOCALE_NAMES, LOCALES, t, type Locale } from "@/lib/i18n";
 
 export function LocaleSwitcher({ current }: { current: Locale }) {
   const router = useRouter();
-  const [busy, setBusy] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [chosen, setChosen] = useState<Locale>(current);
 
   async function choose(locale: Locale) {
-    if (locale === current || busy) return;
-    setBusy(true);
+    setChosen(locale);
+    if (locale === current) return;
     await fetch("/api/locale", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ locale }),
     }).catch(() => null);
-    router.refresh();
-    setBusy(false);
+    // The server re-renders in the new language rather than patching text in place, so a page has
+    // exactly one source of truth for what it says.
+    startTransition(() => router.refresh());
   }
 
   return (
-    <div className="locale-switcher" role="group" aria-label={current === "or" ? "ଭାଷା" : "Language"}>
-      {(Object.keys(LOCALE_NAMES) as Locale[]).map((locale) => (
-        <button
-          key={locale}
-          type="button"
-          lang={locale === "or" ? "or-IN" : "en-IN"}
-          className={locale === current ? "locale-switcher__choice is-active" : "locale-switcher__choice"}
-          aria-pressed={locale === current}
-          data-short={LOCALE_SHORT_NAMES[locale]}
-          disabled={busy}
-          onClick={() => void choose(locale)}
-        >
-          {/* The full name always reaches the accessibility tree; CSS only hides it visually on a
-              narrow screen, so a screen reader still hears "English" rather than "EN". */}
-          <span className="long-label">{LOCALE_NAMES[locale]}</span>
-          <span className="sr-only">{LOCALE_NAMES[locale]}</span>
-        </button>
-      ))}
-    </div>
+    <label className="locale-switcher">
+      <span className="sr-only">{t(current, "common.language")}</span>
+      <select
+        className="locale-switcher__select"
+        value={pending ? chosen : current}
+        disabled={pending}
+        aria-label={t(current, "common.language")}
+        onChange={(event) => void choose(event.target.value as Locale)}
+      >
+        {LOCALES.map((locale) => (
+          <option key={locale} value={locale} lang={locale === "or" ? "or-IN" : `${locale}-IN`}>
+            {LOCALE_NAMES[locale]}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

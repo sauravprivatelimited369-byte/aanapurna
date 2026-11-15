@@ -26,6 +26,8 @@ const migrationFiles = [
   "20261115230000_food_safety_attestation_and_recovery.sql",
   "20261116090000_data_retention_and_holds.sql",
   "20261116120000_privacy_subject_rights.sql",
+  "20261117090000_distance_ranked_matching.sql",
+  "20261117100000_notification_email_recipients.sql",
 ];
 
 let database: PGlite;
@@ -120,13 +122,14 @@ describe("PostgreSQL migration and authorization contracts", () => {
             'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
             'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
             'app_guard_user_profile_status',
-            'app_notify_platform_roles','app_current_agreement_version'
+            'app_notify_platform_roles','app_current_agreement_version',
+            'app_org_coordinates','app_normalize_place','app_notification_recipients'
           )) AS required_functions
     `);
-    // Migration 20 adds two forced-RLS tables (partner agreements, recovery intake) and two required
-    // functions; both floors rise so removing either fails the suite rather than passing silently.
+    // Migration 20 added two forced-RLS tables and two functions; migration 24 added the two functions
+    // that resolve an organisation's coordinates. Both floors rise so removing one fails the suite.
     expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(25);
-    expect(result.rows[0]?.required_functions).toBe(12);
+    expect(result.rows[0]?.required_functions).toBe(15);
   });
 
   it("adds recall records as append-only, policy-protected evidence with one open recall per donation", async () => {
@@ -1473,5 +1476,179 @@ describe("launch readiness has to be read as a table", () => {
     const keys = Object.keys(rows[0]!.readiness);
     expect(keys).not.toContain("legal_entity");
     expect(keys.every((key) => /^\d+$/.test(key))).toBe(true);
+  });
+});
+
+describe("matching ranks by real distance, not by nothing", () => {
+  /**
+   * The failure this guards against is quiet: `app_find_receiver_candidates` returned receivers in
+   * whatever order the planner felt like, so a Receiver 2 km away and one 158 km away looked equally
+   * suitable and the offer a Helper could not realistically collect was indistinguishable from the
+   * one next door. Nothing threw; the food simply went to whoever sorted first.
+   */
+  it("orders a near receiver before a far one, and says how far each is", async () => {
+    const area = (await database.query<{ id: string }>(
+      "INSERT INTO public.service_areas (label,country_code,timezone,active) VALUES ('Ranking test','IN','Asia/Kolkata',true) RETURNING id",
+    )).rows[0]!.id;
+    const donorId = "aaaaaaaa-0000-0000-0000-000000000001";
+    const nearId = "aaaaaaaa-0000-0000-0000-000000000002";
+    const farId = "aaaaaaaa-0000-0000-0000-000000000003";
+    const noCoordId = "aaaaaaaa-0000-0000-0000-000000000004";
+    // Sambalpur, a point about 2 km north of it, Rourkela (~158 km), and one with no coordinates.
+    const orgs: [string, string, "generator" | "receiver", number | null, number | null][] = [
+      [donorId, "donor", "generator", 21.4669, 83.9812],
+      [nearId, "near", "receiver", 21.484, 83.9812],
+      [farId, "far", "receiver", 22.2604, 84.8536],
+      // A city that is not in the gazetteer, so this receiver is genuinely unlocatable. Naming a city
+      // that *is* in the gazetteer would resolve it to that city's centre, and if it matched the
+      // donor's city the distance would correctly be about zero — which is not the case being tested.
+      [noCoordId, "unlocated", "receiver", null, null],
+    ];
+    const cities: Record<string, string> = { [noCoordId]: "Unmapped Village" };
+    for (const [id, name, type, lat, lon] of orgs) {
+      await database.query('INSERT INTO public."user" (id,name,email,email_verified) VALUES ($1,$2,$3,true)', [id, name, `${name}@example.test`]);
+      await database.query(
+        `INSERT INTO public.organizations (id,name,type,status,service_area_id,operating_address,city_or_district,contact_name,contact_email,food_capabilities,created_by,latitude,longitude,receiving_capacity,capacity_unit)
+         VALUES ($1::uuid,$2::text,$3::organization_type,'verified',$4::uuid,'test address',$7::text,'c','c@example.test',ARRAY['produce'],$1::text,$5::numeric,$6::numeric,50,'servings')`,
+        [id, name, type, area, lat, lon, cities[id] ?? "Sambalpur"],
+      );
+      await database.query("INSERT INTO public.organization_memberships (organization_id,user_id,role,status) VALUES ($1,$2,'owner','active')", [id, id]);
+    }
+    await database.query(
+      `INSERT INTO public.donations (generator_organization_id,service_area_id,category,quantity,unit,food_type,name,status,created_by,packed_at,best_before_at,pickup_earliest_at,pickup_latest_at,policy_version,prepared_at,storage_instructions,pickup_city)
+       VALUES ($1::uuid,$2::uuid,'produce',10,'servings','vegetarian','Ranking test donation','offered',$3::text,now(),now()+interval '4 hours',now(),now()+interval '3 hours','test',now()-interval '1 hour','refrigerate','Sambalpur')`,
+      [donorId, area, donorId],
+    );
+
+    const rows = await withRole("annapurna_app", donorId, async () => (await database.query<{
+      id: string; distance_km: string | null; distance_source: string; capacity_adequate: boolean;
+    }>("SELECT * FROM public.app_find_receiver_candidates($1,$2,'produce',10,'servings')", [donorId, area])).rows);
+
+    // Nearest first, and the unlocated receiver last rather than dropped: an organisation with a
+    // blank coordinate is not disqualified from food, it just cannot be ranked by distance.
+    expect(rows.map((row) => row.id)).toEqual([nearId, farId, noCoordId]);
+    expect(Number(rows[0]!.distance_km)).toBeGreaterThan(0);
+    expect(Number(rows[0]!.distance_km)).toBeLessThan(10);
+    expect(Number(rows[1]!.distance_km)).toBeGreaterThan(100);
+    // Unknown distance is reported as unknown, never as zero — a zero would sort first and read as
+    // "right next door".
+    expect(rows[2]!.distance_km).toBeNull();
+    expect(rows[2]!.distance_source).toBe("unknown");
+    // Capacity is reported rather than used as a silent filter.
+    expect(rows.every((row) => row.capacity_adequate === true)).toBe(true);
+  });
+});
+
+describe("a city-centre match is reported as one", () => {
+  /**
+   * A receiver with no coordinates is resolved to its city's centre. When that city is the donor's
+   * city, the distance is genuinely about zero — and that is fine, but only if it is *labelled* as a
+   * city-centre estimate. The failure mode this guards against is a 0.0 km reading presented as an
+   * exact distance, which would tell a Helper the food is next door when the receiver could be at the
+   * far edge of the district. The source column is what makes that impossible to hide.
+   */
+  it("marks a gazetteer-derived distance as gazetteer, never as an exact point", async () => {
+    const area = (await database.query<{ id: string }>(
+      "INSERT INTO public.service_areas (label,country_code,timezone,active) VALUES ('Centroid test','IN','Asia/Kolkata',true) RETURNING id",
+    )).rows[0]!.id;
+    const ids = {
+      donor: "bbbbbbbb-0000-0000-0000-000000000001",
+      exact: "bbbbbbbb-0000-0000-0000-000000000002",
+      centroid: "bbbbbbbb-0000-0000-0000-000000000003",
+    };
+    // Both receivers are in Cuttack, which the gazetteer knows. One declares exact coordinates, the
+    // other only names the city.
+    for (const [key, id, lat, lon] of [
+      ["donor", ids.donor, 20.4625, 85.8830],
+      ["exact", ids.exact, 20.4700, 85.8900],
+      ["centroid", ids.centroid, null, null],
+    ] as [string, string, number | null, number | null][]) {
+      await database.query('INSERT INTO public."user" (id,name,email,email_verified) VALUES ($1,$2,$3,true)', [id, key, `${key}-centroid@example.test`]);
+      await database.query(
+        `INSERT INTO public.organizations (id,name,type,status,service_area_id,operating_address,city_or_district,contact_name,contact_email,food_capabilities,created_by,latitude,longitude,receiving_capacity,capacity_unit)
+         VALUES ($1::uuid,$2::text,$3::organization_type,'verified',$4::uuid,'test address','Cuttack','c','c@example.test',ARRAY['produce'],$1::text,$5::numeric,$6::numeric,50,'servings')`,
+        [id, key, key === "donor" ? "generator" : "receiver", area, lat, lon],
+      );
+      await database.query("INSERT INTO public.organization_memberships (organization_id,user_id,role,status) VALUES ($1,$2,'owner','active')", [id, id]);
+    }
+    await database.query(
+      `INSERT INTO public.donations (generator_organization_id,service_area_id,category,quantity,unit,food_type,name,status,created_by,packed_at,best_before_at,pickup_earliest_at,pickup_latest_at,policy_version,prepared_at,storage_instructions,pickup_city)
+       VALUES ($1::uuid,$2::uuid,'produce',10,'servings','vegetarian','Centroid donation','offered',$3::text,now(),now()+interval '4 hours',now(),now()+interval '3 hours','test',now()-interval '1 hour','refrigerate','Cuttack')`,
+      [ids.donor, area, ids.donor],
+    );
+    const rows = await withRole("annapurna_app", ids.donor, async () => (await database.query<{
+      id: string; distance_km: string | null; distance_source: string;
+    }>("SELECT * FROM public.app_find_receiver_candidates($1,$2,'produce',10,'servings')", [ids.donor, area])).rows);
+
+    const exact = rows.find((row) => row.id === ids.exact)!;
+    const centroid = rows.find((row) => row.id === ids.centroid)!;
+    expect(exact.distance_source).toBe("organization");
+    expect(centroid.distance_source).toBe("gazetteer");
+    // Both may be close — that is the point. The label is what distinguishes them.
+    expect(Number(centroid.distance_km)).toBeLessThan(1);
+  });
+});
+
+describe("notification email can actually be addressed and queued", () => {
+  /**
+   * Three separate things blocked this and each failed in a way that looked like something else:
+   * the app role cannot read `user.email`, the outbox insert policy allowed only auth kinds, and the
+   * recipient function checked the wrong organisation. Any one of them silently reduced the feature to
+   * "notifications are written and nobody is told". These assertions are the ones that would have
+   * caught each.
+   */
+  it("resolves recipients through the function, not through the auth tables", async () => {
+    // The organisation has to be one where the caller actually holds an active membership; the
+    // authorisation is about the caller's role, not about the organisation existing.
+    const org = (await database.query<{ id: string; user_id: string }>(
+      `SELECT membership.organization_id AS id, membership.user_id
+       FROM public.organization_memberships membership
+       WHERE membership.status::text = 'active'
+       ORDER BY membership.organization_id LIMIT 1`,
+    )).rows[0]!;
+    const rows = await withRole("annapurna_app", org.user_id, async () =>
+      (await database.query<{ email: string }>(
+        "SELECT email FROM public.app_notification_recipients($1, NULL)", [org.id],
+      )).rows);
+    // The member's address comes back...
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]!.email).toContain("@");
+    // ...and the application role still cannot read the table directly. If this ever passes, the
+    // security-definer function has been made redundant by a grant that exposes the email directory.
+    const direct = await withRole("annapurna_app", org.user_id, async () =>
+      database.query('SELECT email FROM public."user" LIMIT 1').then(() => "allowed").catch(() => "denied"));
+    expect(direct).toBe("denied");
+  });
+
+  it("refuses to list recipients for an organisation the caller has nothing to do with", async () => {
+    const stranger = "cccccccc-0000-0000-0000-0000000000ff";
+    await database.query('INSERT INTO public."user" (id,name,email,email_verified) VALUES ($1,$2,$3,true)', [stranger, "stranger", "stranger-notify@example.test"]);
+    const org = (await database.query<{ id: string }>("SELECT id FROM public.organizations ORDER BY created_at LIMIT 1")).rows[0]!;
+    const outcome = await withRole("annapurna_app", stranger, async () =>
+      database.query("SELECT email FROM public.app_notification_recipients($1, NULL)", [org.id])
+        .then(() => "allowed").catch(() => "denied"));
+    expect(outcome).toBe("denied");
+  });
+
+  it("lets the application queue a notification email, which the policy previously forbade", async () => {
+    const org = (await database.query<{ created_by: string }>(
+      "SELECT created_by FROM public.organizations ORDER BY created_at LIMIT 1",
+    )).rows[0]!;
+    const outcome = await withRole("annapurna_app", org.created_by, async () =>
+      database.query(
+        `INSERT INTO public.email_outbox (id, recipient, kind, encrypted_payload, message_id)
+         VALUES (gen_random_uuid(), 'notify-policy@example.test', 'notification', 'v1.placeholder', $1)`,
+        [`<notify-policy-${Date.now()}@annapurna-link.local>`],
+      ).then(() => "inserted").catch(() => "refused"));
+    expect(outcome).toBe("inserted");
+    // And a kind outside the allow-list is still refused, so the widening was by one entry, not by
+    // turning the policy off.
+    const arbitrary = await withRole("annapurna_app", org.created_by, async () =>
+      database.query(
+        `INSERT INTO public.email_outbox (id, recipient, kind, encrypted_payload, message_id)
+         VALUES (gen_random_uuid(), 'notify-policy2@example.test', 'marketing', 'v1.placeholder', $1)`,
+        [`<notify-policy2-${Date.now()}@annapurna-link.local>`],
+      ).then(() => "inserted").catch(() => "refused"));
+    expect(arbitrary).toBe("refused");
   });
 });

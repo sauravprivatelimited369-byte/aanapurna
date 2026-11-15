@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { LOCALES, LOCALE_NAMES, LOCALE_SHORT_NAMES, isLocale, resolveLocale, t, formatDate, htmlLang } from "@/lib/i18n";
-import { privacyNotice, responseWindowParagraph } from "@/domain/privacy-notice";
+import { LOCALES, LOCALE_NAMES, isLocale, resolveLocale, t, formatDate, htmlLang } from "@/lib/i18n";
+import { noticeFor, privacyNotice, responseWindowParagraph } from "@/domain/privacy-notice";
 
 describe("locale resolution", () => {
   it("defaults to Odia, because that is who this is for", () => {
@@ -18,7 +18,11 @@ describe("locale resolution", () => {
   it("reads the browser header when no choice was made", () => {
     expect(resolveLocale(undefined, "or-IN,or;q=0.9,en;q=0.8")).toBe("or");
     expect(resolveLocale(undefined, "en-GB,en;q=0.9")).toBe("en");
-    expect(resolveLocale(undefined, "hi-IN,hi;q=0.9")).toBe("or");
+    // Hindi and Bengali are offered now, so the header must be honoured rather than collapsed to Odia.
+    expect(resolveLocale(undefined, "hi-IN,hi;q=0.9")).toBe("hi");
+    expect(resolveLocale(undefined, "bn-IN,bn;q=0.9")).toBe("bn");
+    // A language that is still not offered falls back to the default rather than to English.
+    expect(resolveLocale(undefined, "ta-IN,ta;q=0.9")).toBe("or");
   });
 
   it("ignores a cookie value it did not set", () => {
@@ -126,19 +130,34 @@ describe("the privacy notice exists in both languages", () => {
     expect(responseWindowParagraph("or", recorded)).not.toMatch(/undefined|null/);
   });
 
-  it("covers both languages the switcher offers", () => {
-    for (const locale of LOCALES) expect(privacyNotice[locale]).toBeDefined();
+  it("says so in the reader's language when it has not been translated", () => {
+    // This used to assert that every offered language had a notice. That is no longer true — Hindi
+    // and Bengali are offered and the notice is not translated into them — so the assertion changes
+    // from "all four exist" to the thing that actually protects a reader: every offered language
+    // either has the notice, or is told it does not and gets English explicitly.
+    for (const locale of LOCALES) {
+      const { notice, translated } = noticeFor(locale);
+      expect(notice.sections.length).toBeGreaterThan(0);
+      expect(translated).toBe(locale === "or" || locale === "en");
+    }
+    // The banner text must exist in every offered language, and must name the language in its own script.
+    for (const locale of LOCALES) {
+      const banner = t(locale, "language.untranslatedBanner", { language: LOCALE_NAMES[locale] });
+      expect(banner).toContain(LOCALE_NAMES[locale]);
+      if (locale !== "en") expect(banner).not.toBe(t("en", "language.untranslatedBanner", { language: LOCALE_NAMES[locale] }));
+    }
   });
 });
 
 describe("the language control has to survive a 320px phone", () => {
-  it("offers a compact label in the language's own script", () => {
-    // The header holds brand + switch + join + menu, which does not fit at 320px with two full
-    // names. Collapsing to a glyph keeps the control present; removing it would trap the reader in
-    // a language they may not read.
-    expect(LOCALE_SHORT_NAMES.or).toMatch(/[\u0B00-\u0B7F]/);
-    expect(LOCALE_SHORT_NAMES.en.length).toBeLessThanOrEqual(2);
-    expect(LOCALE_SHORT_NAMES.or.length).toBeLessThan(LOCALE_NAMES.or.length);
+  it("names every language in its own script and offers all four", () => {
+    // Four languages wide enough to overflow the old pill row at 320px, which is why the control is
+    // now one select. What still matters is that each name is in its own script, so a reader can
+    // recognise their own language without having its name translated for them.
+    expect(LOCALES).toEqual(["or", "en", "hi", "bn"]);
+    expect(LOCALE_NAMES.or).toMatch(/[\u0B00-\u0B7F]/); // Odia block
+    expect(LOCALE_NAMES.hi).toMatch(/[\u0900-\u097F]/); // Devanagari
+    expect(LOCALE_NAMES.bn).toMatch(/[\u0980-\u09FF]/); // Bengali
   });
 
   it("keeps the full name available to a screen reader", () => {

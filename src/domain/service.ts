@@ -40,6 +40,7 @@ import { AGREEMENT_VERSION, partnerAgreementText } from "@/domain/partner-agreem
 import { withPasswordResetCapture } from "@/email/reset-link-capture";
 import { canAccessOrganization, hasAnyRole, type Identity } from "@/lib/identity";
 import { assessTransit, normalizePlaceName, type Coordinates, type TransitAssessment } from "@/domain/transit";
+import { enqueueNotificationEmail } from "@/email/outbox";
 import {
   createDeliveryCode,
   decryptValue,
@@ -189,6 +190,54 @@ async function notifyOrganization(
       ${kind}, ${title}, ${body}, ${href}
     )
   `);
+  await emailOrganizationMembers(tx, organizationId, donationId, title, body, href);
+}
+
+/**
+ * Email the same news to the same people, after the in-app notification is written.
+ *
+ * The notification list is the record and is written first, in the caller's transaction. This is the
+ * copy that reaches somebody who has not opened the application: a food offer that expires in an hour
+ * was previously invisible to anyone not already looking, which made the expiry clock a deadline
+ * nobody was told about.
+ *
+ * Delivery is best-effort by design. If the outbox write fails the transaction must still commit —
+ * losing the notification email is bad, losing the recorded offer because the mailer was down is
+ * worse. Failures are swallowed deliberately and the row is recovered by the outbox's own retry.
+ */
+async function emailOrganizationMembers(
+  tx: AppTransaction,
+  organizationId: string,
+  donationId: string | null,
+  title: string,
+  body: string,
+  href: string,
+): Promise<void> {
+  // Addresses come from `app_notification_recipients`, not from `public."user"`: the application role
+  // has no SELECT on the auth tables, deliberately, and granting it one to send mail would hand every
+  // query the whole email directory. The function applies the same authorisation check that wrote the
+  // notification.
+  //
+  // The lookup runs inside a SAVEPOINT. A failed statement does not merely throw in PostgreSQL — it
+  // aborts the surrounding transaction, and the next statement fails with "current transaction is
+  // aborted". Wrapping a best-effort side effect in try/catch alone is therefore not best-effort at
+  // all: a permission or authorisation refusal here would have taken the whole donation transaction
+  // down with it, which is exactly what happened before this savepoint existed. The rollback to the
+  // savepoint leaves the caller's transaction intact and the notification still written.
+  await tx.execute(sql`savepoint notification_email`);
+  try {
+    const recipients = await tx.execute<{ email: string }>(sql`
+      select email from public.app_notification_recipients(${organizationId}::uuid, ${donationId}::uuid)
+    `);
+    for (const row of recipients.rows) {
+      await enqueueNotificationEmail(row.email, title, body, href);
+    }
+    await tx.execute(sql`release savepoint notification_email`);
+  } catch {
+    // Addresses unavailable. The notification is already recorded; the email is the copy that did not
+    // go out. Nothing about the caller's transaction changes.
+    await tx.execute(sql`rollback to savepoint notification_email`);
+  }
 }
 
 /**
@@ -417,8 +466,16 @@ export async function createDonation(identity: Identity, input: DonationInput, r
       pickupInstructions: input.pickupInstructions,
     });
 
-    const candidateResult = await tx.execute<{ id: string }>(sql`
-      select id from app_find_receiver_candidates(
+    // Nearest first, with the distance that produced the order. The function returns it so an offer
+    // can say "2.4 km away" instead of asking a Receiver to trust an invisible ranking, and so the
+    // offer itself can be framed honestly when capacity is a stretch.
+    const candidateResult = await tx.execute<{
+      id: string;
+      distance_km: string | null;
+      distance_source: string | null;
+      capacity_adequate: boolean;
+    }>(sql`
+      select id, distance_km, distance_source, capacity_adequate from app_find_receiver_candidates(
         ${organization.id}::uuid,
         ${organization.serviceAreaId}::uuid,
         ${input.category},
@@ -436,13 +493,22 @@ export async function createDonation(identity: Identity, input: DonationInput, r
         expiresAt: responseExpiresAt,
       }).onConflictDoNothing().returning({ id: donationOffers.id });
       if (!offer) continue;
+      // The notification states the distance when it is known and says so plainly when it is not.
+      // A Receiver with no coordinates still gets the offer — being unfindable is our data gap, not
+      // their disqualification — but the message does not invent a number to fill the gap.
+      const away = candidate.distance_km === null
+        ? "The distance from the collection point is not known yet."
+        : `About ${candidate.distance_km} km away${candidate.distance_source === "gazetteer" ? " (estimated from the city name, not an exact address)" : ""}.`;
+      const capacity = candidate.capacity_adequate
+        ? ""
+        : " The quantity is above the capacity you have declared, so check that before accepting.";
       await notifyOrganization(
         tx,
         candidate.id,
         donation.id,
         "donation.offer",
         "A food offer is available",
-        `${input.name} is available for review. Check the food details and your current capacity before responding.`,
+        `${input.name} is available for review. ${away}${capacity} Check the food details before responding.`,
         `/app/offers/${offer.id}`,
       );
     }
@@ -802,6 +868,35 @@ async function assessJobTransit(
     averageSpeedKmph,
     limitKm,
   };
+}
+
+/**
+ * The two coordinate pairs behind a transit estimate, resolved the same way the estimate was: exact
+ * organisation point first, gazetteer city second. Returned as plain numbers because this crosses
+ * into a client component that cannot receive a `numeric` string.
+ */
+async function resolveTransitPoints(
+  tx: AppTransaction,
+  generatorOrganizationId: string,
+  receiverOrganizationId: string,
+): Promise<{ from: Coordinates | null; to: Coordinates | null; source: "organization" | "gazetteer" | "unknown" }> {
+  const [generator, receiver] = await Promise.all([
+    tx.select({ latitude: organizations.latitude, longitude: organizations.longitude })
+      .from(organizations).where(eq(organizations.id, generatorOrganizationId)).limit(1),
+    tx.select({ latitude: organizations.latitude, longitude: organizations.longitude })
+      .from(organizations).where(eq(organizations.id, receiverOrganizationId)).limit(1),
+  ]);
+  const [from, to] = await Promise.all([
+    resolveOrganizationCoordinates(tx, generatorOrganizationId),
+    resolveOrganizationCoordinates(tx, receiverOrganizationId),
+  ]);
+  // Whether either end is an exact declared point or a city centre from the gazetteer. The caption
+  // says which, because calling a city centre an exact address is the false precision this whole
+  // feature exists to avoid.
+  const exact = generator[0]?.latitude !== null && generator[0]?.longitude !== null
+    && receiver[0]?.latitude !== null && receiver[0]?.longitude !== null;
+  const source = !from || !to ? "unknown" : exact ? "organization" : "gazetteer";
+  return { from, to, source };
 }
 
 function transitColumns(transit: TransitSnapshot) {
@@ -1495,6 +1590,13 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       transit: job.transitDistanceKm === null || job.transitEtaMinutes === null
         ? null
         : { distanceKm: Number(job.transitDistanceKm), etaMinutes: job.transitEtaMinutes, checkedAt: job.transitCheckedAt },
+      // The two points the transit estimate came from, so the schematic on the detail page is drawn
+      // from the same numbers as the printed distance rather than recalculated from something else.
+      // Coordinates are already role-limited on this page: a Helper who can see the delivery sees
+      // the addresses, and anybody who cannot see addresses does not get points either.
+      transitPoints: (assignedHelper || receiverMember || generatorMember || operations)
+        ? await resolveTransitPoints(tx, job.generatorOrganizationId, job.receiverOrganizationId)
+        : null,
       collectionMode: job.collectionMode,
       isAssignedToMe: assignedHelper,
       canClaim: Boolean(process.env.OPERATIONS_ENABLED === "true" && isEligibleOpenHelper && !assignedHelper && (job.status === "open" || (job.claimExpiresAt && job.claimExpiresAt.getTime() <= Date.now()))),

@@ -7,6 +7,8 @@ import { encryptValue } from "@/security/crypto";
 import { databaseSslOptions, databaseUrl } from "@/lib/database-config";
 
 export type AuthEmailKind = "verification" | "password_reset";
+/** Operational mail: something happened that the person may need to act on before it expires. */
+export type NotificationEmailKind = "notification";
 
 type AuthEmailPayload = {
   url: string;
@@ -31,6 +33,42 @@ export async function enqueueAuthEmail(kind: AuthEmailKind, recipient: string, u
         buttonLabel: "Choose a new password",
       };
 
+  await storeAndKick(kind, recipient, payload);
+}
+
+/**
+ * Email somebody that something happened in their account.
+ *
+ * Until now the outbox carried authentication mail only, so a food offer that expires in an hour
+ * notified nobody who was not already looking at the application. That is the gap this closes: the
+ * in-app notification list stays the record, and this is the copy that reaches a person who has not
+ * opened the app. It is deliberately not a marketing channel and carries no food or health claims.
+ *
+ * The link must be a relative path. It is resolved against the configured app origin by the drain,
+ * which refuses an off-origin URL, so a notification cannot be used to point a recipient somewhere
+ * else. Returns silently when the address is unusable: a notification that cannot be emailed is still
+ * a notification, and it is already in the list.
+ */
+export async function enqueueNotificationEmail(
+  recipient: string | null | undefined,
+  heading: string,
+  description: string,
+  href: string,
+): Promise<void> {
+  if (!recipient || !recipient.includes("@") || !href.startsWith("/")) return;
+  // Headings and bodies are bounded in the database function that writes the notification; the same
+  // bounds are applied here so a pathological string cannot become a pathological email.
+  const payload: AuthEmailPayload = {
+    url: href,
+    heading: heading.slice(0, 160),
+    description: `${description.slice(0, 900)}\n\nYou are receiving this because it relates to an account you belong to on Annapurna Link. It is not confirmation of approval, and no food has been certified.`,
+    buttonLabel: "Open Annapurna Link",
+  };
+  await storeAndKick("notification", recipient, payload);
+}
+
+/** The shared tail: encrypt, store durably, then try to wake the worker once. */
+async function storeAndKick(kind: string, recipient: string, payload: AuthEmailPayload): Promise<void> {
   const id = randomUUID();
   await db.insert(emailOutbox).values({
     id,

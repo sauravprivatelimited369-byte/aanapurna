@@ -54,7 +54,8 @@ async function main(): Promise<void> {
               'app_public_directory','app_notify_platform_roles','app_current_agreement_version',
               'app_apply_retention','app_redact_user','app_guard_audit_mutation',
               'app_export_person','app_record_profile_correction','app_overdue_privacy_requests',
-              'app_overdue_support_cases','app_privacy_response_window_hours','app_public_response_window_contact'
+              'app_overdue_support_cases','app_privacy_response_window_hours','app_public_response_window_contact',
+              'app_org_coordinates','app_normalize_place','app_notification_recipients'
             )) AS required_functions,
         (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations,
         -- Supabase's public PostgREST roles must not reach application objects.
@@ -83,8 +84,10 @@ async function main(): Promise<void> {
     // deliberately below the current count, so dropping forced RLS from an existing table still
     // fails the check rather than hiding inside a coincidence.
     if (row.rls_tables < 31) problems.push(`expected at least 31 RLS-protected tables, found ${row.rls_tables}`);
-    if (row.required_functions !== 30) problems.push(`expected required database functions, found ${row.required_functions}/30`);
-    if (row.migrations < 23) problems.push(`expected at least 23 applied migrations, found ${row.migrations}`);
+    // Migration 24 added two functions to the distance-ranked matching path. The count is exact rather
+    // than a floor because a missing function here is a silently broken feature, not a degraded one.
+    if (row.required_functions !== 33) problems.push(`expected required database functions, found ${row.required_functions}/33`);
+    if (row.migrations < 25) problems.push(`expected at least 25 applied migrations, found ${row.migrations}`);
     if (row.exposed_tables > 0) problems.push(`Supabase public API roles can reach ${row.exposed_tables} application table(s); apply 20261114120000_revoke_public_api_privileges`);
     if (row.exposed_functions > 0) problems.push(`Supabase public API roles can execute ${row.exposed_functions} application function(s); apply 20261114120000_revoke_public_api_privileges`);
     console.info(JSON.stringify({

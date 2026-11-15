@@ -836,37 +836,51 @@ select.form-control { appearance: auto; }
 .checkbox-row input { margin-top: .22em; flex: none; }
 
 /* ---- Language switcher ---------------------------------------------------
-   Two languages, both named in their own script. Kept visually quiet: a person
-   looking for their language should find it without it competing with "Log in". */
-.locale-switcher { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line, rgba(255,255,255,0.14)); border-radius: 999px; }
-.locale-switcher__choice { appearance: none; border: 0; background: transparent; color: var(--muted, rgba(255,255,255,0.62)); font: inherit; font-size: 0.78rem; line-height: 1; padding: 0.34rem 0.6rem; border-radius: 999px; cursor: pointer; transition: color 120ms ease, background 120ms ease; }
-.locale-switcher__choice:hover { color: var(--fg, #fff); }
-.locale-switcher__choice.is-active { background: var(--surface-2, rgba(255,255,255,0.1)); color: var(--fg, #fff); }
-.locale-switcher__choice:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
-.locale-switcher__choice:disabled { opacity: 0.6; cursor: progress; }
+   Four languages, each named in its own script, in one native select. Earlier this was a row of
+   pills that collapsed to single glyphs below 640px; that bought two languages and cost the control
+   its legibility. A select is one control at every width, cannot overflow, and hands mixed-script
+   option rendering to the platform. Kept visually quiet: somebody looking for their language should
+   find it without it competing with "Log in". */
+.locale-switcher { display: inline-flex; align-items: center; min-width: 0; }
+.locale-switcher__select {
+  appearance: none;
+  border: 1px solid var(--line, rgba(255,255,255,0.14));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg, #fff);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 0.34rem 1.5rem 0.34rem 0.6rem;
+  cursor: pointer;
+  max-width: 7.5rem;
+  text-overflow: ellipsis;
+  /* The chevron, drawn rather than shipped as an image so it inherits the text colour. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 0.85rem) 52%, calc(100% - 0.55rem) 52%;
+  background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
+  background-repeat: no-repeat;
+}
+.locale-switcher__select:hover { border-color: var(--line-strong, rgba(255,255,255,0.28)); }
+.locale-switcher__select:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
+.locale-switcher__select:disabled { opacity: 0.6; cursor: progress; }
+/* The option list is drawn by the operating system, so its colours are set explicitly rather than
+   inherited from a dark header — otherwise a white-on-white list is possible on some platforms. */
+.locale-switcher__select option { background: #12161c; color: #f2f5f7; }
 
-/* Under 560px the header cannot hold brand + both language names + join + menu at 320px. The
-   inactive language collapses to its first letter so the control still exists and still works:
-   replacing it with nothing would leave the reader stuck in a language they may not read. */
-/* Collapse well before the header runs out of room. 640px is chosen rather than tuned to the
-   narrowest test width: the header also holds the brand, the join button and the menu toggle, and
-   guessing the exact pixel where those three stop fitting is how the 390px overflow got in. */
 @media (max-width: 640px) {
-  .locale-switcher { gap: 0; max-width: 7.5rem; }
-  .locale-switcher__choice { padding: 0.3rem 0.42rem; font-size: 0.72rem; }
-  .locale-switcher__choice:not(.is-active)::after { content: attr(data-short); display: inline; }
-  .locale-switcher__choice:not(.is-active) span.long-label { display: none; }
   .header-actions { gap: 6px; min-width: 0; }
   .header-actions > * { flex: 0 1 auto; min-width: 0; }
   .header-join { padding-inline: 8px; }
   .header-inner > * { min-width: 0; }
+  .locale-switcher__select { max-width: 6.2rem; padding-inline: 0.45rem 1.25rem; font-size: 0.74rem; }
 }
 @media (max-width: 430px) {
+  /* Below 430px the header keeps only the brand, Join and the menu; the switcher moves into the
+     mobile panel, where there is room for the full names. It is never absent, only relocated. */
   .header-actions .locale-switcher { display: none; }
-  .mobile-nav-panel .locale-switcher { display: inline-flex; margin-top: 0.75rem; max-width: none; }
-  /* The panel is full width, so the full names fit again. */
-  .mobile-nav-panel .locale-switcher__choice:not(.is-active)::after { content: none; }
-  .mobile-nav-panel .locale-switcher__choice:not(.is-active) span.long-label { display: inline; }
+  .mobile-nav-panel .locale-switcher { display: inline-flex; margin-top: 0.75rem; }
+  .mobile-nav-panel .locale-switcher__select { max-width: none; }
 }
 
 /* ---- Request timeline ----------------------------------------------------
@@ -884,3 +898,19 @@ select.form-control { appearance: auto; }
   .request-timeline__body { animation: request-timeline-open 160ms ease-out; }
 }
 @keyframes request-timeline-open { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+
+/* ---- Transit schematic ---------------------------------------------------
+   An inline SVG, not a tile map. See components/transit-map.tsx for why. Sized
+   to the card it sits in and never wider, so it cannot reintroduce the header
+   overflow bug on a narrow screen. */
+.transit-map { margin: 0; max-width: 22rem; }
+.transit-map svg { display: block; width: 100%; height: auto; }
+.transit-map__frame { fill: var(--surface-2, rgba(255,255,255,0.05)); stroke: var(--line, rgba(255,255,255,0.14)); stroke-width: 1; }
+.transit-map__route { stroke: var(--accent, #7dd3fc); stroke-width: 2; stroke-dasharray: 5 4; }
+.transit-map__point { stroke-width: 2; }
+.transit-map__point--from { fill: var(--fg, #fff); stroke: var(--accent, #7dd3fc); }
+.transit-map__point--to { fill: var(--accent, #7dd3fc); stroke: var(--fg, #fff); }
+.transit-map__label { fill: var(--muted, rgba(255,255,255,0.62)); font-size: 9px; font-family: inherit; letter-spacing: 0.04em; text-transform: uppercase; }
+.transit-map__note { margin: 0.5rem 0 0; font-size: 0.78rem; color: var(--muted, rgba(255,255,255,0.62)); line-height: 1.45; }
+.transit-map--unknown { border: 1px dashed var(--line, rgba(255,255,255,0.18)); border-radius: 10px; padding: 0.85rem; }
+.data-row--map { display: block; }

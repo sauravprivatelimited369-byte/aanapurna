@@ -1,19 +1,32 @@
 /**
- * Two languages, chosen deliberately.
+ * Four languages, each one because somebody here reads it.
  *
  * This product serves Sambalpur, in Odisha. Publishing an English-only privacy notice to people who
  * read Odia is not a presentation problem: a notice in a language you do not read is not notice, and
- * a rights flow you cannot follow is not a right. English stays as the second language because the
- * organisation, its auditors and its lawyers work in it.
+ * a rights flow you cannot follow is not a right. English stays because the organisation, its
+ * auditors and its lawyers work in it.
+ *
+ * Hindi and Bengali were added on the owner's instruction, and they are not decoration. Western
+ * Odisha has a substantial Hindi-speaking population — migrant workers, traders, transport
+ * contractors — and a Bengali speaker in Kolkata is the audience of the directory pages. A language
+ * list that offers four languages and translates three sentences is worse than one that offers two
+ * and means it, so the rule below matters more with four than it did with two.
+ *
+ * Odia remains the default. Adding languages must never demote the majority language of the place
+ * this is built for.
  *
  * The translations are written as prose rather than assembled from fragments. Sentence order differs
- * between the two languages, so a template like `"within " + hours + " hours"` cannot be translated
- * by substitution — the Odia phrasing puts the number where English does not. Where a number or a date
- * is involved, the whole sentence is stored per language.
+ * between languages, so a template like `"within " + hours + " hours"` cannot be translated by
+ * substitution — Odia and Hindi put the number where English does not. Where a number or a date is
+ * involved, the whole sentence is stored per language.
  *
- * This is a dictionary, not a framework. There is no pluralisation engine and no message extraction,
- * because there are two languages and one of them is not the source language. A framework here would
- * be machinery to maintain for a problem that four hundred lines of table already solve.
+ * This is a dictionary, not a framework. There is no pluralisation engine and no message extraction.
+ * A framework here would be machinery to maintain for a problem a table already solves.
+ *
+ * What is translated is deliberately partial, and the interface says so rather than pretending. The
+ * `translated` map below records which surfaces each language actually covers; anything absent is
+ * named on screen as not yet translated, in the reader's own language. Silent fallback to English is
+ * the failure mode this file exists to prevent.
  */
 
 /**
@@ -21,7 +34,7 @@
  * `server-only` guard. The dictionary is public text and the resolver is pure; there is no secret
  * here. The cookie and header read lives in `locale-server.ts`, which *is* server-only.
  */
-export const LOCALES = ["or", "en"] as const;
+export const LOCALES = ["or", "en", "hi", "bn"] as const;
 export type Locale = (typeof LOCALES)[number];
 export const DEFAULT_LOCALE: Locale = "or";
 
@@ -29,15 +42,8 @@ export const DEFAULT_LOCALE: Locale = "or";
 export const LOCALE_NAMES: Record<Locale, string> = {
   or: "ଓଡ଼ିଆ",
   en: "English",
-};
-
-/**
- * A one-glyph fallback for the narrowest screens, where the full pair does not fit beside the brand
- * and the menu. Still in the language's own script, so it is recognisable rather than an abbreviation.
- */
-export const LOCALE_SHORT_NAMES: Record<Locale, string> = {
-  or: "ଓ",
-  en: "EN",
+  hi: "हिन्दी",
+  bn: "বাংলা",
 };
 
 export const LOCALE_COOKIE = "annapurna_locale";
@@ -59,6 +65,8 @@ export function resolveLocale(cookieValue: unknown, acceptLanguage: string | nul
     const tag = part.split(";")[0]?.trim().toLowerCase() ?? "";
     if (tag === "or" || tag.startsWith("or-")) return "or";
     if (tag === "en" || tag.startsWith("en-")) return "en";
+    if (tag === "hi" || tag.startsWith("hi-")) return "hi";
+    if (tag === "bn" || tag.startsWith("bn-")) return "bn";
   }
   return DEFAULT_LOCALE;
 }
@@ -80,6 +88,53 @@ const OR = {
   "request.progress.current": "ବର୍ତ୍ତମାନ ଏଠାରେ",
   "privacy.nav": "ଗୋପନୀୟତା",
   "common.dateAt": "{date} ରେ, {time} ଘଟିକାରେ",
+  "common.skipToContent": "ମୁଖ୍ୟ ବିଷୟକୁ ଯାଆନ୍ତୁ",
+  "common.language": "ଭାଷା",
+  "common.close": "ବନ୍ଦ କରନ୍ତୁ",
+  "common.menu": "ମେନୁ",
+
+  "nav.home": "ମୂଳ ପୃଷ୍ଠା",
+  "nav.howItWorks": "ଏହା କିପରି କାମ କରେ",
+  "nav.impact": "ଆମର ପ୍ରଭାବ",
+  "nav.foodSafety": "ଖାଦ୍ୟ ସୁରକ୍ଷା",
+  "nav.answers": "ସରଳ ଉତ୍ତର",
+  "nav.about": "ଆମ ବିଷୟରେ",
+  "nav.contact": "ଯୋଗାଯୋଗ",
+  "nav.preview": "ନମୁନା",
+  "nav.login": "ଲଗ୍ ଇନ",
+  "nav.join": "ଆନ୍ନପୂର୍ଣ୍ଣାରେ ଯୋଡ଼ି ହୁଅନ୍ତୁ",
+
+  "home.eyebrow": "ଅତିରିକ୍ତ ଖାଦ୍ୟ · ଦାୟିତ୍ୱପୂର୍ଣ୍ଣ ହସ୍ତାନ୍ତର",
+  "home.title": "ଭଲ ଖାଦ୍ୟର ଏକ <em>ଉଦ୍ଦେଶ୍ୟ ଥିବା ଉଚିତ।</em>",
+  "home.lead": "ଆନ୍ନପୂର୍ଣ୍ଣା ଲିଙ୍କ ଦାତା ଏବଂ ସମ୍ପ୍ରଦାୟ ସଂଗଠନ ମଧ୍ୟରେ ଅତିରିକ୍ତ ଖାଦ୍ୟକୁ ସମନ୍ୱୟ କରେ — ଅନୁମୋଦିତ ସ୍ୱେଚ୍ଛାସେବୀ, ସ୍ପଷ୍ଟ ହ୍ୟାଣ୍ଡଲିଂ ସୂଚନା ଏବଂ ଏକ ନିଶ୍ଚିତ ବିତରଣ ରେକର୍ଡ ସହିତ।",
+  "home.donate": "ଅତିରିକ୍ତ ଖାଦ୍ୟ ଦାନ କରନ୍ତୁ",
+  "home.becomeHelper": "ସ୍ୱେଚ୍ଛାସେବୀ ହୁଅନ୍ତୁ",
+  "home.registerOrg": "ଆପଣଙ୍କ ସଂଗଠନ ପଞ୍ଜୀକରଣ କରନ୍ତୁ",
+  "home.sampleWalkthrough": "ଏକ ନମୁନା ହସ୍ତାନ୍ତର ଦେଖନ୍ତୁ — ଖାତା ଆବଶ୍ୟକ ନାହିଁ",
+  "home.reviewNote": "ଅନୁରୋଧଗୁଡ଼ିକ ମାନବମାନେ ସମୀକ୍ଷା କରନ୍ତି। ଲଞ୍ଚ ଅନୁମୋଦନ ରେକର୍ଡ ନହେବା ପର୍ଯ୍ୟନ୍ତ ଖାଦ୍ୟ କାର୍ଯ୍ୟକଳାପ ବନ୍ଦ ରହେ।",
+  "home.rolesEyebrow": "ତିନୋଟି ଭୂମିକା, ଗୋଟିଏ ଲକ୍ଷ୍ୟ",
+  "home.rolesTitle": "ଆପଣ ଯେଉଁ <em>ଭୂମିକା ନିଭାଇ ପାରିବେ</em> ସେଥିରୁ ଆରମ୍ଭ କରନ୍ତୁ।",
+  "home.rolesIntro": "ପ୍ରବେଶ ଅନୁରୋଧ କରିବାକୁ ଏକ ଭୂମିକା ବାଛନ୍ତୁ। ଭୂମିକା ବାଛିବା ଏକ ସମୀକ୍ଷା ଆରମ୍ଭ କରେ — ଏହା କାହାରିକୁ ଅନୁମୋଦନ ଦିଏ ନାହିଁ।",
+  "home.closingEyebrow": "ମାନବ ସମୀକ୍ଷାରୁ ଆରମ୍ଭ",
+  "home.closingTitle": "ଏକ ଯତ୍ନଶୀଳ ହସ୍ତାନ୍ତର ପରିବର୍ତ୍ତନ ଆଣିପାରେ।",
+  "home.closingText": "ସହଭାଗୀ ପ୍ରବେଶ ଅନୁରୋଧ କରନ୍ତୁ। ଲୋକ, ନୀତି ଓ ସ୍ଥାନୀୟ ଅନୁମୋଦନ ପ୍ରସ୍ତୁତ ନହେବା ପର୍ଯ୍ୟନ୍ତ ପ୍ରକୃତ ଖାଦ୍ୟ କାର୍ଯ୍ୟକଳାପ ବନ୍ଦ ରହିବ।",
+  "home.startRequest": "ପ୍ରବେଶ ଅନୁରୋଧ ଆରମ୍ଭ କରନ୍ତୁ",
+  "home.contactSupport": "ଯୋଗାଯୋଗ ଓ ସହାୟତା",
+
+  "language.coverageNote": "ଏହି ପୃଷ୍ଠାର କିଛି ଅଂଶ ଏପର୍ଯ୍ୟନ୍ତ {language}ରେ ଅନୁବାଦ ହୋଇନାହିଁ। ଯାହା ଅନୁବାଦିତ ହୋଇନାହିଁ ତାହା ଇଂରାଜୀରେ ଦେଖାଯିବ।",
+  "language.untranslatedBanner": "ଏହି ପୃଷ୍ଠା ଏପର୍ଯ୍ୟନ୍ତ {language}ରେ ଅନୁବାଦିତ ହୋଇନାହିଁ। ଏହା ଇଂରାଜୀରେ ଦେଖାଯାଉଛି।",
+  "home.role.generator.title": "ଖାଦ୍ୟ ଦାତା",
+  "home.role.generator.label": "ରେଷ୍ଟୁରାଣ୍ଟ · ହୋଟେଲ · କ୍ୟାଟରର୍",
+  "home.role.generator.text": "ଏକ ସ୍ପଷ୍ଟ ଅତିରିକ୍ତ ଖାଦ୍ୟ ପ୍ରସ୍ତାବ ଏବଂ ଏହାର ପ୍ରସ୍ତୁତି, ସଂରକ୍ଷଣ ଓ ସଂଗ୍ରହ ବିବରଣୀ ସେୟାର କରନ୍ତୁ।",
+  "home.role.generator.action": "ଦାତା ପ୍ରବେଶ ଅନୁରୋଧ କରନ୍ତୁ",
+  "home.role.receiver.title": "ସମ୍ପ୍ରଦାୟ ସଂଗଠନ",
+  "home.role.receiver.label": "ଗ୍ରହୀତା · ଏନଜିଓ · ଆଶ୍ରୟସ୍ଥଳ",
+  "home.role.receiver.text": "ଆପଣଙ୍କ ପ୍ରକୃତ ଗ୍ରହଣ କ୍ଷମତା ଅନୁସାରେ ପ୍ରସ୍ତାବ ସମୀକ୍ଷା କରନ୍ତୁ ଏବଂ ପ୍ରତ୍ୟେକ ହସ୍ତାନ୍ତର ଆସିବା ପରେ ନିଶ୍ଚିତ କରନ୍ତୁ।",
+  "home.role.receiver.action": "ଆପଣଙ୍କ ସଂଗଠନ ପଞ୍ଜୀକରଣ କରନ୍ତୁ",
+  "home.role.helper.title": "ବିତରଣ ସ୍ୱେଚ୍ଛାସେବୀ",
+  "home.role.helper.label": "ସ୍ୱେଚ୍ଛାସେବୀ · ଅନୁମୋଦିତ ଚାଳକ",
+  "home.role.helper.text": "ସ୍ପଷ୍ଟ ଅଭିରକ୍ଷଣ ପଦକ୍ଷେପ ଏବଂ ଭୂମିକା-ସୀମିତ ବିବରଣୀ ସହିତ ସଂଗ୍ରହ ଓ ବିତରଣରେ ସହାୟତା କରନ୍ତୁ।",
+  "home.role.helper.action": "ସ୍ୱେଛାସେବୀ ପ୍ରବେଶ ଅନୁରୋଧ କରନ୍ତୁ",
 } as const;
 
 const EN = {
@@ -99,11 +154,190 @@ const EN = {
   "request.progress.current": "Here now",
   "privacy.nav": "Privacy",
   "common.dateAt": "on {date} at {time}",
+  "common.skipToContent": "Skip to main content",
+  "common.language": "Language",
+  "common.close": "Close",
+  "common.menu": "Menu",
+
+  "nav.home": "Home",
+  "nav.howItWorks": "How it works",
+  "nav.impact": "Our impact",
+  "nav.foodSafety": "Food safety",
+  "nav.answers": "Straight answers",
+  "nav.about": "About us",
+  "nav.contact": "Contact",
+  "nav.preview": "Preview",
+  "nav.login": "Log in",
+  "nav.join": "Join Annapurna",
+
+  "home.eyebrow": "Surplus food · responsible handovers",
+  "home.title": "Good food deserves <em>a destination.</em>",
+  "home.lead": "Annapurna Link coordinates surplus food between donors and community organisations—with approved Helpers, clear handling information and a confirmed delivery record.",
+  "home.donate": "Donate surplus food",
+  "home.becomeHelper": "Become a Helper",
+  "home.registerOrg": "Register your organisation",
+  "home.sampleWalkthrough": "Walk through a sample handover — no account needed",
+  "home.reviewNote": "Requests are reviewed by people. Food operations remain paused until launch approvals are recorded.",
+  "home.rolesEyebrow": "Three roles, one shared outcome",
+  "home.rolesTitle": "Start with the part <em>you can play.</em>",
+  "home.rolesIntro": "Choose a role to request access. Selecting a role starts a review—it does not approve a person, organisation or donation.",
+  "home.closingEyebrow": "Begin with a human review",
+  "home.closingTitle": "One careful handover can make a difference.",
+  "home.closingText": "Request partner access. Real food operations will remain paused until the people, policies and local approvals are ready.",
+  "home.startRequest": "Start an access request",
+  "home.contactSupport": "Contact and support",
+
+  "language.coverageNote": "Parts of this page are not yet translated into {language}. Anything untranslated is shown in English.",
+  "language.untranslatedBanner": "This page is not yet translated into {language}. It is shown in English.",
+  "home.role.generator.title": "Food donors",
+  "home.role.generator.label": "Restaurants · hotels · caterers",
+  "home.role.generator.text": "Share a clear surplus-food offer and its preparation, storage and collection details.",
+  "home.role.generator.action": "Request donor access",
+  "home.role.receiver.title": "Community organisations",
+  "home.role.receiver.label": "Receivers · NGOs · shelters",
+  "home.role.receiver.text": "Review offers against your real receiving capacity and confirm each handover when it arrives.",
+  "home.role.receiver.action": "Register your organisation",
+  "home.role.helper.title": "Delivery Helpers",
+  "home.role.helper.label": "Volunteers · approved drivers",
+  "home.role.helper.text": "Support a collection and delivery with clear custody steps and role-limited details.",
+  "home.role.helper.action": "Request Helper access",
+} as const;
+
+const HI = {
+  "request.progress.heading": "आपका अनुरोध कहाँ है",
+  "request.progress.showTimeline": "समयरेखा देखें",
+  "request.progress.hideTimeline": "समयरेखा छिपाएँ",
+  "request.progress.loading": "अनुरोध खोजा जा रहा है…",
+  "request.progress.failed": "इस अनुरोध की स्थिति पढ़ी नहीं जा सकी।",
+  "request.progress.waited": "प्रतीक्षा",
+  "request.progress.hours": "घंटे",
+  "request.progress.nextStep": "अगला कदम",
+  "request.progress.queue": "आपसे पहले {count} खुले अनुरोध जमा हुए हैं",
+  "request.progress.noWindow": "कोई उत्तर-समय दर्ज नहीं है, इसलिए कोई तारीख़ का वादा नहीं है।",
+  "request.progress.window": "{hours} घंटे में उत्तर देने का वादा",
+  "request.progress.overdue": "{hours} घंटे की समयसीमा बीत चुकी है",
+  "request.progress.onTime": "समयसीमा के भीतर",
+  "request.progress.current": "अभी यहाँ",
+  "privacy.nav": "निजता",
+  "common.dateAt": "{date} को, {time} बजे",
+  "common.skipToContent": "मुख्य सामग्री पर जाएँ",
+  "common.language": "भाषा",
+  "common.close": "बंद करें",
+  "common.menu": "मेन्यू",
+
+  "nav.home": "मुख्य पृष्ठ",
+  "nav.howItWorks": "यह कैसे काम करता है",
+  "nav.impact": "हमारा प्रभाव",
+  "nav.foodSafety": "खाद्य सुरक्षा",
+  "nav.answers": "सीधे उत्तर",
+  "nav.about": "हमारे बारे में",
+  "nav.contact": "संपर्क",
+  "nav.preview": "नमूना",
+  "nav.login": "लॉग इन",
+  "nav.join": "अन्नपूर्णा से जुड़ें",
+
+  "home.eyebrow": "अतिरिक्त भोजन · ज़िम्मेदार हस्तांतरण",
+  "home.title": "अच्छे भोजन का एक <em>गंतव्य होना चाहिए।</em>",
+  "home.lead": "अन्नपूर्णा लिंक दाताओं और सामुदायिक संगठनों के बीच अतिरिक्त भोजन का समन्वय करता है — स्वीकृत स्वयंसेवकों, स्पष्ट हैंडलिंग जानकारी और एक पुष्ट वितरण रिकॉर्ड के साथ।",
+  "home.donate": "अतिरिक्त भोजन दान करें",
+  "home.becomeHelper": "स्वयंसेवक बनें",
+  "home.registerOrg": "अपना संगठन पंजीकृत करें",
+  "home.sampleWalkthrough": "एक नमूना हस्तांतरण देखें — खाता आवश्यक नहीं",
+  "home.reviewNote": "अनुरोधों की समीक्षा लोग करते हैं। लॉन्च स्वीकृतियाँ दर्ज होने तक भोजन संचालन बंद रहता है।",
+  "home.rolesEyebrow": "तीन भूमिकाएँ, एक साझा परिणाम",
+  "home.rolesTitle": "उस <em>भूमिका से शुरू करें जो आप निभा सकें।</em>",
+  "home.rolesIntro": "पहुँच का अनुरोध करने के लिए एक भूमिका चुनें। भूमिका चुनने से समीक्षा शुरू होती है — इससे किसी व्यक्ति, संगठन या दान को स्वीकृति नहीं मिलती।",
+  "home.closingEyebrow": "मानवीय समीक्षा से शुरुआत",
+  "home.closingTitle": "एक सावधान हस्तांतरण बदलाव ला सकता है।",
+  "home.closingText": "साझेदार पहुँच का अनुरोध करें। जब तक लोग, नीतियाँ और स्थानीय स्वीकृतियाँ तैयार नहीं होतीं, वास्तविक भोजन संचालन बंद रहेगा।",
+  "home.startRequest": "पहुँच अनुरोध शुरू करें",
+  "home.contactSupport": "संपर्क और सहायता",
+
+  "language.coverageNote": "इस पृष्ठ के कुछ भाग अभी {language} में अनूदित नहीं हैं। जो अनूदित नहीं है वह अंग्रेज़ी में दिखाया जाता है।",
+  "language.untranslatedBanner": "यह पृष्ठ अभी {language} में अनूदित नहीं है। यह अंग्रेज़ी में दिखाया जा रहा है।",
+  "home.role.generator.title": "भोजन दाता",
+  "home.role.generator.label": "रेस्टोरेंट · होटल · कैटरर",
+  "home.role.generator.text": "एक स्पष्ट अतिरिक्त भोजन प्रस्ताव और उसकी तैयारी, भंडारण व संग्रह का विवरण साझा करें।",
+  "home.role.generator.action": "दाता पहुँच का अनुरोध करें",
+  "home.role.receiver.title": "सामुदायिक संगठन",
+  "home.role.receiver.label": "प्राप्तकर्ता · एनजीओ · आश्रय स्थल",
+  "home.role.receiver.text": "अपनी वास्तविक प्राप्ति क्षमता के अनुसार प्रस्तावों की समीक्षा करें और प्रत्येक हस्तांतरण आने पर उसकी पुष्टि करें।",
+  "home.role.receiver.action": "अपना संगठन पंजीकृत करें",
+  "home.role.helper.title": "वितरण स्वयंसेवक",
+  "home.role.helper.label": "स्वयंसेवक · स्वीकृत चालक",
+  "home.role.helper.text": "स्पष्ट अभिरक्षा चरणों और भूमिका-सीमित विवरणों के साथ संग्रह और वितरण में सहायता करें।",
+  "home.role.helper.action": "स्वयंसेवक पहुँच का अनुरोध करें",
+} as const;
+
+const BN = {
+  "request.progress.heading": "আপনার অনুরোধ কোথায় আছে",
+  "request.progress.showTimeline": "সময়রেখা দেখুন",
+  "request.progress.hideTimeline": "সময়রেখা লুকান",
+  "request.progress.loading": "অনুরোধ খোঁজা হচ্ছে…",
+  "request.progress.failed": "এই অনুরোধের অবস্থা পড়া যায়নি।",
+  "request.progress.waited": "অপেক্ষা",
+  "request.progress.hours": "ঘণ্টা",
+  "request.progress.nextStep": "পরবর্তী ধাপ",
+  "request.progress.queue": "আপনার আগে {count}টি খোলা অনুরোধ জমা হয়েছে",
+  "request.progress.noWindow": "কোনো উত্তরের সময়সীমা নথিভুক্ত নেই, তাই কোনো তারিখের প্রতিশ্রুতি নেই।",
+  "request.progress.window": "{hours} ঘণ্টার মধ্যে উত্তর দেওয়ার প্রতিশ্রুতি",
+  "request.progress.overdue": "{hours} ঘণ্টার সময়সীমা পার হয়েছে",
+  "request.progress.onTime": "সময়সীমার ভিতরে",
+  "request.progress.current": "এখন এখানে",
+  "privacy.nav": "গোপনীয়তা",
+  "common.dateAt": "{date}-এ, {time}-টায়",
+  "common.skipToContent": "মূল বিষয়বস্তুতে যান",
+  "common.language": "ভাষা",
+  "common.close": "বন্ধ করুন",
+  "common.menu": "মেনু",
+
+  "nav.home": "প্রথম পাতা",
+  "nav.howItWorks": "এটি কীভাবে কাজ করে",
+  "nav.impact": "আমাদের প্রভাব",
+  "nav.foodSafety": "খাদ্য নিরাপত্তা",
+  "nav.answers": "সরাসরি উত্তর",
+  "nav.about": "আমাদের সম্পর্কে",
+  "nav.contact": "যোগাযোগ",
+  "nav.preview": "নমুনা",
+  "nav.login": "লগ ইন",
+  "nav.join": "অন্নপূর্ণায় যোগ দিন",
+
+  "home.eyebrow": "অতিরিক্ত খাদ্য · দায়িত্বশীল হস্তান্তর",
+  "home.title": "ভালো খাবারের একটি <em>গন্তব্য থাকা উচিত।</em>",
+  "home.lead": "অন্নপূর্ণা লিংক দাতা ও সম্প্রদায় সংগঠনের মধ্যে অতিরিক্ত খাদ্য সমন্বয় করে — অনুমোদিত স্বেচ্ছাসেবক, স্পষ্ট পরিচালনা নির্দেশনা এবং একটি নিশ্চিত বিতরণ রেকর্ড সহ।",
+  "home.donate": "অতিরিক্ত খাদ্য দান করুন",
+  "home.becomeHelper": "স্বেচ্ছাসেবক হোন",
+  "home.registerOrg": "আপনার সংগঠন নথিভুক্ত করুন",
+  "home.sampleWalkthrough": "একটি নমুনা হস্তান্তর দেখুন — অ্যাকাউন্ট লাগবে না",
+  "home.reviewNote": "অনুরোধ মানুষ পর্যালোচনা করেন। লঞ্চ অনুমোদন নথিভুক্ত না হওয়া পর্যন্ত খাদ্য কার্যক্রম বন্ধ থাকে।",
+  "home.rolesEyebrow": "তিনটি ভূমিকা, একটি অভিন্ন লক্ষ্য",
+  "home.rolesTitle": "আপনি যে <em>ভূমিকা নিতে পারেন</em> তা দিয়ে শুরু করুন।",
+  "home.rolesIntro": "প্রবেশ অনুরোধ করতে একটি ভূমিকা বেছে নিন। ভূমিকা বাছাই একটি পর্যালোচনা শুরু করে — এটি কোনো ব্যক্তি, সংগঠন বা দান অনুমোদন করে না।",
+  "home.closingEyebrow": "মানব পর্যালোচনা দিয়ে শুরু",
+  "home.closingTitle": "একটি সতর্ক হস্তান্তর পার্থক্য গড়তে পারে।",
+  "home.closingText": "অংশীদার প্রবেশের অনুরোধ করুন। মানুষ, নীতি ও স্থানীয় অনুমোদন প্রস্তুত না হওয়া পর্যন্ত প্রকৃত খাদ্য কার্যক্রম বন্ধ থাকবে।",
+  "home.startRequest": "প্রবেশ অনুরোধ শুরু করুন",
+  "home.contactSupport": "যোগাযোগ ও সহায়তা",
+
+  "language.coverageNote": "এই পৃষ্ঠার কিছু অংশ এখনও {language}-এ অনূদিত হয়নি। যা অনূদিত নয় তা ইংরেজিতে দেখানো হয়।",
+  "language.untranslatedBanner": "এই পৃষ্ঠাটি এখনও {language}-এ অনূদিত হয়নি। এটি ইংরেজিতে দেখানো হচ্ছে।",
+  "home.role.generator.title": "খাদ্য দাতা",
+  "home.role.generator.label": "রেস্তোরাঁ · হোটেল · ক্যাটারার",
+  "home.role.generator.text": "একটি স্পষ্ট অতিরিক্ত খাদ্য প্রস্তাব এবং তার প্রস্তুতি, সংরক্ষণ ও সংগ্রহ বিবরণ শেয়ার করুন।",
+  "home.role.generator.action": "দাতা প্রবেশের অনুরোধ করুন",
+  "home.role.receiver.title": "সম্প্রদায় সংগঠন",
+  "home.role.receiver.label": "গ্রহীতা · এনজিও · আশ্রয়কেন্দ্র",
+  "home.role.receiver.text": "আপনার প্রকৃত গ্রহণ ক্ষমতা অনুযায়ী প্রস্তাব পর্যালোচনা করুন এবং প্রতিটি হস্তান্তর এলে তা নিশ্চিত করুন।",
+  "home.role.receiver.action": "আপনার সংগঠন নথিভুক্ত করুন",
+  "home.role.helper.title": "বিতরণ স্বেচ্ছাসেবক",
+  "home.role.helper.label": "স্বেচ্ছাসেবক · অনুমোদিত চালক",
+  "home.role.helper.text": "স্পষ্ট হেফাজত ধাপ ও ভূমিকা-সীমিত বিবরণ সহ সংগ্রহ ও বিতরণে সহায়তা করুন।",
+  "home.role.helper.action": "স্বেচ্ছাসেবক প্রবেশের অনুরোধ করুন",
 } as const;
 
 export type MessageKey = keyof typeof EN;
 
-const MESSAGES: Record<Locale, Record<MessageKey, string>> = { or: OR, en: EN };
+const MESSAGES: Record<Locale, Record<MessageKey, string>> = { or: OR, en: EN, hi: HI, bn: BN };
 
 /**
  * Look up a message and substitute `{name}` placeholders.
@@ -129,9 +363,11 @@ export function translator(locale: Locale) {
  * that says it was answered "tomorrow" because a server ran in UTC is worse than no timestamp.
  * Odia uses the same digits as English here; the day and month names are what change.
  */
+const INTL_TAGS: Record<Locale, string> = { or: "or-IN", en: "en-IN", hi: "hi-IN", bn: "bn-IN" };
+
 export function formatDate(locale: Locale, value: string | Date | null): string {
   if (!value) return "—";
-  return new Intl.DateTimeFormat(locale === "or" ? "or-IN" : "en-IN", {
+  return new Intl.DateTimeFormat(INTL_TAGS[locale], {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Asia/Kolkata",
@@ -140,5 +376,5 @@ export function formatDate(locale: Locale, value: string | Date | null): string 
 
 /** The `lang` attribute for <html>, so a screen reader switches voice rather than mispronouncing. */
 export function htmlLang(locale: Locale): string {
-  return locale === "or" ? "or-IN" : "en-IN";
+  return INTL_TAGS[locale];
 }

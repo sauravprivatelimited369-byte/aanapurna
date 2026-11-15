@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { PublicLayout } from "@/components/public-shell";
 import { readPublishedContacts, readPublishedResponseWindow } from "@/lib/published-contacts";
 import { currentLocale } from "@/lib/locale-server";
-import { privacyNotice, responseWindowParagraph } from "@/domain/privacy-notice";
+import { noticeFor, responseWindowParagraph } from "@/domain/privacy-notice";
+import { LOCALE_NAMES, t } from "@/lib/i18n";
 
 export const metadata: Metadata = { title: "Privacy" };
 export const dynamic = "force-dynamic";
@@ -17,7 +18,10 @@ export const dynamic = "force-dynamic";
  */
 export default async function PrivacyPage() {
   const locale = await currentLocale();
-  const notice = privacyNotice[locale];
+  // Hindi and Bengali are offered by the switcher; this notice is not translated into them yet. The
+  // resolver says so rather than silently returning English, and the banner below prints the fact in
+  // the reader's own language — a page that looks translated and is not is worse than one that says.
+  const { notice, translated } = noticeFor(locale);
   const [{ entity, dataProtection }, responseWindow] = await Promise.all([
     readPublishedContacts(),
     readPublishedResponseWindow(),
@@ -31,6 +35,9 @@ export default async function PrivacyPage() {
           <strong>{notice.draftBannerStrong}</strong>{" "}
           {dataProtection ? notice.draftBannerWithContact : notice.draftBannerWithoutContact}
         </div>
+        {!translated && <div className="notice-banner" role="status">
+          {t(locale, "language.untranslatedBanner", { language: LOCALE_NAMES[locale] })}
+        </div>}
         {notice.sections.map((section) => (
           <section key={section.heading}>
             <h2>{section.heading}</h2>

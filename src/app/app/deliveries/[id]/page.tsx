@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { DeliveryActions } from "@/components/delivery-actions";
+import { TransitMap } from "@/components/transit-map";
 import { getDeliveryDetail } from "@/domain/service";
 import { getIdentity } from "@/lib/identity";
 
@@ -34,7 +35,14 @@ export default async function DeliveryDetailPage({ params }: PageProps) {
         {job.receiverName && <div className="data-row"><span className="data-main"><strong>Receiver</strong></span><span>{job.receiverName}{job.receiverCity ? ` · ${job.receiverCity}` : ""}</span></div>}
         {job.receiverAddress && <div className="data-row"><span className="data-main"><strong>Delivery address</strong></span><span>{job.receiverAddress}</span></div>}
         {job.receiverContactName && <div className="data-row"><span className="data-main"><strong>Receiving contact</strong></span><span>{job.receiverContactName}</span></div>}
-        <div className="data-row"><span className="data-main"><strong>Travel estimate</strong></span><span>{job.transit ? `About ${job.transit.distanceKm} km and ${job.transit.etaMinutes} min by road` : "Not available for this route"}</span></div>
+        <div className="data-row"><span className="data-main"><strong>Travel estimate</strong></span><span>{job.transit ? `About ${job.transit.distanceKm} km by road and ${job.transit.etaMinutes} min` : "Not available for this route"}</span></div>
+        {job.transitPoints && <div className="data-row data-row--map"><TransitMap
+          from={job.transitPoints.from ? { label: "Collection", ...job.transitPoints.from } : null}
+          to={job.transitPoints.to ? { label: "Receiving", ...job.transitPoints.to } : null}
+          distanceKm={job.transit?.distanceKm ?? null}
+          etaMinutes={job.transit?.etaMinutes ?? null}
+          source={job.transitPoints.source}
+        /></div>}
         <div className="data-row"><span className="data-main"><strong>Collection mode</strong></span><span>{job.collectionMode === "receiver_collection" ? "Receiver collecting its own food" : "Helper delivery"}</span></div>
         <div className="data-row"><span className="data-main"><strong>Collection recorded</strong></span><span>{date(job.collectedAt)}</span></div>
         <div className="data-row"><span className="data-main"><strong>Arrival reported</strong></span><span>{date(job.arrivedAt)}</span></div>
