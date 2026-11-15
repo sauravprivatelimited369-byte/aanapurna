@@ -18,7 +18,9 @@ export type ReadinessKey =
   | "on_call"
   | "penetration_test"
   | "email_delivery"
-  | "malware_scanner";
+  | "malware_scanner"
+  | "partner_insurance"
+  | "partner_agreement";
 
 export type ReadinessItem = {
   key: ReadinessKey;
@@ -47,7 +49,10 @@ export type ReadinessInput = {
    * Booleans from `app_launch_readiness()`. When present they are authoritative for the five owner
    * declarations, which lets a public endpoint report readiness without reading the values.
    */
-  declared?: Partial<Record<"legal_entity" | "insurance" | "data_protection_contact" | "on_call" | "penetration_test", boolean>>;
+  declared?: Partial<Record<
+    "legal_entity" | "insurance" | "data_protection_contact" | "on_call" | "penetration_test" | "partner_insurance" | "partner_agreement",
+    boolean
+  >>;
   attestations: AttestationRecord[];
   onCallShifts: OnCallShift[];
   email: { configured: boolean; testSink: boolean; localOnly: boolean; missingSettings: string[] };
@@ -80,6 +85,10 @@ export const OWNER_ACTIONS: Record<ReadinessKey, string> = {
     "Set SMTP_URL (or SMTP_HOST/PORT/USER/PASS) to a real provider. A capture sink or a loopback mailbox does not count.",
   malware_scanner:
     "Set FILE_SCAN_MODE=clamav and CLAMAV_HOST/CLAMAV_PORT to a reachable clamd. Uploads stay blocked until then, by design.",
+  partner_insurance:
+    "Every verified partner records its own policy reference and expiry from Its organisation page. Until each one is current, the answer to \"who is covered if someone is harmed\" is nobody.",
+  partner_agreement:
+    "A named member of every verified partner accepts the current responsibility agreement. When the agreement text changes, each partner is asked again rather than silently grandfathered.",
 };
 
 export function evaluateReadiness(input: ReadinessInput): { items: ReadinessItem[]; complete: boolean; missing: ReadinessKey[] } {
@@ -173,6 +182,26 @@ export function evaluateReadiness(input: ReadinessInput): { items: ReadinessItem
         : "No independent test is recorded within the last twelve months.",
       ownerAction: OWNER_ACTIONS.penetration_test,
       expiresAt: pentest?.expiresAt ?? null,
+    },
+    {
+      key: "partner_insurance",
+      label: "Partner insurance declared",
+      satisfied: input.declared?.partner_insurance ?? false,
+      detail: input.declared?.partner_insurance
+        ? "Every verified partner holds a current insurance declaration."
+        : "At least one verified partner has no current insurance declaration on record, so the answer to \"who is covered\" is incomplete.",
+      ownerAction: OWNER_ACTIONS.partner_insurance,
+      expiresAt: null,
+    },
+    {
+      key: "partner_agreement",
+      label: "Partner agreement accepted",
+      satisfied: input.declared?.partner_agreement ?? false,
+      detail: input.declared?.partner_agreement
+        ? "Every verified partner has accepted the current responsibility agreement."
+        : "At least one verified partner has not accepted the current agreement version.",
+      ownerAction: OWNER_ACTIONS.partner_agreement,
+      expiresAt: null,
     },
     {
       key: "email_delivery",

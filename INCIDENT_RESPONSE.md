@@ -17,6 +17,10 @@ operations for the affected scope until a human says otherwise.
 
 ## Food safety incident
 
+0. **If a person may have been harmed, say so in the incident.** The harm flag requires a
+   description and escalates to operations, the safety officer and security immediately. A recall
+   below is right, but it is not an answer to somebody who is unwell: phone the receiving
+   organisation, and treat the medical question as a medical one.
 1. **Stop the food.** Recall the donation from the operations console. That records the reason, the
    author, the previous status and every receipt already issued, and notifies the Generator, the
    Receiver and any assigned Helper.
@@ -25,8 +29,9 @@ operations for the affected scope until a human says otherwise.
 4. **Preserve** the listing, custody events and receipts. They are append-only; do not attempt to
    correct them.
 5. **Escalate** to the responsible food-safety professional and to the owner.
-6. **Close** the incident only with a resolution note; a closure is not a finding that food was safe.
-   Release of a hold is a separate authorised decision.
+6. **Close** the incident only with a resolution note **and a recorded corrective action** — what
+   changed so the same failure cannot recur. The database refuses a closure without one. A closure is
+   not a finding that food was safe. Release of a hold is a separate authorised decision.
 7. **Review** afterwards: what the declaration said, what the Helper observed, what the Receiver
    found, and which check should have caught it.
 

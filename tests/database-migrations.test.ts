@@ -23,6 +23,7 @@ const migrationFiles = [
   "20261115193000_readiness_escalation.sql",
   "20261115203000_joka_directory.sql",
   "20261115213000_directory_phone_consent.sql",
+  "20261115230000_food_safety_attestation_and_recovery.sql",
 ];
 
 let database: PGlite;
@@ -116,11 +117,14 @@ describe("PostgreSQL migration and authorization contracts", () => {
             'app_consume_delivery_code','app_mark_user_verified','app_find_receiver_candidates',
             'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
             'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
-            'app_guard_user_profile_status'
+            'app_guard_user_profile_status',
+            'app_notify_platform_roles','app_current_agreement_version'
           )) AS required_functions
     `);
-    expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(23);
-    expect(result.rows[0]?.required_functions).toBe(10);
+    // Migration 20 adds two forced-RLS tables (partner agreements, recovery intake) and two required
+    // functions; both floors rise so removing either fails the suite rather than passing silently.
+    expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(25);
+    expect(result.rows[0]?.required_functions).toBe(12);
   });
 
   it("adds recall records as append-only, policy-protected evidence with one open recall per donation", async () => {
@@ -793,5 +797,257 @@ describe("Transit limits and receiver self-collection", () => {
     `);
     expect(definition.rows[0]?.prosrc).toContain("receiver_collection");
     expect(definition.rows[0]?.prosrc).toContain("app_has_org_role");
+  });
+
+  it("refuses a partial arrival inspection and records a complete one", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('inspect-gen', 'Generator', 'inspect-gen@example.test', true),
+        ('inspect-rec', 'Receiver', 'inspect-rec@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('inspect-gen', 'active'), ('inspect-rec', 'active');
+      INSERT INTO public.organizations (id, name, type, status, operating_address, city_or_district, contact_name, contact_email, created_by)
+      VALUES ('00000000-0000-4000-8000-0000000000b1', 'Inspect Gen', 'generator', 'verified', 'Address', 'Cuttack', 'Contact', 'g@example.test', 'inspect-gen'),
+             ('00000000-0000-4000-8000-0000000000b2', 'Inspect Rec', 'receiver', 'verified', 'Address', 'Cuttack', 'Contact', 'r@example.test', 'inspect-rec');
+      INSERT INTO public.donations (id, generator_organization_id, pickup_city, created_by, name, category, food_type,
+        quantity, unit, prepared_at, best_before_at, pickup_earliest_at, pickup_latest_at, storage_instructions, policy_version)
+      VALUES ('00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b1', 'Cuttack', 'inspect-gen',
+        'Meals', 'cooked', 'vegetarian', 10, 'servings', now() - interval '1 hour', now() + interval '6 hours',
+        now() - interval '10 minutes', now() + interval '4 hours', 'Keep hot', '0.1.0');
+      INSERT INTO public.donation_offers (id, donation_id, receiver_organization_id, status, expires_at)
+      VALUES ('00000000-0000-4000-8000-0000000000d1', '00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000b2', 'accepted', now() + interval '1 hour');
+      INSERT INTO public.delivery_jobs (id, donation_id, offer_id, generator_organization_id, receiver_organization_id, status, collected_at)
+      VALUES ('00000000-0000-4000-8000-0000000000e1', '00000000-0000-4000-8000-0000000000c1', '00000000-0000-4000-8000-0000000000d1',
+        '00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000b2', 'collected', now() - interval '5 minutes');
+      ALTER TABLE public.delivery_jobs DISABLE TRIGGER delivery_arrival_inspection_guard;
+      UPDATE public.delivery_jobs SET arrived_at = now() - interval '2 minutes', arrival_reported_by = 'inspect-rec'
+        WHERE id = '00000000-0000-4000-8000-0000000000e1';
+      ALTER TABLE public.delivery_jobs ENABLE TRIGGER delivery_arrival_inspection_guard;
+    `);
+
+    // The trigger is the outer guard: a caller who is not this delivery's receiving organisation is
+    // refused before the shape of what they wrote is even considered. That ordering is deliberate -
+    // the rejection says "not yours", not "your data looks odd".
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/only the receiving organisation may record inspection/);
+
+    // Behind it, the CHECK constraints are what stop a partial or impossible inspection existing at
+    // all, even if the trigger were dropped by a future migration. Exercise them directly.
+    await database.exec(`ALTER TABLE public.delivery_jobs DISABLE TRIGGER delivery_arrival_inspection_guard;`);
+
+    // One check alone is a fragment of an inspection, not an inspection.
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/delivery_inspection_checks_together/);
+
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true, inspection_packaging_intact = true,
+         inspection_label_matched = true, inspection_within_window = true, inspection_temperature_c = 900
+       WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/delivery_inspection_temperature_range/);
+
+    // A photo fingerprint has to be a fingerprint.
+    await expect(database.query(
+      `UPDATE public.delivery_jobs SET inspection_photo_sha256 = 'not-a-hash' WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    )).rejects.toThrow(/delivery_inspection_photo_hash_format/);
+
+    // A real handover: frozen, chilled or hot-holding readings all fit inside the sanity bound.
+    await database.query(
+      `UPDATE public.delivery_jobs SET inspection_seal_intact = true, inspection_packaging_intact = true,
+         inspection_label_matched = true, inspection_within_window = true, inspection_temperature_c = 63.5,
+         inspection_photo_sha256 = $1
+       WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+      ["a".repeat(64)],
+    );
+    const stored = await database.query<{ temperature: string; seal: boolean }>(
+      `SELECT inspection_temperature_c::text AS temperature, inspection_seal_intact AS seal
+       FROM public.delivery_jobs WHERE id = '00000000-0000-4000-8000-0000000000e1'`,
+    );
+    expect(stored.rows[0]).toEqual({ temperature: "63.50", seal: true });
+    await database.exec(`ALTER TABLE public.delivery_jobs ENABLE TRIGGER delivery_arrival_inspection_guard;`);
+  });
+
+  it("requires harm to be described and a closure to say what changed", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES ('harm-user', 'Reporter', 'harm@example.test', true);
+      INSERT INTO public.donations (id, generator_organization_id, pickup_city, created_by, name, category, food_type,
+        quantity, unit, prepared_at, best_before_at, pickup_earliest_at, pickup_latest_at, storage_instructions, policy_version)
+      VALUES ('00000000-0000-4000-8000-0000000000c2', '00000000-0000-4000-8000-0000000000b1', 'Cuttack', 'harm-user',
+        'Meals 2', 'cooked', 'vegetarian', 10, 'servings', now() - interval '1 hour', now() + interval '6 hours',
+        now() - interval '10 minutes', now() + interval '4 hours', 'Keep hot', '0.1.0');
+    `);
+    await expect(database.query(`
+      INSERT INTO public.food_safety_incidents (donation_id, reported_by, incident_type, severity, description, harm_reported)
+      VALUES ('00000000-0000-4000-8000-0000000000c2', 'harm-user', 'other', 'high', 'Something happened', true)
+    `)).rejects.toThrow(/food_safety_incidents_harm_detail_check/);
+
+    await database.exec(`
+      INSERT INTO public.food_safety_incidents (id, donation_id, reported_by, incident_type, severity, description, harm_reported, harm_details)
+      VALUES ('00000000-0000-4000-8000-0000000000f2', '00000000-0000-4000-8000-0000000000c2', 'harm-user', 'other', 'high',
+        'Reported by a receiver', true, 'Two people reported stomach pain');
+    `);
+    // "We looked into it" is not a closure. Something has to be different afterwards.
+    await expect(database.query(`
+      UPDATE public.food_safety_incidents
+      SET status = 'closed', resolution = 'Reviewed and nothing further found', closed_by = 'harm-user', closed_at = now()
+      WHERE id = '00000000-0000-4000-8000-0000000000f2'
+    `)).rejects.toThrow(/food_safety_incidents_closure_corrective/);
+
+    await database.query(`
+      UPDATE public.food_safety_incidents
+      SET status = 'closed', resolution = 'Reviewed in full', closed_by = 'harm-user', closed_at = now(),
+          corrective_action = 'Cold-holding requirement added to the policy and re-briefed to every kitchen'
+      WHERE id = '00000000-0000-4000-8000-0000000000f2'
+    `);
+  });
+
+  it("keeps insurance declarations paired and agreements immutable", async () => {
+    await expect(database.query(
+      `UPDATE public.organizations SET insurance_policy_reference = 'POL-1'
+       WHERE id = '00000000-0000-4000-8000-0000000000b1'`,
+    )).rejects.toThrow(/organizations_insurance_paired/);
+
+    await expect(database.query(
+      `UPDATE public.organizations SET insurance_policy_reference = 'POL-1', insurance_expires_on = current_date - 1
+       WHERE id = '00000000-0000-4000-8000-0000000000b1'`,
+    )).rejects.toThrow(/organizations_insurance_not_backdated/);
+
+    await database.query(
+      `UPDATE public.organizations SET insurance_policy_reference = 'POL-1', insurance_expires_on = current_date + 90
+       WHERE id = '00000000-0000-4000-8000-0000000000b1'`,
+    );
+
+    await database.query(
+      `INSERT INTO public.partner_agreement_acceptances (organization_id, version, accepted_by, content_sha256)
+       VALUES ('00000000-0000-4000-8000-0000000000b1', '2026-11-15', 'inspect-gen', $1)`,
+      ["b".repeat(64)],
+    );
+    await expect(database.query(
+      `INSERT INTO public.partner_agreement_acceptances (organization_id, version, accepted_by, content_sha256)
+       VALUES ('00000000-0000-4000-8000-0000000000b1', '2026-11-15', 'inspect-gen', $1)`,
+      ["c".repeat(64)],
+    )).rejects.toThrow(/partner_agreement_org_version_uq/);
+
+    // An acceptance is evidence: no grant to rewrite it exists for the runtime role.
+    const grants = await database.query<{ can_update: boolean; can_delete: boolean }>(`
+      SELECT has_table_privilege('annapurna_app', 'public.partner_agreement_acceptances', 'UPDATE') AS can_update,
+             has_table_privilege('annapurna_app', 'public.partner_agreement_acceptances', 'DELETE') AS can_delete
+    `);
+    expect(grants.rows[0]).toEqual({ can_update: false, can_delete: false });
+  });
+
+  it("reports partner coverage and the agreement as unmet until partners hold them", async () => {
+    const empty = await database.query<Record<string, boolean>>("SELECT * FROM public.app_launch_readiness()");
+    expect(Object.keys(empty.rows[0] ?? {}).sort()).toEqual([
+      "data_protection_contact", "insurance", "legal_entity", "on_call",
+      "partner_agreement", "partner_insurance", "penetration_test",
+    ]);
+    // Verified partners exist in this fixture and at least one has not accepted the agreement, so
+    // the gate must not claim coverage it cannot show.
+    expect(empty.rows[0]?.partner_agreement).toBe(false);
+
+    const version = await database.query<{ app_current_agreement_version: string }>(
+      "SELECT public.app_current_agreement_version()",
+    );
+    expect(version.rows[0]?.app_current_agreement_version).toBe("2026-11-15");
+
+    // A full agreement + insurance declaration on every verified partner closes those two gates.
+    await database.query(`
+      UPDATE public.organizations
+      SET agreement_version = public.app_current_agreement_version(), agreement_accepted_at = now()
+      WHERE status::text = 'verified'
+    `);
+    const covered = await database.query<{ partner_agreement: boolean; partner_insurance: boolean }>(
+      "SELECT partner_agreement, partner_insurance FROM public.app_launch_readiness()",
+    );
+    expect(covered.rows[0]?.partner_agreement).toBe(true);
+    // Insurance is only on one of the verified organisations, so cover is still incomplete.
+    expect(covered.rows[0]?.partner_insurance).toBe(false);
+  });
+
+  it("lets any signed-in person reach the roles accountable for harm, and nobody else", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('safety-lead', 'Safety lead', 'safety@example.test', true),
+        ('ops-lead', 'Ops lead', 'ops@example.test', true),
+        ('outsider', 'Outsider', 'outsider@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('safety-lead', 'active'), ('ops-lead', 'active'), ('outsider', 'active');
+      INSERT INTO public.platform_roles (user_id, role, reason) VALUES
+        ('safety-lead', 'safety_officer', 'Fixture: named safety officer for an escalation test'),
+        ('ops-lead', 'operations_admin', 'Fixture: named operations lead for an escalation test');
+    `);
+
+    // Earlier fixtures in this file appoint their own administrators, so the assertion is that every
+    // active holder of the named roles received it - counted, not assumed to be exactly two.
+    const expected = await database.query<{ recipients: number }>(`
+      SELECT count(DISTINCT grant_row.user_id)::int AS recipients
+      FROM public.platform_roles grant_row
+      JOIN public.user_profiles profile ON profile.user_id = grant_row.user_id
+      WHERE grant_row.role::text IN ('operations_admin','safety_officer')
+        AND profile.account_status::text = 'active'
+    `);
+    const delivered = await withRole("annapurna_app", "outsider", async () =>
+      database.query<{ delivered: number }>(`
+        SELECT public.app_notify_platform_roles(
+          ARRAY['operations_admin','safety_officer'], 'safety.harm_reported',
+          'Suspected harm to a person reported', 'Incident needs attention', '/admin#incidents'
+        ) AS delivered
+      `));
+    expect(Number(delivered.rows[0]?.delivered)).toBe(Number(expected.rows[0]?.recipients));
+    expect(Number(delivered.rows[0]?.delivered)).toBeGreaterThan(0);
+
+    // A role name outside the known set is refused rather than silently ignored.
+    await expect(withRole("annapurna_app", "outsider", async () =>
+      database.query(`SELECT public.app_notify_platform_roles(ARRAY['superuser'], 'x', 'x', 'x', '/admin')`),
+    )).rejects.toThrow(/unknown platform role/);
+
+    // An anonymous caller cannot inject a notification with no account behind it.
+    await expect(withRole("annapurna_app", null, async () =>
+      database.query(`SELECT public.app_notify_platform_roles(ARRAY['safety_officer'], 'x', 'Title', 'Body', '/admin')`),
+    )).rejects.toThrow(/not authorized/);
+  });
+
+  it("accepts a locked-out request from nobody, and shows it only to staff", async () => {
+    // The intake is unauthenticated by necessity. What protects it is that the insert needs a domain
+    // transition, the filer can read nothing back, and the queue is visible only to platform roles.
+    const inserted = await withRole("annapurna_app", null, async () => {
+      await database.query("SELECT set_config('app.domain_transition', 'true', true)");
+      return database.query(`
+        INSERT INTO public.account_recovery_requests (reference, email, detail, status)
+        VALUES ('AL-REC-2026-FIXTURE01', 'locked-out@example.test', 'Changed email provider and cannot sign in', 'submitted')
+      `);
+    });
+    expect(inserted.rowCount).toBe(1);
+
+    const anonymousRead = await withRole("annapurna_app", "00000000-0000-0000-0000-000000000000", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.account_recovery_requests"));
+    expect(anonymousRead.rows[0]?.count).toBe(0);
+
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('recovery-staff', 'Ops', 'recovery-staff@example.test', true),
+        ('recovery-plain', 'Plain user', 'recovery-plain@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('recovery-staff', 'active'), ('recovery-plain', 'active');
+      INSERT INTO public.platform_roles (user_id, role, reason)
+      VALUES ('recovery-staff', 'operations_admin', 'Fixture: queue reader');
+    `);
+
+    const staffRead = await withRole("annapurna_app", "recovery-staff", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.account_recovery_requests"));
+    expect(Number(staffRead.rows[0]?.count)).toBeGreaterThan(0);
+
+    const plainRead = await withRole("annapurna_app", "recovery-plain", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.account_recovery_requests"));
+    expect(plainRead.rows[0]?.count).toBe(0);
+
+    // A resolution cannot exist without its author, its time and the status that implies them.
+    await expect(database.query(`
+      UPDATE public.account_recovery_requests
+      SET status = 'resolved', resolution = 'Link issued after an identity check by phone'
+      WHERE reference = 'AL-REC-2026-FIXTURE01'
+    `)).rejects.toThrow(/account_recovery_resolution_fields_check/);
   });
 });

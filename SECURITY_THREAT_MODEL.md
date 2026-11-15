@@ -43,6 +43,11 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
 | 18 | Notification fan-out used to spam or address arbitrary users | `app_notify_area_helpers` selects recipients itself (active, approved, same service area, capped) and checks the caller is a party to the donation or platform staff; no user list crosses the wire | `drizzle/20261115090000_*.sql` |
 | 19 | Escalation sweep driven by an ordinary user | A signed-in caller must hold `operations_admin` or `safety_officer`; a background caller is authorised only by the EXECUTE grant on the worker role; each job is reported once | same migration, `src/worker/escalation.ts` |
 | 20 | Releasing a delivery to hijack or delay it | Only `operations_admin`/`safety_officer`; only before collection; reason required; custody event, audit record and notifications written | `releaseDeliveryAssignment`, `POST /api/jobs/[id]/release` |
+| 21 | Writing an arrival inspection that did not happen | A trigger permits the inspection columns only once, only by the receiving organisation, only after arrival, only in a domain transition; a CHECK refuses a partial checklist; the temperature is bounded so a typo cannot be stored as a reading | migration 20, `app_guard_delivery_arrival_inspection` |
+| 22 | Closing an incident to bury a harm or a recurring failure | Harm cannot be recorded without a description; closure requires a corrective action of 20+ characters; harm flagged at report time cannot be dropped at closure; both rules exist as CHECK constraints and as service checks | migration 20, `resolveSafetyIncident` |
+| 23 | Accepting a partner agreement that was secretly edited | Acceptance stores the SHA-256 of the exact text rendered; the version the browser sends must equal the server's current version, so a stale tab cannot accept superseded wording; there is no UPDATE or DELETE grant on an acceptance | `acceptPartnerAgreement`, `partner_agreement_acceptances` |
+| 24 | Using the locked-out recovery form to enumerate accounts or flood an operator | Unauthenticated by necessity, but rate limited per HMAC'd address and per HMAC'd email, identical response whether or not the account exists, issues no token, resets nothing, and the queue is readable only by platform roles | `POST /api/account/recovery-request`, migration 20 |
+| 25 | Another role spoofing a harm escalation to staff | The fan-out runs inside `app_notify_platform_roles`: the caller must be signed in, may name only the four known roles (never addresses), and suspended accounts are excluded | migration 20 |
 
 ## Residual risks (accepted, documented, not fixed)
 
@@ -52,21 +57,25 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
 2. **RLS is forced.** Every policy-bearing table has `FORCE ROW LEVEL SECURITY`, so the owner is
    subject to its own policies too. The owner (`postgres`) holds `BYPASSRLS` on the hosted project,
    which is what lets migrations and SECURITY DEFINER functions continue to work.
-3. **The second factor is required for platform roles only.** `requireIdentity` returns
+3. **Insurance and the partner agreement are declared, not verified.** The platform stores what an
+   organisation says its cover is and what a named member accepted; it cannot check with an insurer
+   or enforce a contract. Use of the words "covered" or "agreed" anywhere in the product refers to
+   the stored declaration and nothing more.
+4. **The second factor is required for platform roles only.** `requireIdentity` returns
    `403 TWO_FACTOR_ENROLMENT_REQUIRED` until an administrator, safety officer, support agent or
    security administrator has confirmed TOTP, and the enrolment flow offers backup codes. A partner
    account (Generator, Receiver, Helper) is protected by its password, the session controls and the
    audit trail, not by a second factor.
-4. **Account erasure is impossible** while audit and custody events are append-only. Personal data
+5. **Account erasure is impossible** while audit and custody events are append-only. Personal data
    requires an anonymisation path before real users exist.
-4a. **Private document scanning has no scanner to talk to.** The client is real and fails closed:
+6. **Private document scanning has no scanner to talk to.** The client is real and fails closed:
    production refuses the upload unless a clamd endpoint answers. Until one exists, partners cannot
    upload evidence and no unscanned file is ever served.
-5. **Capture SMTP.** The hosted deployment currently reports `test_sink`: messages are accepted and
+7. **Capture SMTP.** The hosted deployment currently reports `test_sink`: messages are accepted and
    never delivered. Self-service reset therefore does not work; an operator can issue the same
    single-use reset link from the operations console and hand it over.
-6. **No independent penetration test** and no formal threat-model review by an outside party.
-7. **Backups are scripted but a restore has not been performed.** The verification half is now
+8. **No independent penetration test** and no formal threat-model review by an outside party.
+9. **Backups are scripted but a restore has not been performed.** The verification half is now
    built and baselined (`ops/RESTORE_DRILL.md`); the restore itself needs a Pro-plan branch or one
    owner-run `pg_dump`/`pg_restore`.
 

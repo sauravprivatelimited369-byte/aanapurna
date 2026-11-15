@@ -1,6 +1,6 @@
 # Database implementation and limits
 
-PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and twenty ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
+PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and twenty-one ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
 `20261114120000_revoke_public_api_privileges.sql`, removes every table, sequence
 and function privilege held by Supabase's `anon` and `authenticated` PostgREST
 roles and resets the matching default privileges, so a future object cannot
@@ -27,6 +27,22 @@ granting the application role sight of `public."user"`. Migration 18,
 lapsing and announces a rota with nobody on it for the next twelve hours — once per lapse window,
 and only when somebody actually received the notice, so an unstaffed deployment is reported rather
 than quietly marked as warned.
+
+Migration 20, `20261115230000_food_safety_attestation_and_recovery.sql`, adds the record behind four
+of the questions a Receiver asks. The arrival inspection becomes structure rather than prose: five
+columns on `delivery_jobs` (seal, packaging, label, window, temperature, plus a photo fingerprint),
+all nullable together or present together, guarded by the existing inspection trigger now extended to
+watch them and by three CHECK constraints. `food_safety_incidents` gains `harm_reported`,
+`harm_details`, `corrective_action` and its owner, with a CHECK that harm cannot be recorded without a
+description and a closure cannot exist without a correction. `organizations` gains an insurance
+declaration and an agreement pointer, both paired and non-backdatable. Two new tables follow the
+established pattern — `FORCE ROW LEVEL SECURITY`, no DELETE grant, no policy for the anonymous party —
+`partner_agreement_acceptances` (immutable evidence, unique per organisation and version) and
+`account_recovery_requests` (an unauthenticated intake readable only by platform roles).
+`app_notify_platform_roles` fans a harm notification out to named role holders without letting the
+caller address a person, `app_current_agreement_version` publishes the agreement version, and
+`app_launch_readiness()` grows from five booleans to seven so partner cover and acceptance are part of
+the gate rather than a paragraph.
 
 ## Existing model
 

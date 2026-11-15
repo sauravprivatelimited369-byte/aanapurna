@@ -7,6 +7,7 @@ const primaryLinks = [
   { href: "/how-it-works", label: "How it works" },
   { href: "/#impact", label: "Our impact" },
   { href: "/food-safety", label: "Food safety" },
+  { href: "/answers", label: "Straight answers" },
   { href: "/about", label: "About us" },
   { href: "/contact", label: "Contact" },
 ];

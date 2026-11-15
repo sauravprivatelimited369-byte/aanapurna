@@ -317,6 +317,26 @@ To run the web server directly on the host, provide local PostgreSQL URLs for `D
 
 `/near-iim-calcutta` displays Halla Bowl's current public restaurant-directory record for Joka, Kolkata. It reads one record from IndiaRestros, the keyless restaurant API listed in [`public-apis/public-apis`](https://github.com/public-apis/public-apis). That repository catalogs APIs; it does not provide API keys. The page links to the provider record and OpenStreetMap search and labels the restaurant as **not an Annapurna Link partner**. It does not create an organisation, claim consent, show an offer, or send outreach. The provider's data-use terms should be confirmed before this is expanded beyond the single attributed listing.
 
+## The eight trust questions
+
+`/answers` is the public page that answers, in plain language, the questions a receiver or reviewer
+actually asks: whether the food is clean, what happens when volunteers are unavailable, how distance
+is handled, how the application resists takeover, who answers for harm, how the database is managed,
+whether the APIs can be reached by others, and what happens when someone forgets a password. Each
+answer separates **what the code enforces**, **what it cannot do**, and **which gate is still open**.
+
+`TRUST_AND_SAFETY_QA.md` is the long-form engineering version and names its own gaps. Migration 20
+turned four of those answers from prose into records:
+
+| Question | Was | Is now |
+|---|---|---|
+| Is the food clean? | a single free-text inspection note | four structured arrival checks plus a temperature (required when the listing declared one), written once by a trigger only the receiver can satisfy, with a CHECK refusing a partial inspection |
+| Who answers for harm? | prose in a markdown file | a versioned partner agreement accepted by a named member with the SHA-256 of the text stored, plus a per-partner insurance declaration whose expiry re-opens the launch gate by itself |
+| What if someone is harmed? | an incident row | harm cannot be recorded without a description, escalates to operations, safety and security immediately, and an incident cannot be closed without a recorded corrective action |
+| Someone forgot their password? | email reset or nothing | an unauthenticated, rate-limited request that lands in an operations queue a named staff member answers with an audited resolution |
+
+None of it inspects food. Every new field is a human declaration with a name and a time against it.
+
 ## Safety and production status
 
 This repository is not approved for a real-world pilot or production use. Real food operations require a human-approved policy, partner verification and local legal/privacy/security review. Email credentials, domain/TLS, private-storage scanner, backup/restore and real PostgreSQL integration are additional deployment gates. See [`LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md), [`BUILD_STATUS.md`](BUILD_STATUS.md), [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) and [`DECISIONS/ADR-0001-public-restaurant-discovery.md`](DECISIONS/ADR-0001-public-restaurant-discovery.md).

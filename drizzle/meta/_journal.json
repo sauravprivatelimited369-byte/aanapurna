@@ -141,6 +141,13 @@
       "when": 1794845400000,
       "tag": "20261115213000_directory_phone_consent",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794848400000,
+      "tag": "20261115230000_food_safety_attestation_and_recovery",
+      "breakpoints": true
     }
   ]
 }

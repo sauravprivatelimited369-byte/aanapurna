@@ -124,7 +124,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, new Date(pickupEarliestAt).getTime() - Date.now()) + 30));
   await service.confirmPickup(winner, jobId, { condition: "Test condition" });
   await assert.rejects(service.getReceiverDeliveryCode(receiver, jobId));
-  await assert.rejects(service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Test checks" }));
+  await assert.rejects(service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Test checks", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true }));
   await assert.rejects(service.confirmDeliveryArrival(loser, jobId));
   await assert.rejects(service.confirmDeliveryArrival(generator, jobId));
   const { sql } = await import("drizzle-orm");
@@ -141,11 +141,11 @@ try {
     await tx.execute(sql`select * from app_consume_delivery_code(${jobId}::uuid, ${"0".repeat(64)})`);
   }));
   await assert.rejects(service.getReceiverDeliveryCode(receiver, jobId));
-  await assert.rejects(service.confirmDeliveryInspection(receiver2, jobId, { acceptanceConfirmed: true, notes: "Test checks" }));
-  await assert.rejects(service.confirmDeliveryInspection(winner, jobId, { acceptanceConfirmed: true, notes: "Test checks" }));
-  await service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Fictional acceptance checks completed" });
-  await service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Fictional acceptance checks completed" }); // idempotent retry
-  await assert.rejects(service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Changed observations" }));
+  await assert.rejects(service.confirmDeliveryInspection(receiver2, jobId, { acceptanceConfirmed: true, notes: "Test checks", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true }));
+  await assert.rejects(service.confirmDeliveryInspection(winner, jobId, { acceptanceConfirmed: true, notes: "Test checks", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true }));
+  await service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Fictional acceptance checks completed", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true });
+  await service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Fictional acceptance checks completed", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true }); // idempotent retry
+  await assert.rejects(service.confirmDeliveryInspection(receiver, jobId, { acceptanceConfirmed: true, notes: "Changed observations", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true }));
   await assert.rejects(service.getReceiverDeliveryCode(generator, jobId));
   await assert.rejects(service.getReceiverDeliveryCode(winner, jobId));
   await assert.rejects(service.getReceiverDeliveryCode(outsider, jobId));
@@ -204,7 +204,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, new Date(second.earliest).getTime() - Date.now()) + 30));
   await service.confirmPickup(winner, second.id, { condition: "Test condition" });
   await service.confirmDeliveryArrival(winner, second.id);
-  await service.confirmDeliveryInspection(receiver, second.id, { acceptanceConfirmed: true, notes: "Test checks completed" });
+  await service.confirmDeliveryInspection(receiver, second.id, { acceptanceConfirmed: true, notes: "Test checks completed", sealIntact: true, packagingIntact: true, labelMatched: true, withinWindow: true });
   const secondCode = (await service.getReceiverDeliveryCode(receiver, second.id)).code;
   const wrongSecond = secondCode === "000000" ? "000001" : "000000";
   for (let i = 1; i <= 5; i++) {
@@ -221,7 +221,7 @@ try {
   assert.equal(secondReceipts.rows[0]!.count, 0);
   phase = "incident hold blocks dispatch";
   const third = await createJob();
-  await service.reportDeliveryIncident(receiver, third.id, { incidentType: "quality_concern", severity: "high", description: "Fictional test incident" });
+  await service.reportDeliveryIncident(receiver, third.id, { incidentType: "quality_concern", severity: "high", description: "Fictional test incident", harmReported: false });
   await assert.rejects(service.claimDelivery(winner, third.id));
   const held = await admin.query<{ donation_status: string; job_status: string }>("SELECT d.status::text donation_status, j.status::text job_status FROM public.donations d JOIN public.delivery_jobs j ON j.donation_id=d.id WHERE j.id=$1", [third.id]);
   assert.deepEqual(held.rows[0], { donation_status: "on_hold", job_status: "on_hold" });

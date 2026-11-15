@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -223,6 +224,14 @@ export const organizations = pgTable(
     receivingCapacity: numeric("receiving_capacity", { precision: 12, scale: 3 }),
     capacityUnit: text("capacity_unit"),
     foodCapabilities: text("food_capabilities").array().notNull().default([]),
+    // Evidence a human reviewed before the organisation was verified. These are declarations with a
+    // date and a reference, not certificates the platform issued, and they expire on their own.
+    insurancePolicyReference: text("insurance_policy_reference"),
+    insuranceExpiresOn: date("insurance_expires_on", { mode: "string" }),
+    // The agreement version this organisation accepted. Bumping the published agreement makes every
+    // previous acceptance visibly stale instead of silently grandfathered.
+    agreementVersion: text("agreement_version"),
+    agreementAcceptedAt: instant("agreement_accepted_at"),
     createdBy: text("created_by").notNull().references(() => user.id),
     reviewedBy: text("reviewed_by").references(() => user.id),
     reviewReason: text("review_reason"),
@@ -348,6 +357,15 @@ export const deliveryJobs = pgTable(
     inspectionConfirmedAt: instant("inspection_confirmed_at"),
     inspectionConfirmedBy: text("inspection_confirmed_by").references(() => user.id),
     inspectionNotes: text("inspection_notes"),
+    // The structured acceptance checks a Receiver performs on arrival. Kept separate from the free
+    // text so that "was a temperature read and recorded" is a fact the database can answer, not a
+    // sentence somebody wrote. Each column is nullable for deliveries that predate the checklist.
+    inspectionTemperatureC: numeric("inspection_temperature_c", { precision: 5, scale: 2 }),
+    inspectionSealIntact: boolean("inspection_seal_intact"),
+    inspectionPackagingIntact: boolean("inspection_packaging_intact"),
+    inspectionLabelMatched: boolean("inspection_label_matched"),
+    inspectionWithinWindow: boolean("inspection_within_window"),
+    inspectionPhotoSha256: text("inspection_photo_sha256"),
     deliveredAt: instant("delivered_at"),
     collectionCondition: text("collection_condition"),
     deliveryCondition: text("delivery_condition"),
@@ -584,6 +602,13 @@ export const safetyIncidents = pgTable(
     status: text("status").notNull().default("open"),
     holdApplied: boolean("hold_applied").notNull().default(false),
     resolution: text("resolution"),
+    // Harm assessment. "Was anyone made ill, and did they need care?" is the first question after a
+    // recall, and the answer has to be recorded by a person with a name and a time, not inferred.
+    harmReported: boolean("harm_reported").notNull().default(false),
+    harmDetails: text("harm_details"),
+    // The repair, as opposed to the closure: what changed so that the same failure cannot recur.
+    correctiveAction: text("corrective_action"),
+    correctiveActionOwner: text("corrective_action_owner").references(() => user.id),
     closedBy: text("closed_by").references(() => user.id),
     closedAt: instant("closed_at"),
     createdAt: instant("created_at").notNull().defaultNow(),
@@ -667,3 +692,57 @@ export const policyVersions = pgTable("policy_versions", {
   effectiveFrom: instant("effective_from"),
   createdAt: instant("created_at").notNull().defaultNow(),
 });
+
+/**
+ * The written partner agreement, versioned and accepted in the application.
+ *
+ * `OPERATING_MODEL.md` says the operator needs "a written partner agreement stating who is
+ * responsible for which stage, and what happens on harm". This table is the record that a named
+ * member of an organisation read a specific version and accepted it. It is not a contract: the
+ * version text lives in `src/domain/partner-agreement.ts`, the acceptance records who and when, and
+ * a legal review is still required before anyone relies on it.
+ *
+ * There is deliberately no DELETE policy. An acceptance is evidence.
+ */
+export const partnerAgreementAcceptances = pgTable(
+  "partner_agreement_acceptances",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: uuid("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    version: text("version").notNull(),
+    acceptedBy: text("accepted_by").notNull().references(() => user.id),
+    acceptedAt: instant("accepted_at").notNull().defaultNow(),
+    // What the person was shown, hashed, so a later edit to the text cannot rewrite the record of
+    // what was accepted.
+    contentSha256: text("content_sha256").notNull(),
+  },
+  (table) => [
+    uniqueIndex("partner_agreement_org_version_uq").on(table.organizationId, table.version),
+    index("partner_agreement_org_idx").on(table.organizationId, table.acceptedAt),
+  ],
+);
+
+/**
+ * Account-recovery intake for a person who is not signed in.
+ *
+ * The existing operator-assisted reset (`/api/admin/account-recovery`) requires the person to reach
+ * an operator by some other channel. This table is that channel: a locked-out person states which
+ * address needs help and what happened, operations see it in the queue, and the resolution column
+ * records the outcome. It cannot be used to enumerate accounts because the success response is
+ * identical either way, and the recorded request is rate-limited per address and per IP.
+ */
+export const accountRecoveryRequests = pgTable(
+  "account_recovery_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reference: text("reference").notNull().unique(),
+    email: text("email").notNull(),
+    detail: text("detail").notNull(),
+    status: text("status").notNull().default("submitted"),
+    resolvedBy: text("resolved_by").references(() => user.id),
+    resolution: text("resolution"),
+    resolvedAt: instant("resolved_at"),
+    createdAt: instant("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("account_recovery_status_idx").on(table.status, table.createdAt)],
+);

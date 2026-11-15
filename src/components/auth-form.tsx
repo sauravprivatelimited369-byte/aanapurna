@@ -114,6 +114,72 @@ function PasswordStrength({ password }: { password: string }) {
   </div>;
 }
 
+/**
+ * The path for somebody who cannot receive the reset email at all.
+ *
+ * Before this existed, a locked-out person had no way to ask for help that did not depend on already
+ * having a working channel to an operator. It files a request into the operations queue - it does not
+ * reset anything, and the response is the same whether or not the address has an account.
+ */
+function LockedOutHelp() {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [detail, setDetail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [reference, setReference] = useState("");
+  const [failure, setFailure] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSending(true); setFailure("");
+    try {
+      const response = await fetch("/api/account/recovery-request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), detail: detail.trim() }),
+      });
+      const result = await response.json() as { reference?: string; error?: { message?: string } };
+      if (!response.ok) throw new Error(result.error?.message ?? "The request could not be recorded.");
+      setReference(result.reference ?? "");
+      setDetail("");
+    } catch (caught) {
+      setFailure(caught instanceof Error ? caught.message : "The request could not be recorded.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (reference) {
+    return <div className="locked-out-help">
+      <div className="auth-status" role="status" aria-live="polite">
+        Request <strong>{reference}</strong> was recorded. An operator reviews these in the order they arrive; every review is logged with the reason it was made. Keep the reference if you need to follow up.
+      </div>
+      <p className="form-hint">Nothing was reset and no email was sent by this step. If you can also reach the operator through your organisation, say so and quote the reference — that is faster than waiting for the queue.</p>
+    </div>;
+  }
+
+  return <div className="locked-out-help">
+    <button className="button button--ghost button--small" type="button" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+      {open ? "Hide this" : "I cannot receive email at all — ask an operator for help"}
+    </button>
+    {open && <form className="form-stack" onSubmit={submit}>
+      <p className="form-hint">Use this only if the reset email does not reach you. It records a request for a human; it does not reset anything. The response is the same whether or not the address has an account.</p>
+      <div className="form-field">
+        <label htmlFor="recovery-email">The address on the account</label>
+        <input className="form-control" id="recovery-email" type="email" autoComplete="email" maxLength={254} required value={email} onChange={(event) => setEmail(event.target.value)} />
+      </div>
+      <div className="form-field">
+        <label htmlFor="recovery-detail">What happened?</label>
+        <textarea className="form-control" id="recovery-detail" required minLength={10} maxLength={1000} value={detail} onChange={(event) => setDetail(event.target.value)} placeholder="For example: I changed email providers and the old address no longer exists" />
+      </div>
+      {failure && <div className="auth-error" role="alert">{failure}</div>}
+      <button className="button button--secondary" type="submit" disabled={sending || detail.trim().length < 10 || !email.trim()}>
+        {sending ? "Recording…" : "Record the request"}
+      </button>
+    </form>}
+  </div>;
+}
+
 export function AuthForm({
   mode,
   verificationState = "none",
@@ -395,6 +461,7 @@ export function AuthForm({
           {message && <div className="auth-status" role="status" aria-live="polite">{message}</div>}
           {verificationFailed && verificationError && <p className="form-hint">Link error code: {verificationError}</p>}
           {resetInvalid && resetLinkError && <p className="form-hint">Link error code: {resetLinkError}</p>}
+          {mode === "forgot" && <LockedOutHelp />}
 
           {mode === "login" && <div className="auth-links"><Link href="/forgot-password">Forgot password?</Link><Link href="/verify-email">Need a verification link?</Link></div>}
           {mode === "verify" && verificationState === "verified" && <div className="account-state-actions"><Link className="button button--primary" href="/login">Continue to sign in</Link></div>}

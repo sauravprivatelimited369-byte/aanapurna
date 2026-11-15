@@ -796,3 +796,41 @@ select.form-control { appearance: auto; }
 .directory-phone small { display: block; margin-top: 3px; color: #a9a5ac; font-size: 11px; }
 .directory-tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 16px; }
 .directory-tags .status-pill { font-size: 11px; }
+
+/* ── Straight answers ────────────────────────────────────────────────────────── */
+.answers-grid { display: grid; gap: 20px; }
+.answers-card { scroll-margin-top: 84px; }
+.answers-card h2 { margin: 8px 0 12px; font-family: var(--font-display, inherit); font-size: clamp(20px, 2.4vw, 27px); line-height: 1.28; letter-spacing: -.015em; color: var(--ink); }
+.answers-card h3 { margin: 22px 0 10px; font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.answers-short { color: var(--ink-soft); font-size: 15px; line-height: 1.72; }
+.answers-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.answers-list li { position: relative; padding-left: 22px; font-size: 14px; line-height: 1.68; color: var(--ink-soft); }
+.answers-list li::before { content: ""; position: absolute; left: 4px; top: .62em; width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #7cc4a4); }
+.answers-limit { margin-top: 20px; padding: 15px 17px; border-left: 2px solid rgba(251,146,60,.55); border-radius: 0 11px 11px 0; background: rgba(251,146,60,.05); }
+.answers-limit strong { display: block; margin-bottom: 6px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #ffd09e; }
+.answers-limit p { margin: 0; font-size: 13.5px; line-height: 1.7; color: var(--ink-soft); }
+.answers-card .status-pill { margin-top: 16px; white-space: normal; line-height: 1.55; }
+
+/* ── Structured arrival checks ───────────────────────────────────────────────── */
+.inspection-checks { display: grid; gap: 11px; margin: 4px 0 8px; padding: 16px 18px 18px; border: 1px solid var(--line); border-radius: 13px; }
+.inspection-checks legend { padding: 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.inspection-check { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; font-size: 13.5px; line-height: 1.5; color: var(--ink-soft); }
+.inspection-check-options { display: flex; gap: 14px; flex: none; }
+.inspection-check-options label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+
+/* ── Locked-out recovery intake ─────────────────────────────────────────────── */
+.locked-out-help { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.locked-out-help .form-stack { margin-top: 14px; }
+
+/* ── Partner declarations (insurance + responsibility agreement) ─────────────── */
+.compliance-card h3 { margin: 0 0 6px; font-size: 16px; letter-spacing: -.01em; color: var(--ink); }
+.compliance-card .status-pill { margin-top: 12px; }
+.inline-select { flex: none; min-width: 190px; }
+.agreement-text { margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.018); }
+.agreement-text summary { padding: 12px 15px; font-size: 13px; font-weight: 600; color: var(--ink-soft); cursor: pointer; }
+.agreement-text summary:hover { color: var(--ink); }
+.agreement-body { max-height: 340px; overflow-y: auto; padding: 4px 16px 16px; border-top: 1px solid var(--line); }
+.agreement-body h4 { margin: 16px 0 5px; font-size: 12.5px; letter-spacing: .02em; color: var(--ink); }
+.agreement-body p { margin: 0; font-size: 12.5px; line-height: 1.68; color: var(--ink-soft); }
+.checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin-top: 14px; font-size: 12.5px; line-height: 1.6; color: var(--ink-soft); cursor: pointer; }
+.checkbox-row input { margin-top: .22em; flex: none; }

@@ -31,6 +31,46 @@ appears.
 | Holds stop movement | an incident with a hold blocks matching, claiming and distribution |
 | Recall stops a batch | `recall_records` + `donations.status = 'recalled'`; parties notified; receipts listed |
 | Nothing counts until verified | impact derives from verified receipts only |
+| Arrival checks are structured, not prose | four recorded answers (seal, packaging, label, window) plus an optional temperature; written once, in the same transaction as the acceptance, by a trigger that only the receiving organisation can satisfy |
+| A temperature reading is required when the listing declared one | `TEMPERATURE_READING_REQUIRED`; a receiver cannot claim to have checked what it did not measure |
+| A failed check is recorded, not hidden | the receiver may still accept knowingly; the failed checks are written to the custody event, audited, and escalated to both organisations |
+| Harm cannot be reported without describing it | `harm_reported` requires `harm_details`; a database CHECK enforces the same rule |
+| Harm escalates beyond a queue | a harm report notifies operations, the safety officer and security immediately, separately from an ordinary incident notification |
+| An incident cannot be closed without a corrective action | `corrective_action` of at least 20 characters, required by a CHECK and by the service; harm recorded at report time cannot be dropped at closure |
+
+## Arrival checks in detail
+
+The four checks are deliberately individual booleans rather than one "all fine" tick, because "the
+seal was broken but the label matched" is information an investigation needs and a single tick would
+destroy it. Every one starts unset in the interface: a pre-selected answer turns a safety record into
+a form somebody clicks through.
+
+| Check | What it records | Why it is separate |
+|---|---|---|
+| Seal intact | whether the packaging seal was unbroken on arrival | the most common tamper and spoilage signal |
+| Packaging intact | whether the packaging was intact and not leaking | distinguishes a broken seal from a crushed box |
+| Label matched | whether the contents matched the declared ingredients and allergens | allergen mismatch is the highest-consequence declaration error |
+| Within window | whether the food arrived inside its declared time window | a delivery that is technically complete but hours late is a safety event |
+
+The temperature field is bounded to −40 to 120 °C, which spans a commercial freezer, a chiller, a hot
+box and near-boiling rice. That bound is a sanity check on a typo, **not** a policy: whether 63 °C is
+acceptable for a given category is the approved policy's decision, and the platform does not make it.
+
+A receiver who reports a failed check is accepting the food knowingly. The record says so, operations
+and the generator are told, and the decision is the receiver's to answer for. That is deliberate: the
+alternative is a system that either blocks a receiver who has a legitimate reason, or quietly records
+a pass nobody gave.
+
+## The partner's own cover
+
+Each organisation records its own insurance policy reference and expiry, and a named member accepts
+the current partner agreement (versioned, with the SHA-256 of the text they were shown stored beside
+the acceptance). `app_launch_readiness()` reports partner coverage as unmet until every verified
+organisation holds a current declaration and has accepted the current agreement, so the answer to
+"who is covered if someone is harmed" is a query, not a paragraph that may have gone stale.
+
+The agreement is plain-language and **has not been legally reviewed**. It is a record of what a
+partner accepted, not a substitute for counsel.
 
 ## The human decisions the software only records
 
@@ -79,7 +119,9 @@ role; corrections are new events.
 - Partner evidence checks: how a kitchen's entitlement is verified and how often it is rechecked.
 - Handling training material and an acknowledgement path for Helpers.
 - A documented escalation plan for a suspected food-safety incident, including who calls whom.
-- Insurance and liability position.
+- Insurance and liability position. Each partner now *records* its own cover and each accepts a
+  responsibility agreement, but none of that creates a policy, an entity or a liability position
+  that would answer a claim.
 - Laboratory or inspection arrangements, if the responsible professional requires them.
 
 Until those exist, the honest description of this system is: it can coordinate a pilot among

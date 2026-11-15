@@ -49,11 +49,20 @@ make food safe", and any screen or marketing line implying otherwise is called a
 
 **The strongest control is procedural, not algorithmic.** The delivery verification code exists in
 the database and is shown **only to the receiver**, and **only after the food has physically arrived
-and the receiver has recorded their arrival inspection** — see `CODE_NOT_READY` in
+and the receiver has recorded its arrival checks** — see `CODE_NOT_READY` in
 `src/domain/service.ts`. The helper can never retrieve it (`/api/jobs/[id]/code` is receiver-only,
 hashed at rest, five attempts then lock). That encodes one rule in code: *do not release the goods
-until you have looked at them.* A receiver who inspects and is unhappy records an exception; the
-delivery is not marked successful and the food does not enter distribution.
+until you have looked at them.*
+
+**The arrival checks are structured since migration 20.** "Was the seal intact, was the packaging
+intact, did the label match the declaration, did it arrive inside its window" are four recorded
+answers, not prose, and a temperature reading is required whenever the listing declared a temperature
+requirement (`TEMPERATURE_READING_REQUIRED`). They are written once, in the same transaction as the
+acceptance, guarded by a trigger only the receiving organisation can satisfy, and a database CHECK
+refuses a partial inspection — half a checklist looks like evidence and cannot be read as one. A
+receiver that reports a failed check may still accept knowingly; the record says so, both
+organisations are told, and operations sees it. The alternative — a system that silently records a
+pass nobody gave — is worse than the failure it hides.
 
 **What "clean" therefore means here:** an organisation whose entitlement a human reviewed, declared
 this food under a policy a human approved, kept it inside declared time and temperature limits, and a
@@ -107,10 +116,14 @@ no long-lived worker exists, from the same scheduled `/api/worker/drain` invocat
 mail outbox. Thresholds are configurable with `ESCALATION_THRESHOLD_MINUTES` and
 `ESCALATION_DOCUMENT_HORIZON_DAYS`.
 
-**Still true, and not fixable in code:** every handover needs a Helper to claim the job; there is no
-"receiver collects it themselves" path. Software can notify, escalate and reassign — it cannot create
-volunteers. A standby rota, a named coordinator per area and published pickup windows are people
-decisions, not features.
+**A delivery no longer needs a Helper at all.** A receiving organisation can collect the food itself
+(`POST /api/jobs/[id]/self-collect`, migration 16): its own operator becomes the assigned collector,
+and the same collection code, custody events and receipt apply. That path is refused under the same
+transit limit, and the receiving organisation must still hold an active operator role.
+
+**Still true, and not fixable in code:** most handovers will need a Helper to claim the job, and
+software can notify, escalate and reassign — it cannot create volunteers. A standby rota, a named
+coordinator per area and published pickup windows are people decisions, not features.
 
 **What would actually produce more helpers:** a named coordinator per area; a published pickup window
 people can plan around; short, local, low-friction jobs; a standby rota with named backups;
@@ -192,9 +205,10 @@ test.**
 before application APIs serve a platform-role account, but ordinary Generator, Receiver and Helper
 accounts are not forced into it; the Content-Security-Policy is enforcing with a per-request nonce on
 every server-rendered page, while the pre-rendered public pages cannot carry a nonce and keep
-`'unsafe-inline'` for scripts; RLS is not `FORCE`'d, so a careless future `GRANT` is the scenario it
-would catch; no independent penetration test and no outside threat-model review; account erasure is
-impossible while audit rows are append-only.
+`'unsafe-inline'` for scripts; no independent penetration test and no outside threat-model review;
+account erasure is impossible while audit rows are append-only. RLS is `FORCE`'d on every
+policy-bearing table, so the owner is subject to its own policies too and a careless future `GRANT`
+is caught rather than quietly honoured.
 
 **Also true, and outside this repository:** the hosted deployment runs on Vercel and Supabase. A
 compromise of the *owner's* Vercel or Supabase account is a compromise of the application, and no
@@ -229,14 +243,22 @@ Custody events, incident records with severity and hold, recall records with rea
 receipts are append-only. The application role cannot edit or delete them; corrections are new
 events.
 
-**What is missing, and cannot be invented in code:**
+**What migration 20 adds, and what it still cannot do.** Three of the five items above now have a
+record instead of a paragraph:
+
+| Requirement | Now recorded how | Still missing |
+|---|---|---|
+| A written partner agreement | `partner_agreement_acceptances`: one row per organisation per version, with who accepted, when, and the SHA-256 of exactly the text they were shown. Bumping the version makes every earlier acceptance visibly stale rather than silently grandfathered. The text lives in `src/domain/partner-agreement.ts` and allocates responsibility stage by stage. | **Counsel has not reviewed it.** It is a plain-language record of what a partner accepted, not a contract. |
+| An insurance and liability position | Each verified organisation records its own policy reference and expiry (`organizations.insurance_policy_reference` / `insurance_expires_on`). `app_launch_readiness()` reports partner cover as unmet until every verified organisation holds a current declaration, and a lapsed date re-opens the gate by itself. | No policy has been bought, and the platform operator holds no cover of its own. A declaration is not cover. |
+| What happens on harm | Anyone on a delivery can report suspected harm; it requires a description, escalates to operations, the safety officer and security immediately, and an incident cannot be closed without a corrective action recorded. | Nobody has yet been named to answer that escalation at 21:00 on a Saturday. |
+
+**What is still missing, and cannot be invented in code:**
 
 - A legal entity that would actually answer a claim.
-- An insurance and liability position for redistribution.
-- A written partner agreement stating who is responsible for which stage, and what happens on harm.
-- Legal review of whether the operator carries duties under FSSAI surplus-food rules and the DPDP
-  Act. `LEGAL_RESEARCH_REGISTER.md` is explicitly **unverified** and `LAUNCH_CHECKLIST.md` requires
-  counsel to confirm it.
+- Actual insurance cover — bought, not declared.
+- Counsel's review of the partner agreement, and of whether the operator carries duties under FSSAI
+  surplus-food rules and the DPDP Act. `LEGAL_RESEARCH_REGISTER.md` is explicitly **unverified** and
+  `LAUNCH_CHECKLIST.md` requires counsel to confirm it.
 - A named person who answers the phone at 21:00 on a Saturday.
 
 **The honest position to publish:** the platform records and coordinates; the organisations handling
@@ -249,7 +271,7 @@ the control**.
 
 ## 6. How is the database managed? Is there a firewall? Who handles the data if something goes wrong?
 
-**Database:** PostgreSQL is the source of truth. Schema and thirteen migrations are versioned in
+**Database:** PostgreSQL is the source of truth. Schema and twenty-one migrations are versioned in
 `src/db/schema.ts` and `drizzle/`; GitHub stores definitions, never the running data. The hosted
 instance is Supabase PostgreSQL in `ap-south-1`, reached with TLS and a pinned Supabase root CA
 (`certs/supabase-prod-ca-2021.crt`, verified in `HOSTED_DEPLOYMENT.md`).
@@ -267,6 +289,9 @@ instance is Supabase PostgreSQL in `ap-south-1`, reached with TLS and a pinned S
 - Delivery codes are stored hashed with a keyed hash; private documents live outside the database in
   private storage, behind an authorised download handler.
 - Append-only audit and custody records.
+- Private uploaded evidence is checked by signature rather than by declared type, stored outside the
+  web root, and every read writes an audit event. Uploads fail closed: in production nothing is
+  stored or served unless a malware scanner answers.
 
 **Firewall — an honest answer.** There is no application-level WAF, no IP allowlist and no
 network-policy configuration in this repository. Network exposure is governed by the hosting
@@ -315,12 +340,28 @@ accepted and never delivered to a person. So on the live site, a user who forget
 receives nothing. This is recorded as residual risk 5 in `SECURITY_THREAT_MODEL.md` and as an open
 gate in `LAUNCH_CHECKLIST.md`.
 
-**"How much time will it take?"** — Once a real transactional SMTP provider is configured: the link
-arrives in seconds to minutes, and the user is back in under a minute. **Today: it does not
-complete at all.** And there is **no human support team with a published response time**. Support
-cases can be filed in-app (`/api/support`), but no one is contractually on the other end. A promised
-"our team will help within X hours" would be a lie until a named person owns it. That is a decision
-for the owner, not an engineering default.
+**Fixed since: a locked-out person can now ask for help without a session.** The gap was that
+operator-assisted recovery existed only for somebody who could already reach an operator by phone or
+email. Migration 20 adds `POST /api/account/recovery-request` — unauthenticated by necessity, but
+the response is identical whether or not the address exists, it is rate limited per address and per
+IP, it issues no token and resets nothing. The request lands in an operations queue
+(`/api/account/recovery-queue`) where a named staff member answers it, records what was done and when,
+and every review is audited. The interface for it sits on the forgot-password page, labelled "I cannot
+receive email at all".
+
+**"How much time will it take?"** — This is now three honest answers:
+
+| Path | Time | Depends on |
+|---|---|---|
+| Self-service reset, with real SMTP configured | seconds to a minute | the owner setting a mail provider |
+| Operator issues the link after an identity check | however long it takes a staff member to reach the queue | a staffed rota |
+| The locked-out request you file without a session | queued immediately; answered when somebody is on call | a staffed rota |
+
+**Today the self-service path does not complete on the hosted deployment**, because email is a
+capture sink. And there is still **no staffed rota with a published response time** on it. The support
+page derives its window from `app_on_call_coverage()` and says plainly that no window is promised
+when nobody is on call — a promised "our team will help within X hours" would be a lie until a named
+person owns it. That remains a decision for the owner, not an engineering default.
 
 ---
 
@@ -380,6 +421,9 @@ Everything below is a real, open gap. None of it is solved by adding copy to the
 | G5 | No legal entity, insurance, liability position or signed partner agreement | **Enforced as records (migration 17), still open** — `platform_attestations` stores the entity (name, jurisdiction, address, registration reference, liability position) and the insurance (insurer, policy, coverage, expiry) with an evidence reference and the administrator who declared it. Until both exist and the policy has not expired, launch readiness is false. Nothing here forms a company or buys a policy | No entity or cover exists yet, so nobody is contractually answerable for harm; signed partner agreements remain outstanding | Legal | Owner: register the entity, buy cover, record both |
 | G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | **Both halves wired, people half open** — `scripts/incident-readiness.mjs` checks every code path an incident needs (session revocation, append-only audit, second factor, recovery, data-request intake); `platform_attestations` now holds the named data-protection contact (published on `/privacy` and `/contact` only once declared) and `on_call_shifts` holds the rota that readiness and the support-page response window are derived from | Nobody is on call on the hosted deployment and no drill has been run with a clock | People | Owner: record the contact, schedule a shift, then run the drill once |
 | G7 | Backups scripted but hosted restore unproven | **Partially fixed** — restore is now verifiable: baseline manifest, manifest query and comparator (`ops/RESTORE_DRILL.md`). Supabase branching refused on the current plan; the restore itself needs one owner action | Recovery time still unknown | Ops | Owner: Pro plan branch, or run `pg_dump`/`pg_restore` once |
+| G8b | A locked-out person who could not receive email had no way to ask for help at all | **Fixed (migration 20)** — unauthenticated intake, rate limited per address and per IP, identical response either way, no token issued; it lands in an operations queue with an audited resolution | The queue is only answered when somebody is on call | Code + people | Owner: staff the rota |
+| G10b | The liability question was answered only in prose | **Recorded (migration 20)** — versioned partner agreement with a stored text hash, per-partner insurance declaration with a self-reopening expiry, harm escalation and a mandatory corrective action at closure | No entity, no bought cover, no counsel review of the agreement | Legal | Owner + counsel |
+| G11 | Arrival inspection was a single free-text note; harm could be closed with a sentence | **Fixed (migration 20)** — four structured checks plus an optional temperature (required when declared), a trigger only the receiver can satisfy, a CHECK refusing partial inspections, and a closure that must name a corrective action | A failed check does not block acceptance; it records it | Code | — |
 | G8 | No human account-recovery path or published response time | **Recovery path fixed; response window now derived from the rota** — operator-issued single-use reset link (role-gated, second factor, reason audited); the support page computes its window from `app_on_call_coverage()`, `SUPPORT_RESPONSE_HOURS` is only a cap, and with no shift recorded it states plainly that nothing is promised | No shift is recorded on the hosted deployment | People | Owner: schedule the first shift; the window then appears on its own |
 | G9a | Partner evidence expiring while the organisation stays verified | **Partially fixed (migration 14)** — operations are now reminded 14 days ahead, once per document | Re-validation decision is still manual | Code + ops | Operations |
 | G9b | File scanning not configured | **Code complete, blocked on a scanner endpoint** — `storePrivateDocument` speaks ClamAV `INSTREAM` over TCP, verifies magic bytes, and refuses every upload in production unless `FILE_SCAN_MODE=clamav` with a reachable `CLAMAV_HOST`/`CLAMAV_PORT` | Uploads stay blocked (fail-closed), so nothing unscanned is ever served | Infra | Owner: a clamd endpoint reachable from the web tier, or a managed scanning service |

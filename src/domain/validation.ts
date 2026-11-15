@@ -192,9 +192,32 @@ export const pickupSchema = z.object({
   condition: safeText(500),
 }).strict();
 
+/**
+ * The Receiver's arrival checks.
+ *
+ * The free-text note is still required — a person has to describe what they saw — but the four
+ * boolean checks and the optional temperature are what make the record answerable afterwards. They
+ * are deliberately individual booleans rather than one "all fine" tick: "the seal was broken but the
+ * label matched" is information an investigation needs.
+ *
+ * `acceptanceConfirmed` requires every check to have been performed, and a temperature is required
+ * whenever the listing declared a temperature requirement. A Receiver who cannot say what the
+ * reading was cannot claim to have taken it.
+ */
 export const inspectionSchema = z.object({
   acceptanceConfirmed: z.literal(true),
   notes: safeText(500),
+  sealIntact: z.boolean(),
+  packagingIntact: z.boolean(),
+  labelMatched: z.boolean(),
+  withinWindow: z.boolean(),
+  temperatureC: z.number().min(-40).max(120).optional().nullable(),
+  /**
+   * A SHA-256 of a photo taken at handover, already uploaded through the private-document path.
+   * Optional: not every receiving organisation has a camera or a procedure that uses one, and
+   * requiring it would invent a rule the safety officer has not approved.
+   */
+  photoSha256: z.string().trim().regex(/^[0-9a-f]{64}$/, "Use a lowercase SHA-256 hex digest.").optional().nullable(),
 }).strict();
 
 export const verifyDeliverySchema = z.object({
@@ -205,7 +228,67 @@ export const incidentSchema = z.object({
   incidentType: z.enum(["damaged_packaging", "temperature_concern", "allergen_mismatch", "quality_concern", "delay", "failed_collection", "other"]),
   severity: z.enum(["low", "moderate", "high", "critical"]),
   description: safeText(1_000),
+  /** Recorded at report time; an incident can also be updated if harm becomes known later. */
+  harmReported: z.boolean().optional().default(false),
+  harmDetails: z.string().trim().min(10).max(1_000).optional().nullable(),
+}).strict().superRefine((value, context) => {
+  if (value.harmReported && !value.harmDetails) {
+    context.addIssue({ code: "custom", path: ["harmDetails"], message: "Say who was affected and how, or clear the harm flag." });
+  }
+});
+
+/**
+ * Closing an incident. `correctiveAction` is required because a closure that does not say what
+ * changed is how the same failure happens twice; the database enforces the same rule.
+ */
+export const incidentClosureSchema = z.object({
+  resolution: safeText(800),
+  correctiveAction: z.string().trim().min(20).max(1_000),
+  /** Harm is re-declared at closure: it may have become known after the incident was reported. */
+  harmReported: z.boolean(),
+  harmDetails: z.string().trim().max(1_000).optional().nullable(),
+}).strict().superRefine((value, context) => {
+  if (value.harmReported && (!value.harmDetails || value.harmDetails.trim().length < 10)) {
+    context.addIssue({ code: "custom", path: ["harmDetails"], message: "Say who was affected and how, or clear the harm flag." });
+  }
+});
+
+/** An organisation's insurance declaration. Both fields or neither; the date must be in the future. */
+export const organizationInsuranceSchema = z.object({
+  insurancePolicyReference: z.string().trim().min(3).max(120),
+  insuranceExpiresOn: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD."),
+}).strict().superRefine((value, context) => {
+  const expiry = new Date(`${value.insuranceExpiresOn}T00:00:00Z`);
+  if (Number.isNaN(expiry.getTime())) {
+    context.addIssue({ code: "custom", path: ["insuranceExpiresOn"], message: "Use a real date." });
+    return;
+  }
+  if (expiry.getTime() < Date.now()) {
+    context.addIssue({ code: "custom", path: ["insuranceExpiresOn"], message: "This policy has already expired. Record a current one." });
+  }
+});
+
+/** Accepting the partner agreement. The version must be the one currently published. */
+export const agreementAcceptanceSchema = z.object({
+  version: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/),
+  accepted: z.literal(true),
 }).strict();
+
+/** A locked-out person asking operations for help. No account is required to file it. */
+export const accountRecoveryRequestSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  detail: z.string().trim().min(10).max(1_000),
+}).strict();
+
+/** An operator answering a recovery request. */
+export const accountRecoveryResolutionSchema = z.object({
+  status: z.enum(["in_review", "resolved", "declined"]),
+  resolution: z.string().trim().min(10).max(500).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.status !== "in_review" && !value.resolution) {
+    context.addIssue({ code: "custom", path: ["resolution"], message: "Say what was done, or why it was declined." });
+  }
+});
 
 /** Operator-assisted account recovery: a target address and the justification. */
 export const accountRecoverySchema = z.object({
@@ -230,10 +313,6 @@ export const helperDecisionSchema = z.object({
   decision: z.enum(["approve", "reject", "suspend"]),
   reason: safeText(500),
   serviceAreaId: z.string().uuid().optional().nullable(),
-}).strict();
-
-export const incidentResolutionSchema = z.object({
-  resolution: safeText(800),
 }).strict();
 
 /**

@@ -29,11 +29,14 @@ import {
   userProfiles,
   user,
   custodyEvents,
+  accountRecoveryRequests,
+  partnerAgreementAcceptances,
 } from "@/db/schema";
 import { HttpError } from "@/lib/http";
 import { auth } from "@/lib/auth";
 import { getEmailDeliveryStatus } from "@/email/config";
 import { evaluateReadiness } from "@/domain/readiness";
+import { AGREEMENT_VERSION, partnerAgreementText } from "@/domain/partner-agreement";
 import { withPasswordResetCapture } from "@/email/reset-link-capture";
 import { canAccessOrganization, hasAnyRole, type Identity } from "@/lib/identity";
 import { assessTransit, normalizePlaceName, type Coordinates, type TransitAssessment } from "@/domain/transit";
@@ -48,7 +51,6 @@ import {
   type adminDecisionSchema,
   type donationCreateSchema,
   type helperDecisionSchema,
-  type incidentResolutionSchema,
   type incidentSchema,
   type recallClosureSchema,
   type recallRequestSchema,
@@ -66,6 +68,12 @@ import {
   type attestationSchema,
   type onCallShiftSchema,
   type directoryPlaceUpdateSchema,
+  type inspectionSchema,
+  type incidentClosureSchema,
+  type organizationInsuranceSchema,
+  type agreementAcceptanceSchema,
+  type accountRecoveryRequestSchema,
+  type accountRecoveryResolutionSchema,
 } from "@/domain/validation";
 import { z } from "zod";
 
@@ -74,9 +82,14 @@ type DonationInput = z.infer<typeof donationCreateSchema>;
 type OfferResponse = z.infer<typeof offerResponseSchema>;
 type PickupInput = z.infer<typeof pickupSchema>;
 type IncidentInput = z.infer<typeof incidentSchema>;
+type InspectionInput = z.infer<typeof inspectionSchema>;
+type IncidentClosureInput = z.infer<typeof incidentClosureSchema>;
+type OrganizationInsuranceInput = z.infer<typeof organizationInsuranceSchema>;
+type AgreementAcceptanceInput = z.infer<typeof agreementAcceptanceSchema>;
+type AccountRecoveryRequestInput = z.infer<typeof accountRecoveryRequestSchema>;
+type AccountRecoveryResolutionInput = z.infer<typeof accountRecoveryResolutionSchema>;
 type RecallRequest = z.infer<typeof recallRequestSchema>;
 type RecallClosure = z.infer<typeof recallClosureSchema>;
-type IncidentResolution = z.infer<typeof incidentResolutionSchema>;
 type AdminDecision = z.infer<typeof adminDecisionSchema>;
 type HelperDecision = z.infer<typeof helperDecisionSchema>;
 type PolicyDraft = z.infer<typeof policyDraftSchema>;
@@ -212,6 +225,30 @@ async function notifyUser(
       ${userId}, ${organizationId}::uuid, ${kind}, ${title}, ${body}, ${href}
     )
   `);
+}
+
+/**
+ * Fan a notification out to every active holder of the named platform roles.
+ *
+ * The recipient selection happens inside `app_notify_platform_roles`, so a caller cannot address a
+ * person directly and a suspended account is skipped. Used where a non-staff participant has to
+ * reach the people accountable for a decision - harm reported during a delivery is the case this
+ * exists for.
+ */
+async function notifyPlatformRoles(
+  tx: AppTransaction,
+  roles: Array<"operations_admin" | "safety_officer" | "support_agent" | "security_admin">,
+  kind: string,
+  title: string,
+  body: string,
+  href: string,
+): Promise<number> {
+  const result = await tx.execute<{ app_notify_platform_roles: number }>(sql`
+    select public.app_notify_platform_roles(
+      ${roles}::text[], ${kind}, ${title}, ${body}, ${href}
+    ) as app_notify_platform_roles
+  `);
+  return Number(result.rows[0]?.app_notify_platform_roles ?? 0);
 }
 
 export async function getOnboarding(identity: Identity) {
@@ -1100,16 +1137,33 @@ export async function confirmDeliveryArrival(identity: Identity, jobId: string) 
   });
 }
 
-/** The Receiver declares its own checks and acceptance; the platform does not certify the food. */
-export async function confirmDeliveryInspection(identity: Identity, jobId: string, input: { acceptanceConfirmed: true; notes: string }) {
+/**
+ * The Receiver declares its own checks and acceptance; the platform does not certify the food.
+ *
+ * This used to record one free-text note, which meant "was a temperature read, was the seal intact"
+ * existed only as prose, if at all. The checks are now structured columns written in the same
+ * transaction as the acceptance, guarded by a database trigger that only the receiving organisation
+ * may satisfy. A Receiver who reports a failed check is accepting the food knowingly: the record
+ * says so, the operations queue is told, and the decision is theirs to answer for.
+ */
+export async function confirmDeliveryInspection(identity: Identity, jobId: string, input: InspectionInput) {
   assertOperationsEnabled();
   const notes = input.notes.trim();
   if (input.acceptanceConfirmed !== true || !notes || notes.length > 500) throw new HttpError(422, "Confirm acceptance and record your inspection observations.", "INSPECTION_INVALID");
+  const failedChecks = [
+    !input.sealIntact ? "seal not intact" : null,
+    !input.packagingIntact ? "packaging not intact" : null,
+    !input.labelMatched ? "label did not match the declaration" : null,
+    !input.withinWindow ? "outside the declared window" : null,
+  ].filter((check): check is string => Boolean(check));
+
   return withDomainContext(identity.id, async (tx) => {
     const [job] = await tx.select({ id: deliveryJobs.id, donationId: deliveryJobs.donationId,
       status: deliveryJobs.status, receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       arrivedAt: deliveryJobs.arrivedAt, inspectionConfirmedAt: deliveryJobs.inspectionConfirmedAt,
-      inspectionNotes: deliveryJobs.inspectionNotes, bestBeforeAt: donations.bestBeforeAt, name: donations.name }).from(deliveryJobs)
+      inspectionNotes: deliveryJobs.inspectionNotes, bestBeforeAt: donations.bestBeforeAt,
+      temperatureRequirement: donations.temperatureRequirement, name: donations.name,
+      generatorOrganizationId: deliveryJobs.generatorOrganizationId }).from(deliveryJobs)
       .innerJoin(donations, eq(donations.id, deliveryJobs.donationId)).where(eq(deliveryJobs.id, jobId)).for("update");
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
     requireMember(identity, job.receiverOrganizationId, ["owner", "manager", "operator"]);
@@ -1121,12 +1175,54 @@ export async function confirmDeliveryInspection(identity: Identity, jobId: strin
       return { inspectionConfirmedAt: job.inspectionConfirmedAt };
     }
     if (job.bestBeforeAt.getTime() <= Date.now()) throw new HttpError(409, "The food has expired. Do not accept it; contact operations.", "DONATION_EXPIRED");
+    // The Generator declared a storage requirement that includes a temperature. The Receiver cannot
+    // then record an acceptance without saying what they read: "I checked the temperature" with no
+    // number is not a check.
+    const declaredTemperature = Boolean(job.temperatureRequirement && job.temperatureRequirement.trim());
+    if (declaredTemperature && (input.temperatureC === null || input.temperatureC === undefined)) {
+      throw new HttpError(422, "This listing declared a temperature requirement. Record the temperature you read at handover, or report a concern instead of accepting.", "TEMPERATURE_READING_REQUIRED");
+    }
+
     const inspectionConfirmedAt = new Date();
-    await tx.update(deliveryJobs).set({ inspectionConfirmedAt, inspectionConfirmedBy: identity.id, inspectionNotes: notes, updatedAt: inspectionConfirmedAt }).where(eq(deliveryJobs.id, job.id));
+    await tx.update(deliveryJobs).set({
+      inspectionConfirmedAt,
+      inspectionConfirmedBy: identity.id,
+      inspectionNotes: notes,
+      inspectionTemperatureC: input.temperatureC === null || input.temperatureC === undefined ? null : input.temperatureC.toFixed(2),
+      inspectionSealIntact: input.sealIntact,
+      inspectionPackagingIntact: input.packagingIntact,
+      inspectionLabelMatched: input.labelMatched,
+      inspectionWithinWindow: input.withinWindow,
+      inspectionPhotoSha256: input.photoSha256 ?? null,
+      updatedAt: inspectionConfirmedAt,
+    }).where(eq(deliveryJobs.id, job.id));
     await tx.insert(custodyEvents).values({ donationId: job.donationId, deliveryJobId: job.id, actorUserId: identity.id,
-      eventType: "receiver.inspection_confirmed", occurredAt: inspectionConfirmedAt, details: { notes } });
-    await audit(tx, identity, "receiver.inspection_confirmed", "delivery_job", job.id, undefined, {}, job.receiverOrganizationId);
-    return { inspectionConfirmedAt };
+      eventType: "receiver.inspection_confirmed", occurredAt: inspectionConfirmedAt, details: {
+        notes,
+        sealIntact: input.sealIntact,
+        packagingIntact: input.packagingIntact,
+        labelMatched: input.labelMatched,
+        withinWindow: input.withinWindow,
+        temperatureC: input.temperatureC ?? null,
+        photoSha256: input.photoSha256 ?? null,
+        failedChecks,
+      } });
+    await audit(tx, identity, "receiver.inspection_confirmed", "delivery_job", job.id, undefined, {
+      failedChecks, temperatureRecorded: input.temperatureC !== null && input.temperatureC !== undefined,
+    }, job.receiverOrganizationId);
+    // A knowingly accepted failed check is exactly what operations must see before anyone is harmed.
+    if (failedChecks.length > 0) {
+      await notifyOrganization(tx, job.receiverOrganizationId, job.donationId, "inspection.check_failed",
+        "Food accepted with failed arrival checks",
+        `${job.name} was accepted with: ${failedChecks.join("; ")}. This was recorded against your organisation. If the food should not be distributed, report a concern now.`,
+        `/app/deliveries/${job.id}`);
+      await notifyOrganization(tx, job.generatorOrganizationId, job.donationId, "inspection.check_failed",
+        "The receiver accepted with failed checks",
+        `${job.name} arrived with: ${failedChecks.join("; ")}. Your declaration is the record of what you sent.`,
+        `/app/deliveries/${job.id}`);
+      await audit(tx, identity, "receiver.inspection_check_failed", "delivery_job", job.id, failedChecks.join("; "), {}, job.receiverOrganizationId);
+    }
+    return { inspectionConfirmedAt, failedChecks };
   });
 }
 
@@ -1552,6 +1648,8 @@ export async function reportDeliveryIncident(identity: Identity, jobId: string, 
       description: input.description,
       status: "open",
       holdApplied: applyHold,
+      harmReported: input.harmReported ?? false,
+      harmDetails: input.harmReported ? (input.harmDetails ?? null) : null,
     }).returning({ id: safetyIncidents.id });
     if (applyHold) {
       await tx.update(donations).set({ status: "on_hold", holdReason: `Incident ${incident?.id}`, updatedAt: new Date() }).where(eq(donations.id, job.donationId));
@@ -1565,10 +1663,20 @@ export async function reportDeliveryIncident(identity: Identity, jobId: string, 
       eventType: "safety.incident_reported",
       details: { incidentId: incident?.id, incidentType: input.incidentType, severity: input.severity, holdApplied: applyHold },
     });
-    await audit(tx, identity, "safety.incident_reported", "food_safety_incident", incident?.id ?? job.id, undefined, { incidentType: input.incidentType, severity: input.severity, holdApplied: applyHold });
+    await audit(tx, identity, "safety.incident_reported", "food_safety_incident", incident?.id ?? job.id, undefined, {
+      incidentType: input.incidentType, severity: input.severity, holdApplied: applyHold, harmReported: input.harmReported ?? false,
+    });
     await notifyOrganization(tx, job.generatorOrganizationId, job.donationId, "safety.incident", "A safety concern was reported", "Operations and the safety officer have been notified. Follow the approved hold and escalation procedure.", `/app/incidents/${incident?.id}`);
     await notifyOrganization(tx, job.receiverOrganizationId, job.donationId, "safety.incident", "A safety concern was reported", "Operations and the safety officer have been notified. Follow the approved hold and escalation procedure.", `/app/incidents/${incident?.id}`);
-    return { id: incident?.id, holdApplied: applyHold };
+    if (input.harmReported) {
+      // Harm is never a routine notification. It goes to the people accountable for answering it,
+      // with the words "suspected harm to a person" in the title so it cannot be read as noise.
+      await notifyPlatformRoles(tx, ["operations_admin", "safety_officer", "security_admin"], "safety.harm_reported",
+        "Suspected harm to a person reported",
+        `Incident ${incident?.id} records suspected harm: ${input.harmDetails}. Preserve the batch, contact the affected organisation by phone, and follow the incident response procedure.`,
+        "/admin#incidents");
+    }
+    return { id: incident?.id, holdApplied: applyHold, harmReported: input.harmReported ?? false };
   });
 }
 
@@ -1729,9 +1837,25 @@ export async function listSafetyIncidents(identity: Identity) {
     .orderBy(desc(safetyIncidents.createdAt)).limit(100));
 }
 
-export async function resolveSafetyIncident(identity: Identity, incidentId: string, input: IncidentResolution) {
+/**
+ * Close an incident record.
+ *
+ * A closure used to need only a resolution sentence, which meant "we looked into it" could close a
+ * report without anything being different afterwards. Two things are now required and enforced both
+ * here and by a database CHECK: whether a person was harmed, and what changed so the same failure
+ * cannot recur. Neither is a finding that the food was safe, and a closure still does not release a
+ * hold - that is a separate authorised decision.
+ */
+export async function resolveSafetyIncident(identity: Identity, incidentId: string, input: IncidentClosureInput) {
   if (!hasAnyRole(identity, ["operations_admin", "safety_officer"])) {
     throw new HttpError(403, "Safety review access is required.", "SAFETY_ACCESS_REQUIRED");
+  }
+  const correctiveAction = input.correctiveAction.trim();
+  if (correctiveAction.length < 20) {
+    throw new HttpError(422, "Record what changed so the same failure cannot recur (at least 20 characters).", "CORRECTIVE_ACTION_REQUIRED");
+  }
+  if (input.harmReported && (!input.harmDetails || input.harmDetails.trim().length < 10)) {
+    throw new HttpError(422, "Harm was reported: say who was affected and how.", "HARM_DETAIL_REQUIRED");
   }
   return withDomainContext(identity.id, async (tx) => {
     const [incident] = await tx.select({
@@ -1740,13 +1864,24 @@ export async function resolveSafetyIncident(identity: Identity, incidentId: stri
       reportedBy: safetyIncidents.reportedBy,
       status: safetyIncidents.status,
       holdApplied: safetyIncidents.holdApplied,
+      harmReported: safetyIncidents.harmReported,
+      harmDetails: safetyIncidents.harmDetails,
     }).from(safetyIncidents).where(eq(safetyIncidents.id, incidentId)).for("update");
     if (!incident) throw new HttpError(404, "Incident not found.", "INCIDENT_NOT_FOUND");
     if (incident.status !== "open") throw new HttpError(409, "This incident has already been reviewed.", "INCIDENT_ALREADY_CLOSED");
     const now = new Date();
+    // Harm declared at report time cannot be withdrawn at closure by simply not mentioning it.
+    const harmReported = incident.harmReported || input.harmReported;
+    const harmDetails = input.harmReported
+      ? input.harmDetails?.trim()
+      : incident.harmDetails;
     await tx.update(safetyIncidents).set({
       status: "resolved",
       resolution: input.resolution,
+      harmReported,
+      harmDetails: harmReported ? harmDetails : null,
+      correctiveAction,
+      correctiveActionOwner: identity.id,
       closedBy: identity.id,
       closedAt: now,
       updatedAt: now,
@@ -1762,8 +1897,10 @@ export async function resolveSafetyIncident(identity: Identity, incidentId: stri
       donationId: incident.donationId,
       holdApplied: incident.holdApplied,
       holdReleased: false,
+      harmReported,
+      correctiveActionLength: correctiveAction.length,
     });
-    return { id: incident.id, status: "resolved" as const, holdReleased: false };
+    return { id: incident.id, status: "resolved" as const, holdReleased: false, harmReported };
   });
 }
 
@@ -2298,6 +2435,179 @@ export async function issueAccountRecoveryLink(identity: Identity, input: { emai
     return { issued: false as const };
   }
   return { issued: true as const, url, email };
+}
+
+/**
+ * Record an organisation's insurance declaration.
+ *
+ * This is a declaration with a date, not a certificate the platform issues. It is recorded by an
+ * organisation owner or manager, it expires on its own, and `app_launch_readiness()` reports unmet
+ * cover for any verified partner until a current one exists. A person who is not authorised to bind
+ * the organisation cannot make this declaration on its behalf.
+ */
+export async function recordOrganizationInsurance(identity: Identity, organizationId: string, input: OrganizationInsuranceInput) {
+  requireMember(identity, organizationId, ["owner", "manager"]);
+  return withDomainContext(identity.id, async (tx) => {
+    const [organization] = await tx.select({ id: organizations.id, name: organizations.name })
+      .from(organizations).where(eq(organizations.id, organizationId)).for("update");
+    if (!organization) throw new HttpError(404, "Organisation not found.", "ORGANIZATION_NOT_FOUND");
+    await tx.update(organizations).set({
+      insurancePolicyReference: input.insurancePolicyReference.trim(),
+      insuranceExpiresOn: input.insuranceExpiresOn,
+      updatedAt: new Date(),
+    }).where(eq(organizations.id, organization.id));
+    await audit(tx, identity, "organization.insurance_recorded", "organization", organization.id, undefined, {
+      policyReference: input.insurancePolicyReference.trim(),
+      expiresOn: input.insuranceExpiresOn,
+    }, organization.id);
+    return { organizationId: organization.id, expiresOn: input.insuranceExpiresOn };
+  });
+}
+
+/**
+ * Accept the current partner agreement for an organisation.
+ *
+ * The version the browser sends must equal the version the server publishes - an old tab cannot
+ * accept a superseded text, and a crafted body cannot invent a version. The SHA-256 of exactly what
+ * was rendered is stored beside the acceptance, so a later edit to the wording cannot rewrite the
+ * record of what a partner actually agreed to.
+ */
+export async function acceptPartnerAgreement(identity: Identity, organizationId: string, input: AgreementAcceptanceInput) {
+  requireMember(identity, organizationId, ["owner", "manager", "operator"]);
+  if (input.version !== AGREEMENT_VERSION) {
+    throw new HttpError(409, "The partner agreement has changed. Reload the page and read the current version before accepting.", "AGREEMENT_VERSION_STALE");
+  }
+  const { createHash } = await import("node:crypto");
+  const contentSha256 = createHash("sha256").update(partnerAgreementText(), "utf8").digest("hex");
+  return withDomainContext(identity.id, async (tx) => {
+    const [organization] = await tx.select({ id: organizations.id, name: organizations.name })
+      .from(organizations).where(eq(organizations.id, organizationId)).for("update");
+    if (!organization) throw new HttpError(404, "Organisation not found.", "ORGANIZATION_NOT_FOUND");
+
+    const [existing] = await tx.select({ id: partnerAgreementAcceptances.id })
+      .from(partnerAgreementAcceptances)
+      .where(and(eq(partnerAgreementAcceptances.organizationId, organizationId), eq(partnerAgreementAcceptances.version, input.version)))
+      .limit(1);
+    const now = new Date();
+    if (!existing) {
+      await tx.insert(partnerAgreementAcceptances).values({
+        organizationId, version: input.version, acceptedBy: identity.id, acceptedAt: now, contentSha256,
+      });
+    }
+    // The organisation-level pointer is what readiness reads, and only one version can be current.
+    await tx.update(organizations).set({ agreementVersion: input.version, agreementAcceptedAt: now, updatedAt: now })
+      .where(eq(organizations.id, organization.id));
+    await audit(tx, identity, "organization.agreement_accepted", "organization", organization.id, undefined, {
+      version: input.version, contentSha256, alreadyRecorded: Boolean(existing),
+    }, organization.id);
+    return { organizationId: organization.id, version: input.version, acceptedAt: now };
+  });
+}
+
+/** What the agreement page and the organisation review need to render. */
+export async function getAgreementState(identity: Identity, organizationId: string) {
+  requireMember(identity, organizationId);
+  return withUserContext(identity.id, async (tx) => {
+    const [organization] = await tx.select({
+      agreementVersion: organizations.agreementVersion,
+      agreementAcceptedAt: organizations.agreementAcceptedAt,
+      insurancePolicyReference: organizations.insurancePolicyReference,
+      insuranceExpiresOn: organizations.insuranceExpiresOn,
+    }).from(organizations).where(eq(organizations.id, organizationId)).limit(1);
+    if (!organization) throw new HttpError(404, "Organisation not found.", "ORGANIZATION_NOT_FOUND");
+    const current = organization.agreementVersion === AGREEMENT_VERSION;
+    return {
+      currentVersion: AGREEMENT_VERSION,
+      acceptedVersion: organization.agreementVersion,
+      acceptedAt: organization.agreementAcceptedAt,
+      acceptedCurrent: current,
+      insurancePolicyReference: organization.insurancePolicyReference,
+      insuranceExpiresOn: organization.insuranceExpiresOn,
+      insuranceCurrent: Boolean(organization.insuranceExpiresOn && organization.insuranceExpiresOn >= new Date().toISOString().slice(0, 10)),
+    };
+  });
+}
+
+/**
+ * A locked-out person asks for help. No session, no account required.
+ *
+ * The gap this closes: operator-assisted reset existed, but only for somebody who could already
+ * reach an operator by phone or email. A person with neither had no path at all. Filing this creates
+ * a queue entry an operator answers, and the resolution - not the request - is what says what
+ * happened. The response is deliberately uninformative: "recorded" is the same whether or not the
+ * address exists, so the form cannot be used to find out who has an account.
+ */
+export async function fileAccountRecoveryRequest(input: AccountRecoveryRequestInput) {
+  const email = input.email.trim().toLowerCase();
+  const detail = input.detail.trim();
+  if (detail.length < 10) throw new HttpError(422, "Describe what happened so an operator can help.", "RECOVERY_DETAIL_REQUIRED");
+  return withUserContext(ANON_CONTEXT_USER_ID, async (tx) => {
+    const reference = `AL-REC-${new Date().getUTCFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`;
+    await tx.insert(accountRecoveryRequests).values({ reference, email, detail, status: "submitted" });
+    await notifyPlatformRoles(tx, ["operations_admin", "support_agent", "security_admin"], "account.recovery_requested",
+      "Someone is locked out and asked for help",
+      `A recovery request (${reference}) was filed. Open the operations queue to review it and issue a single-use reset link if the identity checks out.`,
+      "/admin#recovery-requests");
+    return { reference, status: "submitted" as const };
+  });
+}
+
+/**
+ * A special user id used only for the two anonymous intake paths (this and the support form).
+ *
+ * `withUserContext` exists to place a verified person inside row-level security. These intakes have
+ * no person yet. They are insert-only with a fixed, non-UUID literal that cannot collide with a real
+ * account, and every policy they touch checks `app_is_domain_transition()` rather than a user.
+ */
+const ANON_CONTEXT_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+/** The operations queue for recovery requests. Staff only. */
+export async function listAccountRecoveryRequests(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin", "support_agent"])) {
+    throw new HttpError(403, "Operations, security or support access is required.", "RECOVERY_QUEUE_FORBIDDEN");
+  }
+  return withUserContext(identity.id, async (tx) => tx.select({
+    id: accountRecoveryRequests.id,
+    reference: accountRecoveryRequests.reference,
+    email: accountRecoveryRequests.email,
+    detail: accountRecoveryRequests.detail,
+    status: accountRecoveryRequests.status,
+    resolution: accountRecoveryRequests.resolution,
+    resolvedAt: accountRecoveryRequests.resolvedAt,
+    createdAt: accountRecoveryRequests.createdAt,
+  }).from(accountRecoveryRequests).orderBy(desc(accountRecoveryRequests.createdAt)).limit(100));
+}
+
+/**
+ * Answer a recovery request. The operator still issues the actual reset link from the existing
+ * flow; this records that they looked, what they decided and when, so a locked-out person is never
+ * silently dropped and the queue cannot fill with unresolved work nobody owns.
+ */
+export async function resolveAccountRecoveryRequest(identity: Identity, requestId: string, input: AccountRecoveryResolutionInput) {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin", "support_agent"])) {
+    throw new HttpError(403, "Operations, security or support access is required.", "RECOVERY_QUEUE_FORBIDDEN");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const [request] = await tx.select({
+      id: accountRecoveryRequests.id,
+      reference: accountRecoveryRequests.reference,
+      status: accountRecoveryRequests.status,
+    }).from(accountRecoveryRequests).where(eq(accountRecoveryRequests.id, requestId)).for("update");
+    if (!request) throw new HttpError(404, "Recovery request not found.", "RECOVERY_REQUEST_NOT_FOUND");
+    if (request.status === "resolved" || request.status === "declined") {
+      throw new HttpError(409, "This request has already been answered.", "RECOVERY_REQUEST_CLOSED");
+    }
+    const now = new Date();
+    await tx.update(accountRecoveryRequests).set({
+      status: input.status,
+      resolution: input.resolution?.trim() ?? null,
+      resolvedBy: input.status === "in_review" ? null : identity.id,
+      resolvedAt: input.status === "in_review" ? null : now,
+    }).where(eq(accountRecoveryRequests.id, request.id));
+    await audit(tx, identity, "account.recovery_request_reviewed", "account_recovery_request", request.id,
+      input.resolution, { reference: request.reference, status: input.status });
+    return { id: request.id, reference: request.reference, status: input.status };
+  });
 }
 
 export async function createSupportCase(identity: Identity, input: SupportCaseCreate) {

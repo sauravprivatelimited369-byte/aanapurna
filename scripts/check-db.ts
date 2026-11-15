@@ -51,7 +51,7 @@ async function main(): Promise<void> {
               'app_notify_area_helpers','app_escalate_delivery_backlog',
               'app_launch_readiness','app_on_call_coverage','app_public_data_protection_contact',
               'app_legal_entity','app_on_call_person','app_escalate_platform_readiness',
-              'app_public_directory'
+              'app_public_directory','app_notify_platform_roles','app_current_agreement_version'
             )) AS required_functions,
         (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations,
         -- Supabase's public PostgREST roles must not reach application objects.
@@ -76,11 +76,12 @@ async function main(): Promise<void> {
     if (!row) throw new Error("The database role could not be identified.");
     const problems: string[] = [];
     if (row.bypass_rls) problems.push("runtime database role has BYPASSRLS");
-    // Migration 17 added two forced-RLS tables; 28 is the floor rather than the current count, so
-    // dropping forced RLS from an existing table still fails the check.
-    if (row.rls_tables < 29) problems.push(`expected at least 29 RLS-protected tables, found ${row.rls_tables}`);
-    if (row.required_functions !== 19) problems.push(`expected required database functions, found ${row.required_functions}/19`);
-    if (row.migrations < 20) problems.push(`expected at least 20 applied migrations, found ${row.migrations}`);
+    // Migration 20 added two forced-RLS tables (partner agreements, recovery intake). The floor is
+    // deliberately below the current count, so dropping forced RLS from an existing table still
+    // fails the check rather than hiding inside a coincidence.
+    if (row.rls_tables < 31) problems.push(`expected at least 31 RLS-protected tables, found ${row.rls_tables}`);
+    if (row.required_functions !== 21) problems.push(`expected required database functions, found ${row.required_functions}/21`);
+    if (row.migrations < 21) problems.push(`expected at least 21 applied migrations, found ${row.migrations}`);
     if (row.exposed_tables > 0) problems.push(`Supabase public API roles can reach ${row.exposed_tables} application table(s); apply 20261114120000_revoke_public_api_privileges`);
     if (row.exposed_functions > 0) problems.push(`Supabase public API roles can execute ${row.exposed_functions} application function(s); apply 20261114120000_revoke_public_api_privileges`);
     console.info(JSON.stringify({

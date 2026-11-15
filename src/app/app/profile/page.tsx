@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { AccountSecurity } from "@/components/account-security";
 import { TwoFactorPanel } from "@/components/two-factor-panel";
+import { PartnerCompliance } from "@/components/partner-compliance";
+import { AGREEMENT_STATUS_LABEL, AGREEMENT_VERSION, PARTNER_AGREEMENT_CLAUSES } from "@/domain/partner-agreement";
 import { requiresTwoFactorEnrolment } from "@/lib/identity";
 import { getIdentity } from "@/lib/identity";
 
@@ -57,6 +59,18 @@ export default async function ProfilePage() {
           </div>)}</div> : <div className="empty-state"><div><strong>No organisation membership</strong><p>Start or track a partner request in Partner setup. Membership is granted by a human review, never by signing in.</p></div></div>}
         </section>
       </div>
+
+      {identity.memberships.length > 0 && <PartnerCompliance
+        memberships={identity.memberships.map((membership) => ({
+          id: membership.id,
+          organizationId: membership.organizationId,
+          organizationName: membership.organizationName,
+          role: membership.role,
+        }))}
+        agreementVersion={AGREEMENT_VERSION}
+        clauses={PARTNER_AGREEMENT_CLAUSES.map((clause) => ({ heading: clause.heading, body: clause.body }))}
+        statusLabel={AGREEMENT_STATUS_LABEL}
+      />}
 
       <TwoFactorPanel enabled={identity.twoFactorEnabled} requiredForRole={identity.platformRoles.length > 0} />
 
