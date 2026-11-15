@@ -18,7 +18,7 @@
 | Push | **PARTIAL — configuration only** | `push.configured: true` in public health. No live browser permission, real push-service delivery, expired subscription handling or device click path was tested in this audit. |
 | Operations safety gate | **DONE — safely closed** | Health reports `realOperationsEnabled: false`. The production launch-readiness evaluation is incomplete. Do not enable operations as part of this change. |
 | Launch approvals | **NOT APPROVED** | Live readiness lists unmet owner actions for accountable entity, insurance, data-protection contact, on-call coverage, independent penetration test, partner insurance/agreement, grievance window, real email and malware scanning. These require evidence or human approval, not code-only attestation. |
-| Source control / CI | **PARTIAL** | Current `main` CI run and recent PR checks were green in GitHub Actions at audit time. Branch-local `npm ci`, typecheck, lint, and focused worker tests passed. Full local suite, full production build, browser tests, real database workflows and restore drill were not run during this audit. |
+| Source control / CI | **DONE — automation only** | The PR's latest GitHub CI run completed green: verifier/build/browser suite, hosted-shape, native PostgreSQL + auth, disposable PostgreSQL browser workflow, Docker Compose and Windows jobs. Local branch: `npm ci`, TypeScript, ESLint, 479/479 Vitest tests, synthetic-env production build and npm audits passed. CI database/auth and browser tests use synthetic/disposable systems; they do not establish live account deliverability or production restore. |
 | Billing / paid offer | **NOT APPROVED** | No customer-validated paid offering, approved pricing, merchant account or billing implementation was evidenced. No payments were accepted or tested. |
 | Institutional enquiry pipeline | **NOT IMPLEMENTED / NOT VERIFIED** | Existing contact page provides account-holder support navigation and may publish a configured data-protection contact. It is not a public institutional lead CRM. No enquiry form, consent record or admin sales pipeline was verified. |
 
@@ -44,6 +44,6 @@ These are source changes only until reviewed, merged, deployed and rechecked. Gr
 - Read-only live health and public page inspection are not a full browser security assessment.
 - Automated tests and dependency audit are not independent penetration testing or certification.
 - Provider acceptance is not inbox delivery; push configuration is not device delivery.
-- A database backup script existing is not a successful recoverability test.
+- CI passed a disposable PostgreSQL backup/restore test. That does not prove a production backup is complete, retained or recoverable; no production restore was attempted.
 - Public Joka directory records are not verified partner relationships.
 - No real donation, person served, food-safety outcome, customer, sponsorship, revenue or partnership is claimed by this report.

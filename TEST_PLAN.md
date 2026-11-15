@@ -75,9 +75,9 @@ is reported continuously by `/api/health` under `delivery`.
 | `npm run build` without production env | EXPECTED FAIL | Fails closed during route collection because `DATABASE_URL` is required in production; no real env was available |
 | `npm run build` with synthetic production-shaped env | PASS | Optimized build generated all routes; fake `example.test` database URLs and synthetic keys only; no live DB was contacted |
 | `npm audit --audit-level=moderate` and production-only audit | PASS | 0 reported vulnerabilities |
-| Playwright | NOT RUN here | No live authenticated browser flow in this audit; historical CI evidence is not a substitute for this deployment's account flow |
-| `npm run test:local-domain` | NOT RUN here | Requires a separately provisioned disposable PostgreSQL service |
-| `npm run test:hosted-shape` | NOT RUN in this turn | Previous CI result is historical; not re-executed on this working branch |
+| Playwright | PASS in PR CI; NOT RUN locally | CI browser suite uses synthetic/disposable data; no authenticated production browser flow was performed |
+| `npm run test:local-domain` | PASS in PR CI; NOT RUN locally | CI disposable PostgreSQL; does not test the hosted production database |
+| `npm run test:hosted-shape` | PASS in PR CI; NOT RUN locally | CI hosted-shape simulation does not establish SMTP inbox or physical-device push delivery |
 | `scripts/hosted-smoke.mjs` | NOT RUN | No controlled test identity/inbox authorized; no account created |
 | Production email | BLOCKED | Live health reports `test_sink`, not real inbox delivery |
 | Production worker/scheduler | NOT READY | Live health reports worker and scheduled drain `never_seen`; the branch fixes the scheduled workflow target but is not deployed |
