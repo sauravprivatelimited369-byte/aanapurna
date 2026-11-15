@@ -449,8 +449,9 @@ What it needs from the host, and how to tell that it has it:
 
 - **The function instance must be kept alive after the response.** Vercel does
   this for `after()`. It is the one assumption everything above rests on, and it
-  cannot be tested from a build sandbox. `GET /api/health` reports it without
-  signing in:
+  cannot be tested from a build sandbox. It was observed in production on
+  2026-11-15: an email left three seconds after the request that queued it (see
+  "Evidence and limits"). `GET /api/health` reports it without signing in:
 
   ```
   "delivery": { "afterResponse":  { "status": "seen", "ageSeconds": 41 },
@@ -615,6 +616,41 @@ email section above.
   and deployment `dpl_BA9tbdWyPLDT6y592b9WgKGPd848` at `f00719a` is the first
   to reach **`READY`** (480 packages, migrations no-op, `db:check` pass, full
   `next build`). It is a protected preview, not a production release.
+- Delivery without a worker (2026-11-15, pull request #14, merge `dcd0f0f`):
+  the branch build `dpl_8yXWzxJCydJEhy9vp9QH463U4pVD` applied migrations 27 and
+  28 and passed `db:check` (`35` RLS tables, `41` functions, `28` migrations,
+  `webReachableDeviceFunctions: 0`, no problems). Production deployment
+  `dpl_8eWVj2GEfcU5ViChgARTUU2j788B` is **`READY`** and serves
+  `annapurna-link.vercel.app`; its `/api/health` is `ok` and carries the
+  `delivery` block. CI passed all seven jobs on the branch, the pull request and
+  `main` (runs
+  [43749427129](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43749427129),
+  [43749689622](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43749689622),
+  [43750096232](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43750096232)).
+  **Delivery after the response, observed in production:** one request was
+  sent to the live site from a GitHub runner
+  ([run 43750701357](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43750701357)),
+  asking for a fresh verification link for the fictional
+  `capture-check-…@example.com` account. Verbatim from the database afterwards:
+
+  ```
+  verification    queued 19:08:22.590  sent 19:08:25.590   3.00 s
+  password_reset  queued 16:37:12.056  sent 19:08:25.548   (had been waiting)
+  password_reset  queued 18:01:53.613  sent 19:08:25.735   (had been waiting)
+  service_health  after-response-delivery  ok @ 19:08:25.924
+                  {"mailSent": 3, "mailFailed": 0, "pushFailed": 0, "pushDelivered": 0}
+  ```
+
+  and `/api/health` then read
+  `"delivery":{"afterResponse":{"status":"seen","ageSeconds":55},"scheduledDrain":{"status":"never_seen","ageSeconds":null}}`.
+  No worker ran and nobody called the drain. "Sent" means the capture service
+  accepted the message; none of the three reached a person. The temporary
+  workflow ran for that one push and is deleted.
+  **Not yet observed:** a scheduled drain on the new code, and a push of any
+  kind - no device is registered, because nobody can sign in. A manual
+  `workflow_dispatch` of the drain was refused
+  (`403 Resource not accessible by integration`), like the repository secrets
+  below. No real push service or device has been involved at any point.
 - GitHub Actions repository secrets could **not** be set by the integration
   (`403 Resource not accessible by integration`). Migrations are therefore run
   by the Vercel build command instead of a GitHub Actions secret-based job.

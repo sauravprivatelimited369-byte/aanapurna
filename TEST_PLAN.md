@@ -58,9 +58,11 @@ delivered them. It also covers a device whose browser has unsubscribed, a push s
 failing, a shared phone, older undeliverable mail in the way, and what the web role can reach with
 no session. Underneath it, `tests/push-pipeline.test.ts` and `tests/outbox-backlog.test.ts` run the
 claim, lease, retry and backlog rules against the real migrations, and `tests/inline-delivery.test.ts`
-and `tests/worker-drain-route.test.ts` pin the pass itself and the drain route. **Not covered
-anywhere:** a real push service, a real permission prompt, and whether the host keeps a function
-alive after its response — the last is reported by `/api/health` under `delivery` once deployed.
+and `tests/worker-drain-route.test.ts` pin the pass itself and the drain route. **Not covered by
+any check:** a real push service, a real permission prompt, and whether the host keeps a function
+alive after its response. The last was observed once in production on 2026-11-15 (an email sent
+three seconds after the request that queued it; `HOSTED_DEPLOYMENT.md`, "Evidence and limits") and
+is reported continuously by `/api/health` under `delivery`.
 
 ## Status board
 
