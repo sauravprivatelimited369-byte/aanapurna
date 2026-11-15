@@ -234,7 +234,7 @@ describe("managed database Compose overlay", () => {
 });
 
 describe("Vercel build configuration", () => {
-  it("installs dev dependencies and gates the build on migrations", () => {
+  it("installs dev dependencies and delegates migration gating to the environment-aware build runner", () => {
     const config = JSON.parse(readFileSync("vercel.json", "utf8")) as {
       installCommand?: string;
       buildCommand?: string;
@@ -242,7 +242,7 @@ describe("Vercel build configuration", () => {
     // NODE_ENV=production is present during Vercel's install, so a plain
     // `npm ci` omits devDependencies and `next build` fails its type check.
     expect(config.installCommand).toBe("npm ci --include=dev");
-    expect(config.buildCommand).toBe("npm run db:migrate && npm run db:check && npm run build");
+    expect(config.buildCommand).toBe("node --import tsx scripts/vercel-build.mjs");
   });
 });
 

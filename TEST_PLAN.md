@@ -71,7 +71,8 @@ is reported continuously by `/api/health` under `delivery`.
 | `npm ci` | PASS | 496 packages installed; npm reported 0 vulnerabilities at install time |
 | `npm run typecheck` | PASS | clean |
 | `npm run lint` | PASS | clean |
-| `npm test -- --reporter=dot` | PASS | 479 / 479 tests, 41 files |
+| `npm test -- --reporter=dot` | PASS | 484 / 484 tests, 42 files |
+| `VERCEL_ENV=preview node --import tsx scripts/vercel-build.mjs` | PASS | Synthetic `example.test` URLs/keys only; verified preview path skips `db:migrate` and `db:check` and completes the app build |
 | `npm run build` without production env | EXPECTED FAIL | Fails closed during route collection because `DATABASE_URL` is required in production; no real env was available |
 | `npm run build` with synthetic production-shaped env | PASS | Optimized build generated all routes; fake `example.test` database URLs and synthetic keys only; no live DB was contacted |
 | `npm audit --audit-level=moderate` and production-only audit | PASS | 0 reported vulnerabilities |
