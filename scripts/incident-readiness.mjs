@@ -19,7 +19,6 @@ function read(path) {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
 }
 
-const service = read("src/domain/service.ts");
 const identity = read("src/lib/identity.ts");
 const proxy = read("src/proxy.ts");
 const migrations = read("drizzle/meta/_journal.json");
