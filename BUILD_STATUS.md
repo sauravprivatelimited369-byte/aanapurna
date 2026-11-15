@@ -289,6 +289,10 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   baseline, a manifest query and a comparator now make the next restore checkable in minutes
   (`ops/RESTORE_DRILL.md`). The drill also caught that migration 15 had been applied without being
   recorded in `drizzle.__drizzle_migrations`; that record is now written and the count reads 15.
-- **Still open:** no standby rota or named coordinator (people), no distance/ETA logic or receiver
-  self-collection path (product), and no SMTP credential, so no mail reaches a user on its own. See
-  the status column in [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).
+- **Transit and self-collection (migration 16):** distance and ETA are recorded per delivery from
+  optional coordinates or a checked-in gazetteer, a claim beyond the area's `max_transit_km` is
+  refused, a receiving organisation can collect its own food, and every policy-bearing table is now
+  `FORCE ROW LEVEL SECURITY`. There is still no traffic-aware routing.
+- **Still open:** no standby rota or named coordinator (people), and no SMTP credential, so no mail
+  reaches a user on its own. See the status column in
+  [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

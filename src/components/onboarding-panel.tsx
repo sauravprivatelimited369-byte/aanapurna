@@ -54,6 +54,13 @@ export function OnboardingPanel({ initialRole = "generator" }: { initialRole?: "
         cityOrDistrict: String(form.get("cityOrDistrict") ?? ""),
         stateOrRegion: String(form.get("stateOrRegion") ?? ""),
         postalCode: String(form.get("postalCode") ?? ""),
+        // Optional and paired. Without them the city name is matched against the built-in
+        // gazetteer, which is enough to estimate a distance but less precise.
+        ...(() => {
+          const latitude = String(form.get("latitude") ?? "").trim();
+          const longitude = String(form.get("longitude") ?? "").trim();
+          return latitude && longitude ? { latitude: Number(latitude), longitude: Number(longitude) } : {};
+        })(),
         contactName: String(form.get("contactName") ?? ""),
         contactEmail: String(form.get("contactEmail") ?? ""),
         contactPhone: String(form.get("contactPhone") ?? ""),
@@ -100,6 +107,8 @@ export function OnboardingPanel({ initialRole = "generator" }: { initialRole?: "
             <div className="form-field app-card--span-6"><label htmlFor="cityOrDistrict">City or district</label><input className="form-control" id="cityOrDistrict" name="cityOrDistrict" required maxLength={120} /></div>
             <div className="form-field app-card--span-6"><label htmlFor="stateOrRegion">State or region</label><input className="form-control" id="stateOrRegion" name="stateOrRegion" maxLength={120} /></div>
             <div className="form-field app-card--span-6"><label htmlFor="postalCode">Postal code</label><input className="form-control" id="postalCode" name="postalCode" maxLength={20} autoComplete="postal-code" /></div>
+            <div className="form-field app-card--span-6"><label htmlFor="latitude">Latitude <span className="form-hint">(optional)</span></label><input className="form-control" id="latitude" name="latitude" type="number" step="0.000001" min="-90" max="90" /></div>
+            <div className="form-field app-card--span-6"><label htmlFor="longitude">Longitude <span className="form-hint">(optional)</span></label><input className="form-control" id="longitude" name="longitude" type="number" step="0.000001" min="-180" max="180" /><span className="form-hint">Used only to estimate travel distance. Give both or neither; otherwise the city is used.</span></div>
             <div className="form-field app-card--span-6"><label htmlFor="serviceAreaId">Requested service area</label><select className="form-control" id="serviceAreaId" name="serviceAreaId" defaultValue=""><option value="">Not listed yet</option>{data?.serviceAreas.map((area) => <option key={area.id} value={area.id}>{area.label}</option>)}</select></div>
           </div>
           <div className="app-grid" style={{ gap: 10 }}>

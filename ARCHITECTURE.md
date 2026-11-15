@@ -79,8 +79,11 @@ donation stays recalled.
 
 ## Known architectural gaps
 
-- RLS is enabled on the application tables (including the second-factor table) but not `FORCE`d. The runtime role is not the owner, so policies do
-  apply; `FORCE` would additionally protect against a future grant mistake.
+- RLS is enabled and `FORCE`d on every policy-bearing application table (migration 16). The owner
+  holds `BYPASSRLS` so migrations and definer functions still work, while a future accidental
+  ownership change cannot quietly bypass a policy.
+- Distance is approximated, not routed: exact coordinates when an organisation supplies them, else a
+  checked-in gazetteer of 43 Indian places matched on the city name. See `src/domain/transit.ts`.
 - The Content-Security-Policy is enforcing and nonce-based (`src/proxy.ts`). Documents rendered per
   request get a fresh nonce that Next.js attaches to its own scripts. The pre-rendered public pages
   are built once, cannot carry a per-request nonce, and keep `'unsafe-inline'` for scripts; the list

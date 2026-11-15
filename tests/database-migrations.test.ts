@@ -18,6 +18,7 @@ const migrationFiles = [
   "20261114150000_recall_records_and_worker_heartbeat.sql",
   "20261115090000_helper_dispatch_and_escalation.sql",
   "20261115120000_two_factor_for_privileged_accounts.sql",
+  "20261115140000_transit_limits_and_self_collection.sql",
 ];
 
 let database: PGlite;
@@ -708,5 +709,85 @@ describe("Second factor storage", () => {
     await expect(withRole("annapurna_app", "2fa-other", async () => {
       await database.query("SELECT secret FROM public.two_factor");
     })).rejects.toThrow(/permission denied/i);
+  });
+});
+
+describe("Transit limits and receiver self-collection", () => {
+  it("forces row-level security so the owner is not exempt", async () => {
+    const tables = await database.query<{ relname: string; forced: boolean }>(`
+      SELECT c.relname, c.relforcerowsecurity AS forced
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relrowsecurity
+      ORDER BY c.relname
+    `);
+    expect(tables.rows.length).toBeGreaterThan(20);
+    expect(tables.rows.filter((row) => !row.forced)).toEqual([]);
+  });
+
+  it("seeds a gazetteer so a city name is enough to estimate a distance", async () => {
+    const places = await database.query<{ count: string; normalized: string }>(`
+      SELECT count(*)::text AS count, min(normalized_name) AS normalized FROM public.geo_places
+    `);
+    expect(Number(places.rows[0]?.count)).toBeGreaterThan(30);
+    const match = await database.query<{ latitude: string }>(`
+      SELECT latitude FROM public.geo_places WHERE normalized_name = 'cuttack'
+    `);
+    expect(Number(match.rows[0]?.latitude)).toBeCloseTo(20.46, 1);
+  });
+
+  it("defaults every delivery to a Helper and records an unmeasured route honestly", async () => {
+    const columns = await database.query<{ column_default: string | null; is_nullable: string }>(`
+      SELECT column_default, is_nullable FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'delivery_jobs'
+        AND column_name IN ('collection_mode', 'transit_distance_km', 'transit_eta_minutes')
+      ORDER BY column_name
+    `);
+    expect(columns.rows[0]?.column_default).toContain("helper_delivery");
+    expect(columns.rows[1]?.is_nullable).toBe("YES");
+    expect(columns.rows[2]?.is_nullable).toBe("YES");
+  });
+
+  it("lets the application write only the transit columns it needs", async () => {
+    const privileges = await database.query<{
+      mode: boolean; distance: boolean; eta: boolean; exception_reason: boolean;
+    }>(`
+      SELECT
+        has_column_privilege('annapurna_app', 'public.delivery_jobs', 'collection_mode', 'UPDATE') AS mode,
+        has_column_privilege('annapurna_app', 'public.delivery_jobs', 'transit_distance_km', 'UPDATE') AS distance,
+        has_column_privilege('annapurna_app', 'public.delivery_jobs', 'transit_eta_minutes', 'UPDATE') AS eta,
+        has_column_privilege('annapurna_app', 'public.delivery_jobs', 'escalated_at', 'UPDATE') AS exception_reason
+    `);
+    expect(privileges.rows[0]).toEqual({ mode: true, distance: true, eta: true, exception_reason: false });
+  });
+
+  it("treats a receiver collecting its own food as the assigned collector", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('receiver-self', 'Receiver staff', 'receiver-self@example.test', true),
+        ('stranger', 'Stranger', 'stranger@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('receiver-self', 'active'), ('stranger', 'active');
+      INSERT INTO public.organizations (id, name, type, status, operating_address, city_or_district, contact_name, contact_email, created_by)
+      VALUES ('00000000-0000-4000-8000-0000000000a1', 'Self Receiver', 'receiver', 'verified', 'Address', 'Cuttack', 'Contact', 'c@example.test', 'receiver-self');
+      INSERT INTO public.organization_memberships (organization_id, user_id, role, status)
+      VALUES ('00000000-0000-4000-8000-0000000000a1', 'receiver-self', 'operator', 'active');
+    `);
+    const membership = await withRole("annapurna_app", "receiver-self", async () =>
+      database.query<{ member: boolean }>(`
+        SELECT public.app_has_org_role('00000000-0000-4000-8000-0000000000a1', ARRAY['owner','manager','operator']) AS member
+      `));
+    expect(membership.rows[0]?.member).toBe(true);
+
+    // A stranger holds no role there, and without an assignment the predicate stays false for both.
+    const stranger = await withRole("annapurna_app", "stranger", async () => database.query<{ member: boolean }>(`
+      SELECT public.app_has_org_role('00000000-0000-4000-8000-0000000000a1', ARRAY['owner','manager','operator']) AS member
+    `));
+    expect(stranger.rows[0]?.member).toBe(false);
+
+    const definition = await database.query<{ prosrc: string }>(`
+      SELECT prosrc FROM pg_proc WHERE proname = 'app_is_active_assigned_helper'
+    `);
+    expect(definition.rows[0]?.prosrc).toContain("receiver_collection");
+    expect(definition.rows[0]?.prosrc).toContain("app_has_org_role");
   });
 });

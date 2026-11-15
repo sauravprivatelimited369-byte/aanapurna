@@ -49,8 +49,9 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
 1. **CSP is enforcing, with one documented exception.** Server-rendered documents get a fresh nonce
    and `'strict-dynamic'`; the eleven pre-rendered public pages cannot carry a per-request nonce and
    keep `'unsafe-inline'` for scripts. They hold no session, no mutating form and no personal data.
-2. **RLS is not FORCE'd.** Policies apply because the runtime role is not the owner; a future
-   careless `GRANT` is the scenario `FORCE` would catch.
+2. **RLS is forced.** Every policy-bearing table has `FORCE ROW LEVEL SECURITY`, so the owner is
+   subject to its own policies too. The owner (`postgres`) holds `BYPASSRLS` on the hosted project,
+   which is what lets migrations and SECURITY DEFINER functions continue to work.
 3. **The second factor is required for platform roles only.** `requireIdentity` returns
    `403 TWO_FACTOR_ENROLMENT_REQUIRED` until an administrator, safety officer, support agent or
    security administrator has confirmed TOTP, and the enrolment flow offers backup codes. A partner

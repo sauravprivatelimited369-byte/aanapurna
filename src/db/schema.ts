@@ -191,6 +191,9 @@ export const serviceAreas = pgTable(
     countryCode: text("country_code").notNull().default("IN"),
     stateOrRegion: text("state_or_region"),
     cityOrDistrict: text("city_or_district"),
+    // Null means "no limit configured": the estimate is shown but nothing is refused.
+    maxTransitKm: numeric("max_transit_km", { precision: 6, scale: 2 }),
+    averageSpeedKmph: numeric("average_speed_kmph", { precision: 5, scale: 1 }).notNull().default("20"),
     timezone: text("timezone").notNull().default("Asia/Kolkata"),
     active: boolean("active").notNull().default(false),
     createdAt: instant("created_at").notNull().defaultNow(),
@@ -210,6 +213,9 @@ export const organizations = pgTable(
     cityOrDistrict: text("city_or_district").notNull(),
     stateOrRegion: text("state_or_region"),
     postalCode: text("postal_code"),
+    // Optional exact location. When absent, the city name is matched against the gazetteer.
+    latitude: numeric("latitude", { precision: 9, scale: 6 }),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }),
     timezone: text("timezone").notNull().default("Asia/Kolkata"),
     contactName: text("contact_name").notNull(),
     contactEmail: text("contact_email").notNull(),
@@ -346,6 +352,12 @@ export const deliveryJobs = pgTable(
     collectionCondition: text("collection_condition"),
     deliveryCondition: text("delivery_condition"),
     exceptionReason: text("exception_reason"),
+    // How the food travels: by an approved Helper, or collected by the receiving organisation.
+    collectionMode: text("collection_mode").notNull().default("helper_delivery"),
+    // Recorded once at assignment. Null means the distance could not be established.
+    transitDistanceKm: numeric("transit_distance_km", { precision: 6, scale: 2 }),
+    transitEtaMinutes: integer("transit_eta_minutes"),
+    transitCheckedAt: instant("transit_checked_at"),
     // Set by the escalation sweep once operations staff have been told an open
     // job has gone unclaimed, so the same job is not reported every run.
     escalatedAt: instant("escalated_at"),
@@ -359,6 +371,20 @@ export const deliveryJobs = pgTable(
     uniqueIndex("delivery_jobs_active_helper_uq").on(table.helperUserId, table.donationId),
   ],
 );
+
+/**
+ * Read-only gazetteer of Indian places, matched against the free-text city the onboarding form
+ * captures. It exists so a distance can be estimated without collecting coordinates from anyone
+ * first, and so the application never invents a number it cannot support.
+ */
+export const geoPlaces = pgTable("geo_places", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  normalizedName: text("normalized_name").notNull().unique(),
+  latitude: numeric("latitude", { precision: 9, scale: 6 }).notNull(),
+  longitude: numeric("longitude", { precision: 9, scale: 6 }).notNull(),
+  createdAt: instant("created_at").notNull().defaultNow(),
+});
 
 export const deliveryDestinationDetails = pgTable("delivery_destination_details", {
   deliveryJobId: uuid("delivery_job_id").primaryKey().references(() => deliveryJobs.id, { onDelete: "cascade" }),

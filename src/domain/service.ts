@@ -8,6 +8,7 @@ import {
   deliveryDestinationDetails,
   deliveryJobs,
   dataRequests,
+  geoPlaces,
   donationOffers,
   donationPrivateDetails,
   donations,
@@ -29,6 +30,7 @@ import { HttpError } from "@/lib/http";
 import { auth } from "@/lib/auth";
 import { withPasswordResetCapture } from "@/email/reset-link-capture";
 import { canAccessOrganization, hasAnyRole, type Identity } from "@/lib/identity";
+import { assessTransit, normalizePlaceName, type Coordinates, type TransitAssessment } from "@/domain/transit";
 import {
   createDeliveryCode,
   decryptValue,
@@ -277,6 +279,8 @@ export async function requestOnboarding(identity: Identity, input: OnboardingInp
       cityOrDistrict: input.cityOrDistrict,
       stateOrRegion: input.stateOrRegion,
       postalCode: input.postalCode,
+      latitude: input.latitude === null || input.latitude === undefined ? null : String(input.latitude),
+      longitude: input.longitude === null || input.longitude === undefined ? null : String(input.longitude),
       contactName: input.contactName,
       contactEmail: input.contactEmail.toLowerCase(),
       contactPhone: input.contactPhone,
@@ -442,7 +446,7 @@ export async function getDonationDetail(identity: Identity, donationId: string) 
       pickupAddress: donationPrivateDetails.pickupAddress,
       pickupInstructions: donationPrivateDetails.pickupInstructions,
     }).from(donationPrivateDetails).where(eq(donationPrivateDetails.donationId, donation.id)).limit(1);
-    const assignedJob = await tx.select({ helperUserId: deliveryJobs.helperUserId, id: deliveryJobs.id })
+    const assignedJob = await tx.select({ helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode, id: deliveryJobs.id })
       .from(deliveryJobs).where(eq(deliveryJobs.donationId, donation.id)).limit(1);
     const authorized = canAccessOrganization(identity, donation.generatorOrganizationId, ["owner", "manager", "operator", "viewer"]) ||
       (donation.receiverOrganizationId !== null && canAccessOrganization(identity, donation.receiverOrganizationId, ["owner", "manager", "operator", "viewer"])) ||
@@ -684,18 +688,144 @@ export async function respondToOffer(identity: Identity, offerId: string, input:
   });
 }
 
-export async function claimDelivery(identity: Identity, jobId: string) {
+/**
+ * Where an organisation actually is.
+ *
+ * Two sources, in order: exact coordinates the organisation supplied, then the checked-in gazetteer
+ * matched against the city the onboarding form captured. Returning null is a real answer - callers
+ * must report "distance unknown" rather than pretending the delivery is local.
+ */
+async function resolveOrganizationCoordinates(
+  tx: AppTransaction,
+  organizationId: string,
+): Promise<Coordinates | null> {
+  const [organization] = await tx.select({
+    latitude: organizations.latitude,
+    longitude: organizations.longitude,
+    city: organizations.cityOrDistrict,
+  }).from(organizations).where(eq(organizations.id, organizationId)).limit(1);
+  if (!organization) return null;
+  if (organization.latitude !== null && organization.longitude !== null) {
+    return { latitude: Number(organization.latitude), longitude: Number(organization.longitude) };
+  }
+  const candidates = [...new Set(
+    organization.city
+      .split(",")
+      .flatMap((part) => [part, part.replace(/\bdistrict\b/gi, "")])
+      .map(normalizePlaceName)
+      .filter(Boolean),
+  )];
+  if (candidates.length === 0) return null;
+  const [place] = await tx.select({ latitude: geoPlaces.latitude, longitude: geoPlaces.longitude })
+    .from(geoPlaces).where(inArray(geoPlaces.normalizedName, candidates)).limit(1);
+  if (!place || place.latitude === null || place.longitude === null) return null;
+  return { latitude: Number(place.latitude), longitude: Number(place.longitude) };
+}
+
+type TransitSnapshot = {
+  assessment: TransitAssessment;
+  averageSpeedKmph: number;
+  limitKm: number | null;
+};
+
+/** Compute the distance and ETA for a job's route using the area's configured speed and limit. */
+async function assessJobTransit(
+  tx: AppTransaction,
+  input: { serviceAreaId: string | null; generatorOrganizationId: string; receiverOrganizationId: string },
+): Promise<TransitSnapshot> {
+  let averageSpeedKmph = 20;
+  let limitKm: number | null = null;
+  if (input.serviceAreaId) {
+    const [area] = await tx.select({
+      maxTransitKm: serviceAreas.maxTransitKm,
+      averageSpeedKmph: serviceAreas.averageSpeedKmph,
+    }).from(serviceAreas).where(eq(serviceAreas.id, input.serviceAreaId)).limit(1);
+    if (area?.averageSpeedKmph !== null && area?.averageSpeedKmph !== undefined) averageSpeedKmph = Number(area.averageSpeedKmph);
+    if (area?.maxTransitKm !== null && area?.maxTransitKm !== undefined) limitKm = Number(area.maxTransitKm);
+  }
+  const [from, to] = await Promise.all([
+    resolveOrganizationCoordinates(tx, input.generatorOrganizationId),
+    resolveOrganizationCoordinates(tx, input.receiverOrganizationId),
+  ]);
+  return {
+    assessment: assessTransit({ from, to, averageSpeedKmph, limitKm, handoverMinutes: 10 }),
+    averageSpeedKmph,
+    limitKm,
+  };
+}
+
+function transitColumns(transit: TransitSnapshot) {
+  return transit.assessment.known
+    ? {
+        transitDistanceKm: String(transit.assessment.distanceKm),
+        transitEtaMinutes: transit.assessment.etaMinutes,
+        transitCheckedAt: new Date(),
+      }
+    : { transitDistanceKm: null, transitEtaMinutes: null, transitCheckedAt: new Date() };
+}
+
+/**
+ * The person acting on a delivery must be its assigned collector, and the collector must still be
+ * entitled to act: an approved Helper, or - for a self-collected delivery - a live operator of the
+ * receiving organisation.
+ */
+async function assertAssignedCollector(
+  tx: AppTransaction,
+  identity: Identity,
+  job: { helperUserId: string | null; collectionMode: string; receiverOrganizationId: string },
+  action: string,
+): Promise<void> {
+  if (job.helperUserId !== identity.id) {
+    throw new HttpError(403, `Only the assigned collector can ${action}.`, "COLLECTOR_NOT_ASSIGNED");
+  }
+  if (job.collectionMode === "receiver_collection") {
+    const [membership] = await tx.select({ role: organizationMemberships.role })
+      .from(organizationMemberships)
+      .where(and(
+        eq(organizationMemberships.userId, identity.id),
+        eq(organizationMemberships.organizationId, job.receiverOrganizationId),
+        eq(organizationMemberships.status, "active"),
+      ))
+      .limit(1);
+    if (!membership || !["owner", "manager", "operator"].includes(membership.role)) {
+      throw new HttpError(403, "You no longer hold an active role in the receiving organisation.", "RECEIVER_ROLE_REQUIRED");
+    }
+    return;
+  }
+  const [helper] = await tx.select({ status: helperProfiles.status })
+    .from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
+  if (helper?.status !== "active") {
+    throw new HttpError(403, "Your Helper approval is not active. Contact operations.", "HELPER_NOT_APPROVED");
+  }
+}
+
+/**
+ * Assign a delivery to a collector.
+ *
+ * Two modes share one state machine:
+ *   * `helper_delivery` - an approved Helper inside the donation's service area claims it;
+ *   * `receiver_collection` - the receiving organisation collects its own food, so the receiving
+ *     operator becomes the assigned collector and no Helper is needed.
+ *
+ * Both are refused when the area's transit limit is configured and the route is longer than it.
+ * That limit is the answer to "how far is too far": before this, distance never entered the
+ * decision at all.
+ */
+export async function claimDelivery(identity: Identity, jobId: string, options?: { selfCollection?: boolean }) {
   assertOperationsEnabled();
+  const selfCollection = options?.selfCollection === true;
   return withDomainContext(identity.id, async (tx) => {
-    const [helper] = await tx.select({ status: helperProfiles.status, serviceAreaId: helperProfiles.serviceAreaId })
-      .from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (!helper || helper.status !== "active") throw new HttpError(403, "Only an approved Helper can claim a delivery.", "HELPER_NOT_APPROVED");
+    const [helper] = selfCollection
+      ? []
+      : await tx.select({ status: helperProfiles.status, serviceAreaId: helperProfiles.serviceAreaId })
+          .from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
+    if (!selfCollection && (!helper || helper.status !== "active")) throw new HttpError(403, "Only an approved Helper can claim a delivery.", "HELPER_NOT_APPROVED");
 
     const [job] = await tx.select({
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       claimExpiresAt: deliveryJobs.claimExpiresAt,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
@@ -716,15 +846,53 @@ export async function claimDelivery(identity: Identity, jobId: string) {
     if (job.pickupLatestAt.getTime() <= Date.now() || !["reserved", "assigned"].includes(job.donationStatus)) {
       throw new HttpError(409, "The collection window has expired or the food is on hold.", "DONATION_NOT_CLAIMABLE");
     }
-    if (!helper.serviceAreaId || helper.serviceAreaId !== job.serviceAreaId) throw new HttpError(403, "This delivery is outside your approved service area.", "SERVICE_AREA_MISMATCH");
+    if (!selfCollection && (!helper?.serviceAreaId || helper.serviceAreaId !== job.serviceAreaId)) {
+      throw new HttpError(403, "This delivery is outside your approved service area.", "SERVICE_AREA_MISMATCH");
+    }
+    if (selfCollection) {
+      const [membership] = await tx.select({ role: organizationMemberships.role })
+        .from(organizationMemberships)
+        .where(and(
+          eq(organizationMemberships.userId, identity.id),
+          eq(organizationMemberships.organizationId, job.receiverOrganizationId),
+          eq(organizationMemberships.status, "active"),
+        ))
+        .limit(1);
+      if (!membership || !["owner", "manager", "operator"].includes(membership.role)) {
+        throw new HttpError(403, "Only an active operator of the receiving organisation can collect this delivery.", "RECEIVER_ROLE_REQUIRED");
+      }
+      if (job.collectionMode === "receiver_collection") {
+        // already configured; nothing to change
+      }
+    }
+    // Refuse a route the area has declared too long. An unknown distance never blocks a claim: the
+    // application does not invent a number and does not punish missing coordinates.
+    const transit = await assessJobTransit(tx, {
+      serviceAreaId: job.serviceAreaId,
+      generatorOrganizationId: job.generatorOrganizationId,
+      receiverOrganizationId: job.receiverOrganizationId,
+    });
+    if (transit.assessment.known && transit.assessment.withinLimit === false) {
+      throw new HttpError(
+        409,
+        `This route is about ${transit.assessment.distanceKm} km, beyond the ${transit.limitKm} km limit for this service area. Ask operations to review the area.`,
+        "DELIVERY_OUTSIDE_TRANSIT_LIMIT",
+      );
+    }
 
     const now = new Date();
-    const claimExpiresAt = new Date(now.getTime() + 30 * 60_000);
+    // A Helper confirms within 30 minutes or the claim lapses. A receiver collecting its own food
+    // holds the assignment until the collection window closes - there is nobody to hand it back to.
+    const claimExpiresAt = selfCollection
+      ? new Date(Math.min(job.pickupLatestAt.getTime(), now.getTime() + 6 * 60 * 60_000))
+      : new Date(now.getTime() + 30 * 60_000);
     const [updated] = await tx.update(deliveryJobs).set({
       status: "assigned",
       helperUserId: identity.id,
       claimedAt: now,
       claimExpiresAt,
+      collectionMode: selfCollection ? "receiver_collection" : "helper_delivery",
+      ...transitColumns(transit),
       updatedAt: now,
     }).where(eq(deliveryJobs.id, job.id)).returning({ id: deliveryJobs.id });
     if (!updated) throw new HttpError(409, "Another Helper claimed this delivery first.", "DELIVERY_CLAIMED");
@@ -733,15 +901,34 @@ export async function claimDelivery(identity: Identity, jobId: string) {
       donationId: job.donationId,
       deliveryJobId: job.id,
       actorUserId: identity.id,
-      eventType: "helper.assigned",
+      eventType: selfCollection ? "receiver.self_collection" : "helper.assigned",
       occurredAt: now,
-      details: { claimExpiresAt: claimExpiresAt.toISOString() },
+      details: {
+        claimExpiresAt: claimExpiresAt.toISOString(),
+        collectionMode: selfCollection ? "receiver_collection" : "helper_delivery",
+        ...(transit.assessment.known
+          ? { distanceKm: transit.assessment.distanceKm, etaMinutes: transit.assessment.etaMinutes }
+          : { distance: "unknown" }),
+      },
     });
     await audit(tx, identity, "delivery.claimed", "delivery_job", job.id, undefined, { claimExpiresAt: claimExpiresAt.toISOString() });
     await notifyOrganization(tx, job.generatorOrganizationId, job.donationId, "delivery.assigned", "A Helper claimed your donation", `${job.donationName} has an assigned Helper.`, `/app/deliveries/${job.id}`);
     await notifyOrganization(tx, job.receiverOrganizationId, job.donationId, "delivery.assigned", "A Helper is assigned", `${job.donationName} is assigned for collection.`, `/app/deliveries/${job.id}`);
-    await notifyUser(tx, identity.id, null, "delivery.assigned", "Delivery assigned to you", `You have 30 minutes to confirm collection of ${job.donationName}.`, `/app/deliveries/${job.id}`);
-    return { id: job.id, status: "assigned" as const, claimExpiresAt };
+    if (selfCollection) {
+      await notifyUser(tx, identity.id, null, "delivery.assigned", "You are collecting this delivery",
+        `Your organisation is collecting ${job.donationName} itself. Record collection before the window closes.`, `/app/deliveries/${job.id}`);
+    } else {
+      await notifyUser(tx, identity.id, null, "delivery.assigned", "Delivery assigned to you", `You have 30 minutes to confirm collection of ${job.donationName}.`, `/app/deliveries/${job.id}`);
+    }
+    return {
+      id: job.id,
+      status: "assigned" as const,
+      claimExpiresAt,
+      collectionMode: selfCollection ? "receiver_collection" as const : "helper_delivery" as const,
+      transit: transit.assessment.known
+        ? { distanceKm: transit.assessment.distanceKm, etaMinutes: transit.assessment.etaMinutes }
+        : null,
+    };
   });
 }
 
@@ -769,7 +956,7 @@ export async function releaseDeliveryAssignment(identity: Identity, jobId: strin
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       collectedAt: deliveryJobs.collectedAt,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
@@ -828,7 +1015,7 @@ export async function confirmPickup(identity: Identity, jobId: string, input: Pi
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       claimExpiresAt: deliveryJobs.claimExpiresAt,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
@@ -844,9 +1031,7 @@ export async function confirmPickup(identity: Identity, jobId: string, input: Pi
       .where(eq(deliveryJobs.id, jobId))
       .for("update");
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
-    if (job.helperUserId !== identity.id) throw new HttpError(403, "Only the assigned Helper can confirm collection.", "HELPER_NOT_ASSIGNED");
-    const [helperProfile] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (helperProfile?.status !== "active") throw new HttpError(403, "Your Helper approval is not active. Contact operations.", "HELPER_NOT_APPROVED");
+    await assertAssignedCollector(tx, identity, { ...job, collectionMode: job.collectionMode ?? "helper_delivery" }, "confirm collection");
     if (job.status !== "assigned") throw new HttpError(409, "This delivery is not waiting for collection.", "DELIVERY_STATE_INVALID");
     const now = new Date();
     if (job.claimExpiresAt && job.claimExpiresAt.getTime() <= now.getTime()) throw new HttpError(409, "The assignment window expired. Ask operations to reassign this delivery.", "ASSIGNMENT_EXPIRED");
@@ -884,14 +1069,12 @@ export async function confirmDeliveryArrival(identity: Identity, jobId: string) 
   assertOperationsEnabled();
   return withDomainContext(identity.id, async (tx) => {
     const [job] = await tx.select({ id: deliveryJobs.id, donationId: deliveryJobs.donationId,
-      status: deliveryJobs.status, helperUserId: deliveryJobs.helperUserId, arrivedAt: deliveryJobs.arrivedAt,
+      status: deliveryJobs.status, helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode, arrivedAt: deliveryJobs.arrivedAt,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId, bestBeforeAt: donations.bestBeforeAt,
       name: donations.name }).from(deliveryJobs).innerJoin(donations, eq(donations.id, deliveryJobs.donationId))
       .where(eq(deliveryJobs.id, jobId)).for("update");
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
-    if (job.helperUserId !== identity.id) throw new HttpError(403, "Only the assigned Helper can report arrival.", "HELPER_NOT_ASSIGNED");
-    const [helper] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (helper?.status !== "active") throw new HttpError(403, "Your Helper approval is not active.", "HELPER_NOT_APPROVED");
+    await assertAssignedCollector(tx, identity, { ...job, collectionMode: job.collectionMode ?? "helper_delivery" }, "report arrival");
     if (job.status !== "collected") throw new HttpError(409, "Arrival can only be recorded for food in transit.", "DELIVERY_STATE_INVALID");
     if (job.arrivedAt) return { arrivedAt: job.arrivedAt };
     if (job.bestBeforeAt.getTime() <= Date.now()) throw new HttpError(409, "The food has expired. Do not hand it over; contact operations.", "DONATION_EXPIRED");
@@ -942,7 +1125,7 @@ export async function getReceiverDeliveryCode(identity: Identity, jobId: string)
       id: deliveryJobs.id,
       status: deliveryJobs.status,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       arrivedAt: deliveryJobs.arrivedAt,
       inspectionConfirmedAt: deliveryJobs.inspectionConfirmedAt,
     }).from(deliveryJobs).where(eq(deliveryJobs.id, jobId)).limit(1);
@@ -969,7 +1152,7 @@ export async function verifyDelivery(identity: Identity, jobId: string, code: st
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       collectedAt: deliveryJobs.collectedAt,
@@ -984,9 +1167,7 @@ export async function verifyDelivery(identity: Identity, jobId: string, code: st
       .where(eq(deliveryJobs.id, jobId))
       .for("update");
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
-    if (job.helperUserId !== identity.id) throw new HttpError(403, "Only the assigned Helper can complete this delivery.", "HELPER_NOT_ASSIGNED");
-    const [helperProfile] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (helperProfile?.status !== "active") throw new HttpError(403, "Your Helper approval is not active. Contact operations.", "HELPER_NOT_APPROVED");
+    await assertAssignedCollector(tx, identity, { ...job, collectionMode: job.collectionMode ?? "helper_delivery" }, "complete this delivery");
     if (job.status !== "collected") throw new HttpError(409, "This delivery is not ready for verification.", "DELIVERY_STATE_INVALID");
     if (!job.arrivedAt || !job.inspectionConfirmedAt) throw new HttpError(409, "Arrival and Receiver acceptance must be recorded before verification.", "INSPECTION_NOT_RECORDED");
     if (!job.collectedAt) throw new HttpError(500, "Collection history is incomplete. Do not complete delivery; contact operations.", "CUSTODY_DATA_INVALID");
@@ -1103,7 +1284,7 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       offerId: deliveryJobs.offerId,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       status: deliveryJobs.status,
       claimedAt: deliveryJobs.claimedAt,
       claimExpiresAt: deliveryJobs.claimExpiresAt,
@@ -1137,6 +1318,9 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       receiverContactName: deliveryDestinationDetails.receivingContactName,
       pickupCity: donations.pickupCity,
       donationStatus: donations.status,
+      transitDistanceKm: deliveryJobs.transitDistanceKm,
+      transitEtaMinutes: deliveryJobs.transitEtaMinutes,
+      transitCheckedAt: deliveryJobs.transitCheckedAt,
     }).from(deliveryJobs)
       .innerJoin(donations, eq(donations.id, deliveryJobs.donationId))
       .leftJoin(donationPrivateDetails, eq(donationPrivateDetails.donationId, donations.id))
@@ -1199,8 +1383,21 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       receiverContactName: assignedHelper ? job.receiverContactName : null,
       timeline,
       receipt: receipt ?? null,
+      transit: job.transitDistanceKm === null || job.transitEtaMinutes === null
+        ? null
+        : { distanceKm: Number(job.transitDistanceKm), etaMinutes: job.transitEtaMinutes, checkedAt: job.transitCheckedAt },
+      collectionMode: job.collectionMode,
       isAssignedToMe: assignedHelper,
       canClaim: Boolean(process.env.OPERATIONS_ENABLED === "true" && isEligibleOpenHelper && !assignedHelper && (job.status === "open" || (job.claimExpiresAt && job.claimExpiresAt.getTime() <= Date.now()))),
+      // A receiver that can reach the generator itself can collect the food instead of waiting for
+      // a Helper. Offered only while the job is unassigned and the collection window is open.
+      canSelfCollect: Boolean(
+        process.env.OPERATIONS_ENABLED === "true"
+        && receiverOperator
+        && job.status === "open"
+        && job.collectionMode !== "receiver_collection"
+        && job.pickupLatestAt.getTime() > Date.now(),
+      ),
       canPickup: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "assigned",
       canReportArrival: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "collected" && !job.arrivedAt,
       canConfirmInspection: process.env.OPERATIONS_ENABLED === "true" && receiverOperator && job.status === "collected" && Boolean(job.arrivedAt) && !job.inspectionConfirmedAt,
@@ -1318,7 +1515,7 @@ export async function reportDeliveryIncident(identity: Identity, jobId: string, 
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       donationStatus: donations.status,

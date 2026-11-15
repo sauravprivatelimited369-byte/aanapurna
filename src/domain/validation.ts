@@ -90,6 +90,9 @@ export const registrationSchema = z.object({
 
 export type RegistrationInput = z.infer<typeof registrationSchema>;
 
+const coordinatesPaired = <T extends { latitude?: number | null; longitude?: number | null }>(value: T) =>
+  (value.latitude === null || value.latitude === undefined) === (value.longitude === null || value.longitude === undefined);
+
 export const onboardingSchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("generator"),
@@ -98,6 +101,10 @@ export const onboardingSchema = z.discriminatedUnion("role", [
     cityOrDistrict: safeText(120),
     stateOrRegion: z.string().trim().max(120).optional().default(""),
     postalCode: z.string().trim().max(20).optional().default(""),
+    // Optional exact location. Without it the city is matched against the built-in gazetteer,
+    // which is enough for a distance estimate but less precise.
+    latitude: z.number().min(-90).max(90).optional().nullable(),
+    longitude: z.number().min(-180).max(180).optional().nullable(),
     contactName: safeText(120),
     contactEmail: z.string().email().max(254),
     contactPhone: z.string().trim().max(32).optional().default(""),
@@ -110,6 +117,10 @@ export const onboardingSchema = z.discriminatedUnion("role", [
     cityOrDistrict: safeText(120),
     stateOrRegion: z.string().trim().max(120).optional().default(""),
     postalCode: z.string().trim().max(20).optional().default(""),
+    // Optional exact location. Without it the city is matched against the built-in gazetteer,
+    // which is enough for a distance estimate but less precise.
+    latitude: z.number().min(-90).max(90).optional().nullable(),
+    longitude: z.number().min(-180).max(180).optional().nullable(),
     contactName: safeText(120),
     contactEmail: z.string().email().max(254),
     contactPhone: z.string().trim().max(32).optional().default(""),
@@ -124,7 +135,12 @@ export const onboardingSchema = z.discriminatedUnion("role", [
     availabilityNotes: z.string().trim().max(500).optional().default(""),
     trainingAcknowledged: z.literal(true),
   }).strict(),
-]);
+]).superRefine((value, ctx) => {
+  // Half a coordinate is worse than none: it places an organisation on the equator.
+  if (!coordinatesPaired(value as { latitude?: number | null; longitude?: number | null })) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["longitude"], message: "Give both coordinates, or neither." });
+  }
+});
 
 export const donationCreateSchema = z.object({
   organizationId: z.string().uuid(),

@@ -121,20 +121,33 @@ payment.
 
 ## 3. The app depends on a third person. Some days they help, some days they do not. Who moves the food, and what if the distance is vast?
 
-**Short answer: the pilot is deliberately limited to one small area, and distance is bounded by
-policy and human choice rather than by routing logic. If you need city-wide logistics, this is not
-that product yet.**
+**Short answer: the pilot is deliberately limited to one small area. Distance is now measured and a
+route beyond the area's limit is refused, and a receiving organisation can collect the food itself.
+What still does not exist is live routing around traffic.**
 
 **Enforced today:** a helper cannot claim a delivery outside their own approved service area —
 `SERVICE_AREA_MISMATCH` in `src/domain/service.ts`. Organisations outside every active service area
 cannot be matched. Policy and pickup windows bound how long food may sit. Service areas are database
 rows, not hardcoded cities, so a second area is a data change plus an approved policy.
 
-**Not implemented, and documented as out of scope:** live routing, ETAs, distance calculation,
-geocoding and paid maps (`PRODUCT_REQUIREMENTS.md`). There is no radius check, no travel-time
-estimate, and no feasibility check that the pickup and drop-off are reachable inside the food's
-remaining window. For the current pilot — Joka · IIM Calcutta, Kolkata — that is defensible because
-distances are short and known to the people involved. It is not defensible for "vast" distances.
+**Measured since migration 16:** straight-line distance between the two organisations, converted to
+road distance with a stated 1.25 factor, divided by the area's configured average speed, plus a
+ten-minute handover allowance. The result is stored on the delivery and shown as "about N km, about N
+minutes" — never as a guaranteed arrival time. When the service area has a `max_transit_km`, a claim
+beyond it is refused with `DELIVERY_OUTSIDE_TRANSIT_LIMIT`.
+
+**Where the coordinates come from:** exact `latitude`/`longitude` if an organisation supplies them
+during onboarding (optional, and both or neither), otherwise the city it entered is matched against a
+checked-in gazetteer of 43 Indian places. If neither yields a point, the delivery says "distance
+unknown" and nothing is refused — the application does not invent a number to fill the gap.
+
+**Receiver self-collection (migration 16):** a receiving organisation can collect the food itself
+instead of waiting for a Helper (`POST /api/jobs/[id]/self-collect`). The receiving operator becomes
+the assigned collector, the same collection code, custody events and receipt apply, and the job is
+refused under the same transit limit.
+
+**Still not implemented:** live traffic-aware routing, turn-by-turn directions, and paid maps
+(`PRODUCT_REQUIREMENTS.md`). The estimate is a planning aid, not a promise of arrival time.
 
 **What now catches the symptom rather than the cause:** a job nobody claims is escalated to
 operations within the threshold window (migration 14), so a delivery that stalls because the distance
@@ -359,10 +372,10 @@ Everything below is a real, open gap. None of it is solved by adding copy to the
 | G2b | No unclaimed-job escalation | **Fixed (migration 14)** — sweep notifies operations once per stale job or lapsed claim | — | Code + schedule | — |
 | G2c | An unresponsive Helper blocked the delivery; `assigned -> open` was forbidden | **Fixed (migration 14)** — audited operations release, pre-collection only | — | Code | — |
 | G2d | No standby rota, named coordinator or published pickup window | **Open** | Dispatch still depends on people being reachable | People | Operations |
-| G3 | No distance, travel time or ETA; only service-area equality. No receiver self-collection path | **Open** — stall backstop added, routing not | Unsafe to expand beyond a compact pilot area | Code | Product decision |
+| G3 | No distance, travel time or ETA; only service-area equality. No receiver self-collection path | **Fixed (migration 16)** — distance and ETA recorded per delivery from coordinates or a checked-in gazetteer, claims refused beyond the area's `max_transit_km`, receiving organisations can collect their own food | No traffic-aware routing; the estimate is a planning aid | Code | — |
 | G4a | No second factor | **Fixed (migration 15)** — TOTP enrolment with 10 backup codes, required for platform roles before application APIs serve them | — | Code | — |
 | G4b | CSP report-only | **Fixed** — enforcing nonce-based policy from `src/proxy.ts`; pre-rendered public pages use a documented relaxed policy | — | Code | — |
-| G4c | RLS not `FORCE`'d | **Open** | A future careless `GRANT` would not be caught by policies | Code | Engineering |
+| G4c | RLS not `FORCE`'d | **Fixed (migration 16)** — `FORCE ROW LEVEL SECURITY` on all 26 policies-bearing tables; the owner holds `BYPASSRLS`, so migrations and definer functions still work | — | Code | — |
 | G4d | No independent penetration test | **Open** — cannot be self-administered | Unknown vulnerabilities remain unknown | External review | Owner |
 | G5 | No legal entity, insurance, liability position or signed partner agreement | **Open** | Nobody is contractually answerable for harm | Legal | Owner |
 | G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | **Open** | Incident response is a document, not a capability | People | Owner |

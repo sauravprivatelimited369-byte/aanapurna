@@ -13,6 +13,7 @@ export function DeliveryActions({
   canViewCode,
   canReportIncident,
   canReleaseAssignment,
+  canSelfCollect,
 }: {
   jobId: string;
   canClaim: boolean;
@@ -23,6 +24,7 @@ export function DeliveryActions({
   canViewCode: boolean;
   canReportIncident: boolean;
   canReleaseAssignment: boolean;
+  canSelfCollect: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -52,6 +54,16 @@ export function DeliveryActions({
     setBusy(true); setError(""); setMessage("");
     try { await request("POST", `/api/jobs/${jobId}/claim`); setMessage("Delivery assigned to you. Check the collection window before travelling."); router.refresh(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Could not claim this delivery."); }
+    finally { setBusy(false); }
+  }
+
+  async function selfCollect() {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await request("POST", `/api/jobs/${jobId}/self-collect`);
+      setMessage("Your organisation is collecting this delivery. Record collection at the generator before the window closes; the same code and receipt steps apply.");
+      router.refresh();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not start a self-collection."); }
     finally { setBusy(false); }
   }
 
@@ -105,6 +117,7 @@ export function DeliveryActions({
   }
 
   return <div className="form-stack">
+    {canSelfCollect && <div><p className="form-hint">Your organisation can collect this food itself instead of waiting for a Helper. You become the assigned collector, and the same collection, code and receipt steps apply. Start only if you can reach the generator within the window.</p><button className="button button--secondary" type="button" disabled={busy} onClick={() => void selfCollect()}>{busy ? "Please wait…" : "Collect it ourselves"}</button></div>}
     {canClaim && <div><p className="form-hint">Claiming assigns this delivery to you for a limited window. Do not claim unless you can complete the collection.</p><button className="button button--primary" type="button" disabled={busy} onClick={() => void claim()}>{busy ? "Please wait…" : "Claim delivery"}</button></div>}
     {canPickup && <form className="form-stack" onSubmit={pickup}><div className="form-field"><label htmlFor="pickup-condition">Collection condition</label><textarea className="form-control" id="pickup-condition" required maxLength={500} value={pickupCondition} onChange={(event) => setPickupCondition(event.target.value)} placeholder="Describe packaging and any relevant handling observation" /></div><button className="button button--primary" type="submit" disabled={busy || pickupCondition.trim().length < 1}>{busy ? "Recording…" : "Confirm collection"}</button></form>}
     {canReportArrival && <div><p className="form-hint">Only report arrival when you are physically at the receiving location.</p><button className="button button--primary" type="button" disabled={busy} onClick={() => void reportArrival()}>{busy ? "Recording…" : "Report physical arrival"}</button></div>}

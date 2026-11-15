@@ -106,6 +106,13 @@
       "when": 1794734400000,
       "tag": "20261115120000_two_factor_for_privileged_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1794820800000,
+      "tag": "20261115140000_transit_limits_and_self_collection",
+      "breakpoints": true
     }
   ]
 }
