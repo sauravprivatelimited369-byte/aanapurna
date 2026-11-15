@@ -1,0 +1,14 @@
+{
+  "_comment": [
+    "Tables a migration is allowed to leave populated, and why. Both isolated-database fixtures",
+    "(tests/integration/local-domain.ts and scripts/run-local-workflow.mjs) refuse to run unless",
+    "every other table is empty, so a migration that smuggles in state is caught rather than",
+    "silently exercised. The two copies of that rule drifted once and cost two red CI runs, so the",
+    "list lives here and both read it. A test asserts both fixtures agree with this file."
+  ],
+  "tables": {
+    "geo_places": "The gazetteer (migration 16): read-only geography, identical on every instance.",
+    "directory_places": "The published public directory (migration 17): reference data, not a record.",
+    "data_retention_settings": "Retention windows (migration 21): configuration with CHECK (id = 1), seeded so the enforced numbers are a row rather than prose. No personal or operational record."
+  }
+}

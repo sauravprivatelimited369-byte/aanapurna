@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg, { Pool } from "pg";
+import seededReferenceTables_manifest from "./seeded-reference-tables.json";
 import type { Identity } from "../../src/lib/identity";
 
 if (process.env.RUN_LOCAL_DOMAIN_TEST !== "true" || process.env.NODE_ENV === "production" || process.env.OPERATIONS_ENABLED !== "false") {
@@ -31,16 +32,11 @@ try {
   // Refuse every non-empty application table, not just the main domain tables.
   // Synthetic approvals must never be added to a database containing real data.
   const tables = await admin.query<{ tablename: string }>("SELECT tablename FROM pg_tables WHERE schemaname='public'");
-  // Reference data seeded by a migration is not "data in the database". Two kinds are allowed:
-  //
-  //   * the gazetteer (migration 16) — read-only geography, identical on every instance;
-  //   * `data_retention_settings` (migration 21) — a singleton row holding the retention windows the
-  //     sweeper obeys. It is configuration with a CHECK (id = 1), seeded so the enforced numbers are
-  //     a row rather than prose; it carries no personal or operational record.
-  //
-  // Anything else arriving pre-populated means a migration is smuggling state, and this assertion is
-  // what catches it.
-  const seededReferenceTables = new Set(["geo_places", "directory_places", "data_retention_settings"]);
+  // Reference data a migration itself installs is not "data in the database". The allow-list and the
+  // reason for each entry live in seeded-reference-tables.json, read by both isolated-database
+  // fixtures, so the rule cannot drift between them again. Anything else arriving pre-populated means
+  // a migration is smuggling state, and this assertion is what catches it.
+  const seededReferenceTables = new Set(Object.keys(seededReferenceTables_manifest.tables));
   for (const { tablename } of tables.rows) {
     if (seededReferenceTables.has(tablename)) continue;
     const rows = await admin.query<{ count: string }>(`SELECT count(*)::text count FROM public.${pg.escapeIdentifier(tablename)}`);
