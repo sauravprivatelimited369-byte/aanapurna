@@ -46,7 +46,16 @@ async function main() {
     await client.query('BEGIN');
     try {
       for (const [name, password, superuser] of roles) {
-        await client.query(`CREATE ROLE ${escapeIdentifier(name)} LOGIN ${superuser ? 'SUPERUSER' : 'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'} PASSWORD ${escapeLiteral(password)}`);
+        // The migrator owns every table in this topology. Row-level security is forced on the
+        // application tables (migration 16), and FORCE applies to the owner too - so the owner needs
+        // BYPASSRLS, exactly as the hosted project's owner (`postgres`) has it. Without this, running
+        // migrations and seeding fixtures as the owner would be blocked by the very policies it owns.
+        const attributes = superuser
+          ? 'SUPERUSER'
+          : name === migrator
+            ? 'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION BYPASSRLS'
+            : 'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS';
+        await client.query(`CREATE ROLE ${escapeIdentifier(name)} LOGIN ${attributes} PASSWORD ${escapeLiteral(password)}`);
       }
       await client.query('COMMIT');
     } catch (error) {
