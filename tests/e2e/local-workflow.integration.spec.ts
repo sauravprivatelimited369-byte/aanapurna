@@ -7,7 +7,10 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 test.describe.configure({ retries: 0 }); // The seeded handover changes state and cannot safely be replayed.
 
 test("fictional Generator to Receiver inspection and verified receipt", async ({ browser }) => {
-  test.setTimeout(180_000);
+  // The whole journey runs well inside a minute; the only legitimate wait is for the collection
+  // window, which is scoped to its own step below. A tight timeout here means a control that changed
+  // name fails in seconds and says so, instead of burning three minutes and reporting only a timeout.
+  test.setTimeout(120_000);
   const password = process.env.WORKFLOW_TEST_PASSWORD;
   assert(password, "Use the isolated workflow fixture runner, not a shared or production server.");
   async function login(role: string): Promise<Page> {
@@ -65,6 +68,8 @@ test("fictional Generator to Receiver inspection and verified receipt", async ({
   const helper = claims[0] === 200 ? helper1 : helper2;
   const otherHelper = helper === helper1 ? helper2 : helper1;
   await helper.goto(jobUrl);
+  // The one intentional wait: the fixture opens collection 35 seconds out, and the database refuses
+  // an early collection, so the test must actually wait rather than pretend.
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, pickupFrom - Date.now()) + 100));
   await helper.getByLabel("Collection condition").fill("Fictional packaging observation");
   await helper.getByRole("button", { name: /confirm collection/i }).click();
@@ -79,9 +84,17 @@ test("fictional Generator to Receiver inspection and verified receipt", async ({
   await receiver.reload();
   await expect(receiver.getByRole("button", { name: /show delivery code/i })).toHaveCount(0);
   await receiver.getByLabel("Acceptance check observations").fill("Fictional inspection completed");
+  // The four arrival checks have no default: the acceptance button stays disabled until each is
+  // answered, because a pre-filled answer records a check nobody made. The test answers them the way
+  // a Receiver would, which is also the only way the button becomes clickable.
+  // Each check is its own labelled group, so this answers the four questions rather than the first
+  // one four times.
+  for (const check of [/seal was unbroken/i, /packaging was intact/i, /matched what was declared/i, /inside its declared time window/i]) {
+    await receiver.getByRole("group", { name: check }).getByRole("radio", { name: "Yes" }).check();
+  }
   await receiver.getByRole("checkbox", { name: /physically arrived/i }).check();
   await receiver.getByRole("button", { name: /record checks and acceptance/i }).click();
-  await expect(receiver.getByRole("status")).toContainText(/acceptance and observations were recorded/i);
+  await expect(receiver.getByRole("status")).toContainText(/checks and acceptance were recorded/i);
   await receiver.reload();
   const otherCodeStatus = await otherHelper.evaluate(async (id) => (await fetch(`/api/jobs/${id}/code`, { method: "POST" })).status, jobId);
   expect([403, 404]).toContain(otherCodeStatus);
