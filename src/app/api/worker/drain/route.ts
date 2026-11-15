@@ -36,7 +36,9 @@ export const maxDuration = 60;
  */
 
 const ALLOWED_REPOSITORY = "sauravprivatelimited369-byte/aanapurna";
-const ALLOWED_REFS = ["refs/heads/main", "refs/heads/arena/5b937561-aanapurna"];
+const ALLOWED_REFS = ["refs/heads/main"];
+const ALLOWED_WORKFLOW = `${ALLOWED_REPOSITORY}/.github/workflows/worker-drain.yml@refs/heads/main`;
+const ALLOWED_EVENTS = ["schedule", "workflow_dispatch"];
 const AUDIENCE = "annapurna-link-worker";
 
 function json(body: Record<string, unknown>, status: number) {
@@ -74,6 +76,8 @@ async function authorize(request: Request): Promise<{ ok: true; via: string } | 
     const result = verifyGithubOidcToken(token, {
       repository: ALLOWED_REPOSITORY,
       refs: ALLOWED_REFS,
+      workflowRef: ALLOWED_WORKFLOW,
+      eventNames: ALLOWED_EVENTS,
       audience: AUDIENCE,
       keys,
     });

@@ -27,7 +27,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      BASE: https://aanapurna-link-preview.vercel.app
+      # Always drain the canonical production app. Calling the preview alias can
+      # update a different deployment/database and leave production queues untouched.
+      BASE: https://annapurna-link.vercel.app
     steps:
       - name: Reject an anonymous request
         run: |
