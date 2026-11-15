@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
@@ -1772,5 +1774,22 @@ describe("a session cannot read somebody else's device", () => {
     // makes the wider grant safe rather than a hole.
     const workerRead = await database.query<{ id: string }>("SELECT * FROM public.app_push_targets('authz-suite-a')");
     expect(workerRead.rows.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the configuration check counts the functions it actually lists", () => {
+  /**
+   * The expected count used to be a literal beside the list of required functions. The list grew to 37
+   * and the literal still said 36, so a completely healthy database failed its own configuration check
+   * and the Vercel build stopped before it ever ran. A number maintained by hand beside a list is a
+   * number that will drift; this asserts that the check derives it instead.
+   */
+  it("has no hand-written expected count left to drift", () => {
+    const source = readFileSync(resolve(process.cwd(), "scripts/check-db.ts"), "utf8");
+    // The comparison must be against the list's own length, not a number typed next to it.
+    expect(source).toContain("REQUIRED_FUNCTIONS.length");
+    expect(source).not.toMatch(/required_functions !== \d+/);
+    // And the SQL must take the list as a parameter rather than embedding a second copy of it.
+    expect(source).toContain("= ANY($1::text[])");
   });
 });

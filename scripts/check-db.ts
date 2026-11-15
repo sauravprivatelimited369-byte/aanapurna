@@ -1,4 +1,52 @@
 import { Pool } from "pg";
+
+/**
+ * The functions this deployment cannot work without, by name.
+ *
+ * The expected count used to be a literal beside the list, and the two drifted: the list grew to 37 and
+ * the constant still said 36, so a *healthy* deployment failed its own configuration check and the
+ * Vercel build stopped. A number that has to be kept in step with a list by hand is a number that will
+ * fall out of step. The list is the source of truth now, and the count is measured from it.
+ */
+const REQUIRED_FUNCTIONS = [
+  "app_consume_delivery_code",
+  "app_mark_user_verified",
+  "app_find_receiver_candidates",
+  "app_notify_organization_members",
+  "app_notify_user",
+  "app_worker_reserve_outbox_batch",
+  "app_worker_defer_outbox",
+  "app_worker_mark_outbox_sent",
+  "app_worker_mark_outbox_failed",
+  "app_guard_user_profile_status",
+  "app_notify_area_helpers",
+  "app_escalate_delivery_backlog",
+  "app_launch_readiness",
+  "app_on_call_coverage",
+  "app_public_data_protection_contact",
+  "app_legal_entity",
+  "app_on_call_person",
+  "app_escalate_platform_readiness",
+  "app_public_directory",
+  "app_notify_platform_roles",
+  "app_current_agreement_version",
+  "app_apply_retention",
+  "app_redact_user",
+  "app_guard_audit_mutation",
+  "app_export_person",
+  "app_record_profile_correction",
+  "app_overdue_privacy_requests",
+  "app_overdue_support_cases",
+  "app_privacy_response_window_hours",
+  "app_public_response_window_contact",
+  "app_org_coordinates",
+  "app_normalize_place",
+  "app_notification_recipients",
+  "app_push_targets",
+  "app_unpushed_notifications",
+  "app_mark_push_delivered",
+  "app_revoke_push_subscription",
+] as const;
 import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../src/lib/database-config";
 
 
@@ -43,20 +91,7 @@ async function main(): Promise<void> {
         (SELECT count(*)::int FROM pg_proc function_info
           JOIN pg_namespace namespace ON namespace.oid = function_info.pronamespace
           WHERE namespace.nspname = 'public'
-            AND function_info.proname IN (
-              'app_consume_delivery_code','app_mark_user_verified','app_find_receiver_candidates',
-              'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
-              'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
-              'app_guard_user_profile_status',
-              'app_notify_area_helpers','app_escalate_delivery_backlog',
-              'app_launch_readiness','app_on_call_coverage','app_public_data_protection_contact',
-              'app_legal_entity','app_on_call_person','app_escalate_platform_readiness',
-              'app_public_directory','app_notify_platform_roles','app_current_agreement_version',
-              'app_apply_retention','app_redact_user','app_guard_audit_mutation',
-              'app_export_person','app_record_profile_correction','app_overdue_privacy_requests',
-              'app_overdue_support_cases','app_privacy_response_window_hours','app_public_response_window_contact',
-              'app_org_coordinates','app_normalize_place','app_notification_recipients','app_push_targets','app_unpushed_notifications','app_mark_push_delivered','app_revoke_push_subscription'
-            )) AS required_functions,
+            AND function_info.proname = ANY($1::text[])) AS required_functions,
         (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations,
         -- Supabase's public PostgREST roles must not reach application objects.
         -- Tables with RLS disabled (auth and internal tables) would otherwise be
@@ -75,7 +110,7 @@ async function main(): Promise<void> {
                         JOIN pg_roles grantee_role ON grantee_role.oid = acl.grantee
                         WHERE grantee_role.rolname IN ('anon', 'authenticated'))) AS exposed_functions
       FROM pg_roles role WHERE role.rolname = current_user
-    `);
+    `, [[...REQUIRED_FUNCTIONS]]);
     const row = result.rows[0];
     if (!row) throw new Error("The database role could not be identified.");
     const problems: string[] = [];
@@ -84,10 +119,11 @@ async function main(): Promise<void> {
     // deliberately below the current count, so dropping forced RLS from an existing table still
     // fails the check rather than hiding inside a coincidence.
     if (row.rls_tables < 31) problems.push(`expected at least 31 RLS-protected tables, found ${row.rls_tables}`);
-    // Migration 24 added two functions to the distance-ranked matching path. The count is exact rather
-    // than a floor because a missing function here is a silently broken feature, not a degraded one.
-    if (row.required_functions !== 36) problems.push(`expected required database functions, found ${row.required_functions}/36`);
-    if (row.migrations < 26) problems.push(`expected at least 25 applied migrations, found ${row.migrations}`);
+    // Exact rather than a floor: a missing function here is a silently broken feature, not a degraded
+    // one. The expected value comes from the list itself, because a literal beside it drifted once and
+    // failed a healthy deployment.
+    if (row.required_functions !== REQUIRED_FUNCTIONS.length) problems.push(`expected required database functions, found ${row.required_functions}/${REQUIRED_FUNCTIONS.length}`);
+    if (row.migrations < 26) problems.push(`expected at least 26 applied migrations, found ${row.migrations}`);
     if (row.exposed_tables > 0) problems.push(`Supabase public API roles can reach ${row.exposed_tables} application table(s); apply 20261114120000_revoke_public_api_privileges`);
     if (row.exposed_functions > 0) problems.push(`Supabase public API roles can execute ${row.exposed_functions} application function(s); apply 20261114120000_revoke_public_api_privileges`);
     console.info(JSON.stringify({
