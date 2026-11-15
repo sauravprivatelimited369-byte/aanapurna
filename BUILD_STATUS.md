@@ -1,5 +1,25 @@
 # Build status
 
+## Distance matching, notification email, four languages and a shorter home page — 2026-11-15
+
+Four requests from the owner, on `arena/5f99cb20-aanapurna` (PR #13). All CI green at `09f0869`:
+[run 43722103785](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43722103785)
+— **all eight checks pass**, including both Windows jobs and the browser suites.
+
+- **Matching uses real distance.** `app_find_receiver_candidates` matched on category, service area and capacity but returned candidates in planner order, so a Receiver two streets away and one 158 km away were indistinguishable. It now returns `distance_km` and `distance_source` alongside the order those produced, ranks nearest-first, reports `capacity_adequate` instead of silently filtering on it, and answers `unknown` rather than `0` when a coordinate is missing. `app_org_coordinates` resolves either a declared organisation point or the city centroid from the gazetteer, and a `precedence` column makes the exact point win — a `LIMIT 1` at the end of a `UNION ALL` does not, which was a real bug caught before merge. Migration `20261117090000_distance_ranked_matching.sql`.
+- **The map is a schematic and labels itself as one.** `src/components/transit-map.tsx` draws two points and a line in inline SVG. No tile provider and no routing service is used, called or implied: the component prints the straight-line distance and the road estimate as the different numbers they are, marks a gazetteer match as "city centre, not an exact address", and draws nothing at all when a coordinate is missing. Straight-line km are labelled "straight line" wherever they appear.
+- **Notification email now leaves the application.** In-app notifications existed with unread counts; the outbox carried authentication mail only, so a food offer expiring in an hour notified nobody who was not already looking at the app. `enqueueNotificationEmail` sends the same news to the people whose notification list was just written. Migration `20261117100000_notification_email_recipients.sql` adds `app_notification_recipients(uuid, uuid)`, a security-definer function so the app role still cannot read `user.email`, and widens the outbox insert policy by exactly one kind.
+- **Hindi and Bengali join Odia and English.** Navigation, hero, role cards, privacy banner and the response-window sentence are translated in all four; **untranslated surfaces say so on screen** in the reader's own language rather than silently reverting to English. Odia remains the default. The switcher is one native `<select>`; four names in three scripts do not fit a 320px header as pills.
+- **The home page is three sections instead of seven.** Process moved to `/how-it-works`, promises to `/about` and `/food-safety`, impact figures to a new `/impact`. Nothing was removed, only relocated and linked; `/impact` also joins the automated accessibility sweep.
+- **Verified in this sandbox against real PostgreSQL 16 and 17:** 25 migrations from scratch, the domain suite end to end (onboarding/review, matching, competing claims, pickup window, RLS code privacy, OTP lock/replay, one receipt/impact, incident hold, launch readiness), the dump/restore drill, and the ranked order measured as **2.4 km → 157.6 km → unknown** with the source recorded. `tsc --noEmit` clean, `eslint .` clean, `vitest run` **337 tests / 31 files**, `next build` green.
+
+### Open
+
+- **No native Odia, Hindi or Bengali speaker has reviewed any translated text.** The languages were written by an engineer and marked as drafts. This gap widens with every language added and must be closed before any non-English surface is presented as reviewed. DRAFT banners stay until a human reads them.
+- **Notification email is only verified as far as the outbox.** 29 rows were confirmed written through the real domain flow, but no message was delivered to a real mailbox in this session: SMTP credentials are the owner's to provide, and the drain was not run against a live relay.
+- **The map draws no route.** It is a straight line by design; there is no routing service and none is pretended.
+- Every human launch approval remains outstanding.
+
 ## Heartbeat, recall records, account security and the missing documents — 2026-11-14
 
 - **Worker heartbeat.** `src/worker/heartbeat.ts` writes `service_health` on start, after every drain, every 30 seconds and on shutdown; failures to record a beat are logged and never stop the worker. `/api/health` now returns `worker: { status, ageSeconds, lastEvent, lastError }` where status is `ok`, `stale` (>180s) or `never_seen`. Migration 13 grants the worker role INSERT/UPDATE on `service_health` and the web role SELECT only, asserted in the migration suite.
