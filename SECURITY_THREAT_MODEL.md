@@ -58,6 +58,9 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
    audit trail, not by a second factor.
 4. **Account erasure is impossible** while audit and custody events are append-only. Personal data
    requires an anonymisation path before real users exist.
+4a. **Private document scanning has no scanner to talk to.** The client is real and fails closed:
+   production refuses the upload unless a clamd endpoint answers. Until one exists, partners cannot
+   upload evidence and no unscanned file is ever served.
 5. **Capture SMTP.** The hosted deployment currently reports `test_sink`: messages are accepted and
    never delivered. Self-service reset therefore does not work; an operator can issue the same
    single-use reset link from the operations console and hand it over.
