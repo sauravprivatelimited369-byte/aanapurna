@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dashboardHref, hasDashboardRole, resolvePrimaryRole } from "../src/lib/authorization";
-import type { Identity } from "../src/lib/identity";
+import { requiresTwoFactorEnrolment, type Identity } from "../src/lib/identity";
 
 function identity(overrides: Partial<Identity> = {}): Identity {
   return {
@@ -11,6 +11,7 @@ function identity(overrides: Partial<Identity> = {}): Identity {
     memberships: [],
     requestedRole: "generator",
     helperStatus: null,
+    twoFactorEnabled: false,
     ...overrides,
   };
 }
@@ -66,5 +67,17 @@ describe("trusted role routing", () => {
     expect(hasDashboardRole(generatorOnly, "admin")).toBe(false);
     expect(hasDashboardRole(generatorOnly, "receiver")).toBe(false);
     expect(hasDashboardRole(generatorOnly, "helper")).toBe(false);
+  });
+});
+
+describe("second-factor enforcement", () => {
+  it("blocks a platform role that has not confirmed a second factor", () => {
+    expect(requiresTwoFactorEnrolment({ platformRoles: ["operations_admin"], twoFactorEnabled: false })).toBe(true);
+    expect(requiresTwoFactorEnrolment({ platformRoles: ["support_agent"], twoFactorEnabled: false })).toBe(true);
+  });
+
+  it("does not block a platform role that has one, nor an ordinary partner account", () => {
+    expect(requiresTwoFactorEnrolment({ platformRoles: ["safety_officer"], twoFactorEnabled: true })).toBe(false);
+    expect(requiresTwoFactorEnrolment({ platformRoles: [], twoFactorEnabled: false })).toBe(false);
   });
 });

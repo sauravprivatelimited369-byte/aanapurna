@@ -22,25 +22,10 @@ const nextConfig: NextConfig = {
       { key: "X-Frame-Options", value: "DENY" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
       { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-      // Report-only first: the application has no nonce pipeline yet, so an
-      // enforcing policy would break Next.js inline bootstrap scripts. The
-      // report-only policy keeps the intent visible and is a prerequisite for
-      // switching to enforcement after browser testing.
-      {
-        key: "Content-Security-Policy-Report-Only",
-        value: [
-          "default-src 'self'",
-          "script-src 'self' 'unsafe-inline'",
-          "style-src 'self' 'unsafe-inline'",
-          "img-src 'self' data: blob:",
-          "font-src 'self' data:",
-          "connect-src 'self'",
-          "form-action 'self'",
-          "frame-ancestors 'none'",
-          "base-uri 'self'",
-          "object-src 'none'",
-        ].join("; "),
-      },
+      // The enforcing Content-Security-Policy is set in `src/middleware.ts`,
+      // because it needs a fresh per-request nonce. It is deliberately not
+      // duplicated here: a static header would either lack the nonce or carry a
+      // stale one.
     ];
     return [
       { source: "/(.*)", headers: securityHeaders },

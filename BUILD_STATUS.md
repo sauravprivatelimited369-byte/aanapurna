@@ -17,7 +17,7 @@
 
 - Added a public, statically rendered walkthrough at `/preview` so reading the product no longer requires an account: one fictional handover end to end (listing, partial acceptance, dispatch conflict, custody timeline, the delivery code's shape only, receipt, sample totals), badged as sample data and set to `noindex, follow`. Data lives in `src/domain/demo-workspace.ts` and never touches PostgreSQL. Entry points added to the header, mobile menu, footer, landing hero and the sign-in page; `/login` now states that signing in is optional for reading and required only for acting.
 - Added `demoWorkspaceProblems()` and `tests/demo-workspace.test.ts` (8 tests) holding the fixture to the same record rules as production data: quantity ordering, exactly one winning Helper, custody events in order, unique references, reserved `example.org` contacts, no phone numbers and no delivery-code material.
-- Moved response security headers into the application (`next.config.ts` `headers()`): nosniff, `X-Frame-Options: DENY`, referrer policy, permissions policy, COOP, a report-only CSP, and `no-store` on `/api/auth/*`. Before this, those headers existed only in the Caddyfile, so the hosted deployment served responses without them. Added `tests/security-headers.test.ts` (4 tests), including a check that the public impact endpoint keeps its own cache policy.
+- Moved response security headers into the application (`next.config.ts` `headers()`): nosniff, `X-Frame-Options: DENY`, referrer policy, permissions policy, COOP, and `no-store` on `/api/auth/*`. Before this, those headers existed only in the Caddyfile, so the hosted deployment served responses without them. Added `tests/security-headers.test.ts` (4 tests), including a check that the public impact endpoint keeps its own cache policy.
 - Wrote `MASTER_PROMPT_COMPLIANCE.md`: every section of the master build prompt mapped to Done / Partial / Missing / Blocked (owner) with file evidence and the concrete remaining gap, plus the next five work items. The honest summary is that the core lifecycle is implemented and tested locally, while documentation set, worker heartbeat, account/session screens, recall records and browser evidence remain open.
 - Verified in this sandbox: `tsc --noEmit` clean, `eslint .` clean, `vitest run` 19 files / 146 tests passing, `next build` succeeding with `/preview` prerendered as static, and `GET /preview` over HTTP returning 200 with the sample notice and `noindex`.
 - CI run [43601223057](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43601223057) at `810facb` — all six jobs success, including the Playwright browser workflows and both Windows jobs. The previous docs-only commit `c11243a` failed only `Windows one-click first start and persistence` (the known transient managed-launcher flake); no code differed.
@@ -236,3 +236,92 @@ Complete and verify the requested end-to-end donation/offer/concurrent assignmen
 1. In a controlled, isolated staging setup, validate database roles/migrations and worker/email/reset behavior; test role-specific flows with authorized synthetic fixtures and keep `OPERATIONS_ENABLED=false`.
 2. Verify Docker/Compose, upload scanning, backup/restore and external services on a supported host.
 3. Complete the manual protected-workspace and accessibility reviews, then obtain required human policy/legal/privacy/security and partner approvals before any pilot. Keep `OPERATIONS_ENABLED=false` until those approvals and operational checks are recorded.
+
+## Dispatch reliability and backlog escalation (migration 14)
+
+Triggered by the operational questions "what if the Helper is not available", "how do we get more
+people to help" and "who notices when nobody claims the food". Three of those had code answers.
+Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth migration.
+
+- **Helper dispatch fan-out.** `app_notify_area_helpers(donation, kind, title, body, href)` is a
+  `SECURITY DEFINER` function that selects recipients itself: approved, active Helpers in the
+  donation's service area whose account is active, capped at 500, excluding the caller. It refuses a
+  caller who is not platform staff and not a party to the donation. `respondToOffer` calls it when an
+  accepted offer creates a claimable job, so Helpers learn about work at the moment it exists instead
+  of having to poll.
+- **Backlog escalation.** `app_escalate_delivery_backlog(threshold_minutes, document_horizon_days)`
+  notifies `operations_admin` and `safety_officer` holders once per open job that has sat unclaimed
+  past the threshold or whose claim has expired, and once per partner document inside its expiry
+  horizon. A signed-in caller must hold one of those roles; a background caller is authorised by the
+  EXECUTE grant only. Each item is marked (`delivery_jobs.escalated_at`,
+  `private_documents.expiry_notified_at`) so a five-minute schedule is not a notification flood. It
+  writes one audit event per run.
+- **Operations release of a stalled assignment.** `assigned -> open` was previously forbidden by
+  `app_guard_delivery_update`, so a Helper who claimed a job and vanished left the food with no path
+  except a hold or a cancellation. The guard now permits that single transition when the Helper is
+  cleared and the caller holds `operations_admin`/`safety_officer`; the matching donation guard
+  permits `assigned -> reserved`. `releaseDeliveryAssignment` writes a custody event, an audit event
+  (with the reason and the previous Helper), notifies the parties and the previous Helper, and
+  re-broadcasts to the area. It refuses once collection is recorded — then the incident and hold
+  process applies.
+- **Hosted pipeline.** `runEscalationSweep` is called from a new Graphile Worker task
+  (`*/5 * * * * escalate-delivery-backlog`) and from the scheduled `/api/worker/drain` route, because
+  this Vercel deployment cannot host the long-lived worker. An escalation failure is reported
+  separately and does not make the mail drain look failed.
+- **Verification.** `tests/database-migrations.test.ts` now applies fourteen migrations and asserts:
+  both new columns exist and are **not** updatable by `annapurna_app`; each function is granted to the
+  right role and not to `PUBLIC`; the fan-out reaches only the active Helper in the area (not the
+  suspended Helper, not the Helper in another area); an unrelated caller is refused; the sweep
+  escalates exactly once; a non-operations signed-in caller is refused; and the release transition
+  still requires a cleared Helper plus a platform role. `npm run typecheck`, `npm run lint` and
+  `npm test` (175 tests) pass locally. `npm run db:check` now requires both functions and at least
+  fourteen migrations.
+- **Applied to the hosted database** `wlpibnftabirwtziwubv` and verified there by direct query: both
+  columns exist, both functions exist as `SECURITY DEFINER` with `app_execute = true`,
+  `worker_execute` only on the sweep, and `public_execute = false`. The application code that calls
+  them is on the branch and has **not** been deployed; the hosted site therefore still runs the
+  previous build, and no end-to-end dispatch notification has been observed in production.
+- **Fixed since:** an authorised operator can issue a single-use password-reset link from the
+  operations console when mail cannot be delivered; platform-role accounts must confirm a second
+  factor; the CSP is enforcing.
+- **Restore drill attempted and partially landed:** Supabase branching is refused on the current plan
+  and this sandbox cannot reach the database directly, so a restore was not performed; a recorded
+  baseline, a manifest query and a comparator now make the next restore checkable in minutes
+  (`ops/RESTORE_DRILL.md`). The drill also caught that migration 15 had been applied without being
+  recorded in `drizzle.__drizzle_migrations`; that record is now written and the count reads 15.
+- **Transit and self-collection (migration 16):** distance and ETA are recorded per delivery from
+  optional coordinates or a checked-in gazetteer, a claim beyond the area's `max_transit_km` is
+  refused, a receiving organisation can collect its own food, and every policy-bearing table is now
+  `FORCE ROW LEVEL SECURITY`. There is still no traffic-aware routing.
+- **Incident readiness (machine half):** `scripts/incident-readiness.mjs` verifies session
+  revocation, the append-only audit trail, second-factor enforcement, operator recovery and
+  data-request intake; `ops/INCIDENT_READINESS.md` is the 45-minute drill. Running the drill needs two
+  people.
+- **Owner declarations and the launch gate (migration 17):** `platform_attestations` records the
+  legal entity, insurance, named data-protection contact and last independent penetration test with
+  an evidence reference, the administrator who declared it and an expiry; `on_call_shifts` records
+  the rota. `app_launch_readiness()` reduces them to five booleans for `/api/health`, and the
+  operations console shows the detail behind an admin role. Insurance expiring or a shift ending
+  re-opens the gap by itself. The support page's response window is derived from real coverage, and
+  `/privacy` and `/contact` publish a contact only once one is recorded. This makes the absence of
+  each fact checkable; it does not create the entity, buy the cover or commission the test.
+- **Declarations self-announce (migration 18):** `app_escalate_platform_readiness` notifies
+  administrators when a declaration is within 30 days of lapsing and when nobody is on call for the
+  next twelve hours, once per lapse window, via the worker (every 15 minutes) or the scheduled drain.
+  It reports only when a notice was actually delivered to somebody.
+- **Scanner in one command:** the Compose files carry an optional `scanner` profile running clamd;
+  `FILE_SCAN_MODE=clamav` still has to be set deliberately, and `CLAMAV_HOST` is deliberately unset
+  by default so readiness cannot claim a scanner exists because a container might be running.
+- **Joka directory (migration 19):** 31 kitchens, hotels, guest houses and banquet venues within a
+  few kilometres of the campus gate, seeded from public listings with the date each was read. The
+  public page at `/joka` publishes names, areas and addresses only, and labels every card
+  "not yet confirmed with the owner". Numbers live in the operators' view; `phone_kind` records
+  whether a number is the business's line or a booking-marketplace line, and no licence status is
+  stored or implied. Photos are accepted only when an operator enters one the owner supplied. A
+  number can be published on the public page per place, but only after the owner's agreement is
+  recorded; the database requires both the consent and the flag.
+- **Still open:** no standby rota, no named coordinator, no legal entity or insurance, no mail
+  credential, no scanner host and no independent test (people, lawyers and money), so readiness
+  remains incomplete on every deployment. The difference is that each one is now a named, dated,
+  alerted record rather than a paragraph. See the status column in
+  [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

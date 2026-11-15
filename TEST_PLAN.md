@@ -11,7 +11,7 @@ production build succeeds.
 | Layer | Tool | What it proves |
 |---|---|---|
 | Unit and contract | Vitest | Validation schemas, security headers, rate-limit logic, notification and navigation rules, public impact contract, launcher safety |
-| Database and migration | Vitest + PGlite | All 13 migrations apply from empty; 24 tables have RLS; 10 required functions exist; role-level authorisation; append-only guards; new recall table constraints |
+| Database and migration | Vitest + PGlite | All 16 migrations apply from empty; 26 tables have forced RLS; 12 required functions exist; role-level authorisation; append-only guards; new recall table constraints |
 | Real PostgreSQL domain | `tests/integration/local-domain.ts` (`npm run test:local-domain`) | Concurrent claim, expiry, code consumption, receipts against a real server |
 | Authentication | `scripts/test-local-auth.mjs`, `test-auth-security.mjs`, `test-auth-roles.mjs` | Signup, verify, login, reset, replay, forged cookies, CSRF, role routing |
 | Browser | Playwright (`tests/e2e`) | Public pages, accessibility snapshot, and the full local workflow |

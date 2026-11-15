@@ -47,7 +47,11 @@ async function main(): Promise<void> {
               'app_consume_delivery_code','app_mark_user_verified','app_find_receiver_candidates',
               'app_notify_organization_members','app_notify_user','app_worker_reserve_outbox_batch',
               'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
-              'app_guard_user_profile_status'
+              'app_guard_user_profile_status',
+              'app_notify_area_helpers','app_escalate_delivery_backlog',
+              'app_launch_readiness','app_on_call_coverage','app_public_data_protection_contact',
+              'app_legal_entity','app_on_call_person','app_escalate_platform_readiness',
+              'app_public_directory'
             )) AS required_functions,
         (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations,
         -- Supabase's public PostgREST roles must not reach application objects.
@@ -72,9 +76,11 @@ async function main(): Promise<void> {
     if (!row) throw new Error("The database role could not be identified.");
     const problems: string[] = [];
     if (row.bypass_rls) problems.push("runtime database role has BYPASSRLS");
-    if (row.rls_tables < 23) problems.push(`expected at least 23 RLS-protected tables, found ${row.rls_tables}`);
-    if (row.required_functions !== 10) problems.push(`expected required database functions, found ${row.required_functions}/10`);
-    if (row.migrations < 12) problems.push(`expected at least 12 applied migrations, found ${row.migrations}`);
+    // Migration 17 added two forced-RLS tables; 28 is the floor rather than the current count, so
+    // dropping forced RLS from an existing table still fails the check.
+    if (row.rls_tables < 29) problems.push(`expected at least 29 RLS-protected tables, found ${row.rls_tables}`);
+    if (row.required_functions !== 19) problems.push(`expected required database functions, found ${row.required_functions}/19`);
+    if (row.migrations < 20) problems.push(`expected at least 20 applied migrations, found ${row.migrations}`);
     if (row.exposed_tables > 0) problems.push(`Supabase public API roles can reach ${row.exposed_tables} application table(s); apply 20261114120000_revoke_public_api_privileges`);
     if (row.exposed_functions > 0) problems.push(`Supabase public API roles can execute ${row.exposed_functions} application function(s); apply 20261114120000_revoke_public_api_privileges`);
     console.info(JSON.stringify({

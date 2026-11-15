@@ -24,6 +24,10 @@ x-managed-environment: &managed-environment
   OPERATIONS_ENABLED: ${OPERATIONS_ENABLED:-false}
   PRIVATE_STORAGE_DIR: /app/uploads/private
   FILE_SCAN_MODE: ${FILE_SCAN_MODE:-disabled}
+  # Deliberately empty: readiness must not claim a scanner exists because a container might
+  # be running. Set CLAMAV_HOST=clamd when you enable the scanner profile.
+  CLAMAV_HOST: ${CLAMAV_HOST:-}
+  CLAMAV_PORT: ${CLAMAV_PORT:-3310}
   # Either SMTP_URL or the explicit fields below must be supplied. The
   # fail-closed preflight decides which form is usable; Compose does not.
   SMTP_URL: ${SMTP_URL:-}
@@ -106,6 +110,27 @@ services:
       web:
         condition: service_healthy
 
+
+  # A real antivirus endpoint, started only when asked for. `docker compose --profile scanner up`
+  # brings clamd onto the private network; uploads stay refused until FILE_SCAN_MODE=clamav is set
+  # too, so starting the container cannot silently loosen the gate. The first start downloads the
+  # virus database and the healthcheck waits for it.
+  clamd:
+    image: clamav/clamav:stable
+    profiles: ["scanner"]
+    restart: unless-stopped
+    expose:
+      - "3310"
+    volumes:
+      - clamav_db:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
 volumes:
   caddy_data:
   caddy_config:
+  clamav_db:

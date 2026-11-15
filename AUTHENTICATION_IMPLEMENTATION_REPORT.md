@@ -86,6 +86,8 @@ Existing protections retained: unique `user.email`, `NOBYPASSRLS` app/auth/worke
 - Cookies: `httpOnly`, `sameSite=lax`, `path=/`, `secure` in production, `useSecureCookies` in production. `AUTH_SECRET` is required in production; development uses an ephemeral in-process fallback only.
 - Login sends the browser to `/auth/continue`, which resolves the destination from trusted backend data.
 - Password reset uses Better Auth's one-time token flow, emailed through the encrypted outbox/worker. Invalid or expired links show a clear error on `/reset-password`.
+- When mail cannot be delivered, an operations or security administrator can issue the same single-use link from the operations console (`POST /api/admin/account-recovery`). Your second factor is required, a reason of at least 20 characters is recorded in the audit trail, and the link is returned once. The callback still queues the email, so turning on SMTP does not remove the path.
+- Platform-role accounts (administrator, safety officer, support agent, security administrator) must confirm a TOTP second factor, with 10 one-time backup codes, before application APIs serve them: `requireIdentity` answers `403 TWO_FACTOR_ENROLMENT_REQUIRED` until then. Pages stay readable so the account can enrol.
 - Verification links succeed to `/verify-email?result=verified`; failures show an error and `/verify-email` can request a fresh link.
 - `/send-verification-email`, `/request-password-reset`, sign-in, sign-up, verify and reset endpoints have tighter database-backed Better Auth rate-limit rules.
 - `src/email/config.ts` reports only whether email is configured and which setting names are missing. `src/app/api/health` exposes `email.status` and missing setting names only.

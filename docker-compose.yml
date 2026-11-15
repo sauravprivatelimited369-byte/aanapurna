@@ -15,6 +15,10 @@ x-app-environment: &app-environment
   OPERATIONS_ENABLED: ${OPERATIONS_ENABLED:-false}
   PRIVATE_STORAGE_DIR: /app/uploads/private
   FILE_SCAN_MODE: ${FILE_SCAN_MODE:-disabled}
+  # Deliberately empty: readiness must not claim a scanner exists because a container might
+  # be running. Set CLAMAV_HOST=clamd when you enable the scanner profile.
+  CLAMAV_HOST: ${CLAMAV_HOST:-}
+  CLAMAV_PORT: ${CLAMAV_PORT:-3310}
   SMTP_URL: ${SMTP_URL:-smtp://mailpit:1025}
   SMTP_FROM: ${SMTP_FROM:-Annapurna Link <no-reply@annapurna.local>}
 
@@ -45,6 +49,24 @@ services:
     ports:
       - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
       - "127.0.0.1:${MAILPIT_WEB_PORT:-8025}:8025"
+
+  # A real scanner, one command away. `docker compose --profile scanner up` starts clamd and
+  # tells the app where it is; uploads stay refused until FILE_SCAN_MODE=clamav is also set, so
+  # starting the container never silently loosens the gate. First start downloads the virus
+  # database, which the healthcheck waits for.
+  clamd:
+    image: clamav/clamav:stable
+    profiles: ["scanner"]
+    expose:
+      - "3310"
+    volumes:
+      - clamav_db:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
 
   migrate:
     build:
@@ -99,3 +121,4 @@ services:
 volumes:
   postgres_data:
   private_uploads:
+  clamav_db:

@@ -90,6 +90,9 @@ export const registrationSchema = z.object({
 
 export type RegistrationInput = z.infer<typeof registrationSchema>;
 
+const coordinatesPaired = <T extends { latitude?: number | null; longitude?: number | null }>(value: T) =>
+  (value.latitude === null || value.latitude === undefined) === (value.longitude === null || value.longitude === undefined);
+
 export const onboardingSchema = z.discriminatedUnion("role", [
   z.object({
     role: z.literal("generator"),
@@ -98,6 +101,10 @@ export const onboardingSchema = z.discriminatedUnion("role", [
     cityOrDistrict: safeText(120),
     stateOrRegion: z.string().trim().max(120).optional().default(""),
     postalCode: z.string().trim().max(20).optional().default(""),
+    // Optional exact location. Without it the city is matched against the built-in gazetteer,
+    // which is enough for a distance estimate but less precise.
+    latitude: z.number().min(-90).max(90).optional().nullable(),
+    longitude: z.number().min(-180).max(180).optional().nullable(),
     contactName: safeText(120),
     contactEmail: z.string().email().max(254),
     contactPhone: z.string().trim().max(32).optional().default(""),
@@ -110,6 +117,10 @@ export const onboardingSchema = z.discriminatedUnion("role", [
     cityOrDistrict: safeText(120),
     stateOrRegion: z.string().trim().max(120).optional().default(""),
     postalCode: z.string().trim().max(20).optional().default(""),
+    // Optional exact location. Without it the city is matched against the built-in gazetteer,
+    // which is enough for a distance estimate but less precise.
+    latitude: z.number().min(-90).max(90).optional().nullable(),
+    longitude: z.number().min(-180).max(180).optional().nullable(),
     contactName: safeText(120),
     contactEmail: z.string().email().max(254),
     contactPhone: z.string().trim().max(32).optional().default(""),
@@ -124,7 +135,12 @@ export const onboardingSchema = z.discriminatedUnion("role", [
     availabilityNotes: z.string().trim().max(500).optional().default(""),
     trainingAcknowledged: z.literal(true),
   }).strict(),
-]);
+]).superRefine((value, ctx) => {
+  // Half a coordinate is worse than none: it places an organisation on the equator.
+  if (!coordinatesPaired(value as { latitude?: number | null; longitude?: number | null })) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["longitude"], message: "Give both coordinates, or neither." });
+  }
+});
 
 export const donationCreateSchema = z.object({
   organizationId: z.string().uuid(),
@@ -189,6 +205,19 @@ export const incidentSchema = z.object({
   incidentType: z.enum(["damaged_packaging", "temperature_concern", "allergen_mismatch", "quality_concern", "delay", "failed_collection", "other"]),
   severity: z.enum(["low", "moderate", "high", "critical"]),
   description: safeText(1_000),
+}).strict();
+
+/** Operator-assisted account recovery: a target address and the justification. */
+export const accountRecoverySchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  // The reason is the only record of why a privileged person reset someone else's
+  // password, so it is not optional and not one word.
+  reason: z.string().trim().min(20).max(500),
+}).strict();
+
+/** Operations release of an uncollected assignment; the reason is the record. */
+export const deliveryReleaseSchema = z.object({
+  reason: safeText(500),
 }).strict();
 
 export const adminDecisionSchema = z.object({
@@ -299,3 +328,100 @@ export const dataRequestUpdateSchema = z.object({
   status: z.enum(["in_review", "awaiting_user", "completed", "rejected"]),
   resolution: safeText(800),
 }).strict();
+
+/**
+ * Owner declarations. These are the facts no query can prove: who the entity is, what cover
+ * exists, who answers data-protection questions, and when an outsider last tried to break in.
+ * Each requires held evidence, so a declaration cannot be a bare assertion.
+ */
+const evidenceReference = z.string().trim().min(3).max(500);
+const isoDay = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
+const futureDay = z.string().trim().datetime({ offset: true }).or(isoDay);
+
+export const attestationSchema = z.discriminatedUnion("key", [
+  z.object({
+    key: z.literal("legal_entity"),
+    evidenceReference,
+    expiresAt: futureDay.nullish(),
+    value: z.object({
+      entityName: safeText(200),
+      jurisdiction: safeText(120),
+      registeredAddress: safeText(500),
+      registrationReference: z.string().trim().max(120).optional().default(""),
+      liabilityPosition: safeText(500),
+    }).strict(),
+  }).strict(),
+  z.object({
+    key: z.literal("insurance"),
+    evidenceReference,
+    expiresAt: futureDay,
+    value: z.object({
+      insurer: safeText(160),
+      policyReference: safeText(120),
+      coverageSummary: safeText(1_000),
+      liabilityLimit: z.string().trim().max(120).optional().default(""),
+    }).strict(),
+  }).strict(),
+  z.object({
+    key: z.literal("data_protection_contact"),
+    evidenceReference,
+    expiresAt: futureDay.nullish(),
+    value: z.object({
+      contactName: safeText(160),
+      contactEmail: z.string().trim().email().max(320),
+      hours: safeText(120),
+      postalAddress: safeText(500),
+    }).strict(),
+  }).strict(),
+  z.object({
+    key: z.literal("penetration_test"),
+    evidenceReference,
+    expiresAt: futureDay.nullish(),
+    value: z.object({
+      provider: safeText(160),
+      reportReference: safeText(160),
+      completedOn: isoDay,
+      scopeSummary: safeText(1_000),
+    }).strict(),
+  }).strict(),
+]);
+
+export const onCallShiftSchema = z.object({
+  userId: z.string().trim().min(1).max(64).optional(),
+  email: z.string().trim().email().max(320).optional(),
+  startsAt: z.string().trim().datetime({ offset: true }),
+  endsAt: z.string().trim().datetime({ offset: true }),
+  channel: safeText(160),
+  notes: z.string().trim().max(500).optional().default(""),
+}).strict().refine((value) => Boolean(value.userId || value.email), {
+  message: "Name the person on call, by account email or account id.",
+  path: ["email"],
+}).refine((value) => new Date(value.endsAt) > new Date(value.startsAt), {
+  message: "The shift must end after it starts.",
+  path: ["endsAt"],
+}).refine((value) => new Date(value.endsAt).getTime() - new Date(value.startsAt).getTime() <= 14 * 86_400_000, {
+  message: "Schedule shifts of at most fourteen days.",
+  path: ["endsAt"],
+});
+
+/**
+ * Directory maintenance. Publishing a place, recording who actually answered the phone, and noting
+ * that the owner confirmed the details are three separate decisions; this schema allows any subset
+ * but at least one, and never a licence claim.
+ */
+export const directoryPlaceUpdateSchema = z.object({
+  slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/),
+  phone: z.string().trim().max(40).regex(/^[+0-9 ()-]*$/, "Use digits, spaces, brackets, + and - only.").nullable().optional(),
+  phoneKind: z.enum(["unknown", "direct", "business_line", "marketplace_line"]).optional(),
+  consentStatus: z.enum(["unknown", "contacted", "consented", "declined"]).optional(),
+  published: z.boolean().optional(),
+  ownerVerified: z.boolean().optional(),
+  /** Publishing a number requires the owner's agreement; the service refuses without it. */
+  publishPhone: z.boolean().optional(),
+  // A photo the owner handed over. Listing-site images are copyrighted and are not copied in.
+  photoUrl: z.string().trim().url().max(500).startsWith("https://").nullable().optional(),
+  notes: z.string().trim().max(8_000).nullable().optional(),
+}).strict().refine(
+  (value) => Object.keys(value).some((key) => key !== "slug"),
+  { message: "Change at least one field." },
+);

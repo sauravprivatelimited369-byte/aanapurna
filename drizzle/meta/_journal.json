@@ -92,6 +92,55 @@
       "when": 1794610800000,
       "tag": "20261114150000_recall_records_and_worker_heartbeat",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794720000000,
+      "tag": "20261115090000_helper_dispatch_and_escalation",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794734400000,
+      "tag": "20261115120000_two_factor_for_privileged_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1794820800000,
+      "tag": "20261115140000_transit_limits_and_self_collection",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794835200000,
+      "tag": "20261115180000_owner_attestations_and_launch_gate",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794839400000,
+      "tag": "20261115193000_readiness_escalation",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794841800000,
+      "tag": "20261115203000_joka_directory",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1794845400000,
+      "tag": "20261115213000_directory_phone_consent",
+      "breakpoints": true
     }
   ]
 }

@@ -1,20 +1,24 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { withUserContext, type AppTransaction } from "@/db";
+import { pool, withUserContext, type AppTransaction } from "@/db";
 import {
   auditEvents,
   deliveryCodes,
   deliveryDestinationDetails,
   deliveryJobs,
   dataRequests,
+  geoPlaces,
   donationOffers,
   donationPrivateDetails,
   donations,
   helperProfiles,
   notifications,
   organizationMemberships,
+  directoryPlaces,
+  onCallShifts,
   organizations,
+  platformAttestations,
   policyVersions,
   privateDocuments,
   receipts,
@@ -23,10 +27,16 @@ import {
   serviceAreas,
   supportCases,
   userProfiles,
+  user,
   custodyEvents,
 } from "@/db/schema";
 import { HttpError } from "@/lib/http";
+import { auth } from "@/lib/auth";
+import { getEmailDeliveryStatus } from "@/email/config";
+import { evaluateReadiness } from "@/domain/readiness";
+import { withPasswordResetCapture } from "@/email/reset-link-capture";
 import { canAccessOrganization, hasAnyRole, type Identity } from "@/lib/identity";
+import { assessTransit, normalizePlaceName, type Coordinates, type TransitAssessment } from "@/domain/transit";
 import {
   createDeliveryCode,
   decryptValue,
@@ -53,6 +63,9 @@ import {
   type supportCaseUpdateSchema,
   type dataRequestCreateSchema,
   type dataRequestUpdateSchema,
+  type attestationSchema,
+  type onCallShiftSchema,
+  type directoryPlaceUpdateSchema,
 } from "@/domain/validation";
 import { z } from "zod";
 
@@ -74,6 +87,9 @@ type SupportCaseCreate = z.infer<typeof supportCaseCreateSchema>;
 type SupportCaseUpdate = z.infer<typeof supportCaseUpdateSchema>;
 type DataRequestCreate = z.infer<typeof dataRequestCreateSchema>;
 type DataRequestUpdate = z.infer<typeof dataRequestUpdateSchema>;
+type AttestationInput = z.infer<typeof attestationSchema>;
+type OnCallShiftInput = z.infer<typeof onCallShiftSchema>;
+type DirectoryPlaceUpdate = z.infer<typeof directoryPlaceUpdateSchema>;
 
 type Policy = z.infer<typeof policyRulesSchema> & { version: string };
 
@@ -159,6 +175,27 @@ async function notifyOrganization(
       ${kind}, ${title}, ${body}, ${href}
     )
   `);
+}
+
+/**
+ * Fans a notification out to every approved, active Helper in the donation's
+ * service area. The database function performs the recipient selection and the
+ * caller check, so a client cannot address arbitrary users.
+ */
+async function notifyAreaHelpers(
+  tx: AppTransaction,
+  donationId: string,
+  kind: string,
+  title: string,
+  body: string,
+  href: string,
+): Promise<number> {
+  const result = await tx.execute<{ app_notify_area_helpers: number }>(sql`
+    select public.app_notify_area_helpers(
+      ${donationId}::uuid, ${kind}, ${title}, ${body}, ${href}
+    ) as app_notify_area_helpers
+  `);
+  return Number(result.rows[0]?.app_notify_area_helpers ?? 0);
 }
 
 async function notifyUser(
@@ -254,6 +291,8 @@ export async function requestOnboarding(identity: Identity, input: OnboardingInp
       cityOrDistrict: input.cityOrDistrict,
       stateOrRegion: input.stateOrRegion,
       postalCode: input.postalCode,
+      latitude: input.latitude === null || input.latitude === undefined ? null : String(input.latitude),
+      longitude: input.longitude === null || input.longitude === undefined ? null : String(input.longitude),
       contactName: input.contactName,
       contactEmail: input.contactEmail.toLowerCase(),
       contactPhone: input.contactPhone,
@@ -419,7 +458,7 @@ export async function getDonationDetail(identity: Identity, donationId: string) 
       pickupAddress: donationPrivateDetails.pickupAddress,
       pickupInstructions: donationPrivateDetails.pickupInstructions,
     }).from(donationPrivateDetails).where(eq(donationPrivateDetails.donationId, donation.id)).limit(1);
-    const assignedJob = await tx.select({ helperUserId: deliveryJobs.helperUserId, id: deliveryJobs.id })
+    const assignedJob = await tx.select({ helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode, id: deliveryJobs.id })
       .from(deliveryJobs).where(eq(deliveryJobs.donationId, donation.id)).limit(1);
     const authorized = canAccessOrganization(identity, donation.generatorOrganizationId, ["owner", "manager", "operator", "viewer"]) ||
       (donation.receiverOrganizationId !== null && canAccessOrganization(identity, donation.receiverOrganizationId, ["owner", "manager", "operator", "viewer"])) ||
@@ -644,22 +683,161 @@ export async function respondToOffer(identity: Identity, offerId: string, input:
     });
     await audit(tx, identity, "offer.accepted", "donation_offer", offer.id, undefined, { donationId: offer.donationId, deliveryJobId: job?.id }, offer.receiverOrganizationId);
     await notifyOrganization(tx, offer.generatorOrganizationId, offer.donationId, "offer.accepted", "A Receiver accepted your offer", `${offer.donationName} is reserved. A Helper can now claim the delivery.`, `/app/listings/${offer.donationId}`);
+    // A job that only becomes visible when somebody opens the app depends on
+    // volunteers guessing. Tell the approved Helpers in this service area that
+    // there is work, at the moment it becomes claimable.
+    if (job?.id) {
+      await notifyAreaHelpers(
+        tx,
+        offer.donationId,
+        "delivery.available",
+        "A delivery needs a Helper",
+        `${offer.donationName} is reserved and waiting for collection in your service area. Claim it only if you can complete the collection window.`,
+        `/app/deliveries/${job.id}`,
+      );
+    }
     return { status: "accepted" as const, deliveryJobId: job?.id };
   });
 }
 
-export async function claimDelivery(identity: Identity, jobId: string) {
+/**
+ * Where an organisation actually is.
+ *
+ * Two sources, in order: exact coordinates the organisation supplied, then the checked-in gazetteer
+ * matched against the city the onboarding form captured. Returning null is a real answer - callers
+ * must report "distance unknown" rather than pretending the delivery is local.
+ */
+async function resolveOrganizationCoordinates(
+  tx: AppTransaction,
+  organizationId: string,
+): Promise<Coordinates | null> {
+  const [organization] = await tx.select({
+    latitude: organizations.latitude,
+    longitude: organizations.longitude,
+    city: organizations.cityOrDistrict,
+  }).from(organizations).where(eq(organizations.id, organizationId)).limit(1);
+  if (!organization) return null;
+  if (organization.latitude !== null && organization.longitude !== null) {
+    return { latitude: Number(organization.latitude), longitude: Number(organization.longitude) };
+  }
+  const candidates = [...new Set(
+    organization.city
+      .split(",")
+      .flatMap((part) => [part, part.replace(/\bdistrict\b/gi, "")])
+      .map(normalizePlaceName)
+      .filter(Boolean),
+  )];
+  if (candidates.length === 0) return null;
+  const [place] = await tx.select({ latitude: geoPlaces.latitude, longitude: geoPlaces.longitude })
+    .from(geoPlaces).where(inArray(geoPlaces.normalizedName, candidates)).limit(1);
+  if (!place || place.latitude === null || place.longitude === null) return null;
+  return { latitude: Number(place.latitude), longitude: Number(place.longitude) };
+}
+
+type TransitSnapshot = {
+  assessment: TransitAssessment;
+  averageSpeedKmph: number;
+  limitKm: number | null;
+};
+
+/** Compute the distance and ETA for a job's route using the area's configured speed and limit. */
+async function assessJobTransit(
+  tx: AppTransaction,
+  input: { serviceAreaId: string | null; generatorOrganizationId: string; receiverOrganizationId: string },
+): Promise<TransitSnapshot> {
+  let averageSpeedKmph = 20;
+  let limitKm: number | null = null;
+  if (input.serviceAreaId) {
+    const [area] = await tx.select({
+      maxTransitKm: serviceAreas.maxTransitKm,
+      averageSpeedKmph: serviceAreas.averageSpeedKmph,
+    }).from(serviceAreas).where(eq(serviceAreas.id, input.serviceAreaId)).limit(1);
+    if (area?.averageSpeedKmph !== null && area?.averageSpeedKmph !== undefined) averageSpeedKmph = Number(area.averageSpeedKmph);
+    if (area?.maxTransitKm !== null && area?.maxTransitKm !== undefined) limitKm = Number(area.maxTransitKm);
+  }
+  const [from, to] = await Promise.all([
+    resolveOrganizationCoordinates(tx, input.generatorOrganizationId),
+    resolveOrganizationCoordinates(tx, input.receiverOrganizationId),
+  ]);
+  return {
+    assessment: assessTransit({ from, to, averageSpeedKmph, limitKm, handoverMinutes: 10 }),
+    averageSpeedKmph,
+    limitKm,
+  };
+}
+
+function transitColumns(transit: TransitSnapshot) {
+  return transit.assessment.known
+    ? {
+        transitDistanceKm: String(transit.assessment.distanceKm),
+        transitEtaMinutes: transit.assessment.etaMinutes,
+        transitCheckedAt: new Date(),
+      }
+    : { transitDistanceKm: null, transitEtaMinutes: null, transitCheckedAt: new Date() };
+}
+
+/**
+ * The person acting on a delivery must be its assigned collector, and the collector must still be
+ * entitled to act: an approved Helper, or - for a self-collected delivery - a live operator of the
+ * receiving organisation.
+ */
+async function assertAssignedCollector(
+  tx: AppTransaction,
+  identity: Identity,
+  job: { helperUserId: string | null; collectionMode: string; receiverOrganizationId: string },
+  action: string,
+): Promise<void> {
+  if (job.helperUserId !== identity.id) {
+    throw new HttpError(403, `Only the assigned collector can ${action}.`, "COLLECTOR_NOT_ASSIGNED");
+  }
+  if (job.collectionMode === "receiver_collection") {
+    const [membership] = await tx.select({ role: organizationMemberships.role })
+      .from(organizationMemberships)
+      .where(and(
+        eq(organizationMemberships.userId, identity.id),
+        eq(organizationMemberships.organizationId, job.receiverOrganizationId),
+        eq(organizationMemberships.status, "active"),
+      ))
+      .limit(1);
+    if (!membership || !["owner", "manager", "operator"].includes(membership.role)) {
+      throw new HttpError(403, "You no longer hold an active role in the receiving organisation.", "RECEIVER_ROLE_REQUIRED");
+    }
+    return;
+  }
+  const [helper] = await tx.select({ status: helperProfiles.status })
+    .from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
+  if (helper?.status !== "active") {
+    throw new HttpError(403, "Your Helper approval is not active. Contact operations.", "HELPER_NOT_APPROVED");
+  }
+}
+
+/**
+ * Assign a delivery to a collector.
+ *
+ * Two modes share one state machine:
+ *   * `helper_delivery` - an approved Helper inside the donation's service area claims it;
+ *   * `receiver_collection` - the receiving organisation collects its own food, so the receiving
+ *     operator becomes the assigned collector and no Helper is needed.
+ *
+ * Both are refused when the area's transit limit is configured and the route is longer than it.
+ * That limit is the answer to "how far is too far": before this, distance never entered the
+ * decision at all.
+ */
+export async function claimDelivery(identity: Identity, jobId: string, options?: { selfCollection?: boolean }) {
   assertOperationsEnabled();
+  const selfCollection = options?.selfCollection === true;
   return withDomainContext(identity.id, async (tx) => {
-    const [helper] = await tx.select({ status: helperProfiles.status, serviceAreaId: helperProfiles.serviceAreaId })
-      .from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (!helper || helper.status !== "active") throw new HttpError(403, "Only an approved Helper can claim a delivery.", "HELPER_NOT_APPROVED");
+    const [helper] = selfCollection
+      ? []
+      : await tx.select({ status: helperProfiles.status, serviceAreaId: helperProfiles.serviceAreaId })
+          .from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
+    if (!selfCollection && (!helper || helper.status !== "active")) throw new HttpError(403, "Only an approved Helper can claim a delivery.", "HELPER_NOT_APPROVED");
 
     const [job] = await tx.select({
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       claimExpiresAt: deliveryJobs.claimExpiresAt,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
@@ -680,15 +858,53 @@ export async function claimDelivery(identity: Identity, jobId: string) {
     if (job.pickupLatestAt.getTime() <= Date.now() || !["reserved", "assigned"].includes(job.donationStatus)) {
       throw new HttpError(409, "The collection window has expired or the food is on hold.", "DONATION_NOT_CLAIMABLE");
     }
-    if (!helper.serviceAreaId || helper.serviceAreaId !== job.serviceAreaId) throw new HttpError(403, "This delivery is outside your approved service area.", "SERVICE_AREA_MISMATCH");
+    if (!selfCollection && (!helper?.serviceAreaId || helper.serviceAreaId !== job.serviceAreaId)) {
+      throw new HttpError(403, "This delivery is outside your approved service area.", "SERVICE_AREA_MISMATCH");
+    }
+    if (selfCollection) {
+      const [membership] = await tx.select({ role: organizationMemberships.role })
+        .from(organizationMemberships)
+        .where(and(
+          eq(organizationMemberships.userId, identity.id),
+          eq(organizationMemberships.organizationId, job.receiverOrganizationId),
+          eq(organizationMemberships.status, "active"),
+        ))
+        .limit(1);
+      if (!membership || !["owner", "manager", "operator"].includes(membership.role)) {
+        throw new HttpError(403, "Only an active operator of the receiving organisation can collect this delivery.", "RECEIVER_ROLE_REQUIRED");
+      }
+      if (job.collectionMode === "receiver_collection") {
+        // already configured; nothing to change
+      }
+    }
+    // Refuse a route the area has declared too long. An unknown distance never blocks a claim: the
+    // application does not invent a number and does not punish missing coordinates.
+    const transit = await assessJobTransit(tx, {
+      serviceAreaId: job.serviceAreaId,
+      generatorOrganizationId: job.generatorOrganizationId,
+      receiverOrganizationId: job.receiverOrganizationId,
+    });
+    if (transit.assessment.known && transit.assessment.withinLimit === false) {
+      throw new HttpError(
+        409,
+        `This route is about ${transit.assessment.distanceKm} km, beyond the ${transit.limitKm} km limit for this service area. Ask operations to review the area.`,
+        "DELIVERY_OUTSIDE_TRANSIT_LIMIT",
+      );
+    }
 
     const now = new Date();
-    const claimExpiresAt = new Date(now.getTime() + 30 * 60_000);
+    // A Helper confirms within 30 minutes or the claim lapses. A receiver collecting its own food
+    // holds the assignment until the collection window closes - there is nobody to hand it back to.
+    const claimExpiresAt = selfCollection
+      ? new Date(Math.min(job.pickupLatestAt.getTime(), now.getTime() + 6 * 60 * 60_000))
+      : new Date(now.getTime() + 30 * 60_000);
     const [updated] = await tx.update(deliveryJobs).set({
       status: "assigned",
       helperUserId: identity.id,
       claimedAt: now,
       claimExpiresAt,
+      collectionMode: selfCollection ? "receiver_collection" : "helper_delivery",
+      ...transitColumns(transit),
       updatedAt: now,
     }).where(eq(deliveryJobs.id, job.id)).returning({ id: deliveryJobs.id });
     if (!updated) throw new HttpError(409, "Another Helper claimed this delivery first.", "DELIVERY_CLAIMED");
@@ -697,26 +913,121 @@ export async function claimDelivery(identity: Identity, jobId: string) {
       donationId: job.donationId,
       deliveryJobId: job.id,
       actorUserId: identity.id,
-      eventType: "helper.assigned",
+      eventType: selfCollection ? "receiver.self_collection" : "helper.assigned",
       occurredAt: now,
-      details: { claimExpiresAt: claimExpiresAt.toISOString() },
+      details: {
+        claimExpiresAt: claimExpiresAt.toISOString(),
+        collectionMode: selfCollection ? "receiver_collection" : "helper_delivery",
+        ...(transit.assessment.known
+          ? { distanceKm: transit.assessment.distanceKm, etaMinutes: transit.assessment.etaMinutes }
+          : { distance: "unknown" }),
+      },
     });
     await audit(tx, identity, "delivery.claimed", "delivery_job", job.id, undefined, { claimExpiresAt: claimExpiresAt.toISOString() });
     await notifyOrganization(tx, job.generatorOrganizationId, job.donationId, "delivery.assigned", "A Helper claimed your donation", `${job.donationName} has an assigned Helper.`, `/app/deliveries/${job.id}`);
     await notifyOrganization(tx, job.receiverOrganizationId, job.donationId, "delivery.assigned", "A Helper is assigned", `${job.donationName} is assigned for collection.`, `/app/deliveries/${job.id}`);
-    await notifyUser(tx, identity.id, null, "delivery.assigned", "Delivery assigned to you", `You have 30 minutes to confirm collection of ${job.donationName}.`, `/app/deliveries/${job.id}`);
-    return { id: job.id, status: "assigned" as const, claimExpiresAt };
+    if (selfCollection) {
+      await notifyUser(tx, identity.id, null, "delivery.assigned", "You are collecting this delivery",
+        `Your organisation is collecting ${job.donationName} itself. Record collection before the window closes.`, `/app/deliveries/${job.id}`);
+    } else {
+      await notifyUser(tx, identity.id, null, "delivery.assigned", "Delivery assigned to you", `You have 30 minutes to confirm collection of ${job.donationName}.`, `/app/deliveries/${job.id}`);
+    }
+    return {
+      id: job.id,
+      status: "assigned" as const,
+      claimExpiresAt,
+      collectionMode: selfCollection ? "receiver_collection" as const : "helper_delivery" as const,
+      transit: transit.assessment.known
+        ? { distanceKm: transit.assessment.distanceKm, etaMinutes: transit.assessment.etaMinutes }
+        : null,
+    };
   });
 }
 
-export async function confirmPickup(identity: Identity, jobId: string, input: PickupInput) {
+/**
+ * Operations release of an uncollected assignment.
+ *
+ * A Helper who claims a job and then becomes unreachable used to leave the food
+ * with no legitimate path forward: the state machine forbade `assigned -> open`
+ * and the only remaining options were a hold or a cancelled delivery. This
+ * returns the job to the open pool with a recorded reason, a custody event, an
+ * audit entry and fresh notifications, and it deliberately fails once food has
+ * been collected — after collection the incident and hold process applies.
+ */
+export async function releaseDeliveryAssignment(identity: Identity, jobId: string, input: { reason: string }) {
   assertOperationsEnabled();
+  if (!hasAnyRole(identity, ["operations_admin", "safety_officer"])) {
+    throw new HttpError(403, "Only an authorised operations or safety role can release an assignment.", "RELEASE_NOT_PERMITTED");
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 10 || reason.length > 500) {
+    throw new HttpError(422, "Record why the assignment is being released (at least 10 characters).", "RELEASE_REASON_REQUIRED");
+  }
   return withDomainContext(identity.id, async (tx) => {
     const [job] = await tx.select({
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
+      collectedAt: deliveryJobs.collectedAt,
+      generatorOrganizationId: deliveryJobs.generatorOrganizationId,
+      receiverOrganizationId: deliveryJobs.receiverOrganizationId,
+      name: donations.name,
+      donationStatus: donations.status,
+    }).from(deliveryJobs)
+      .innerJoin(donations, eq(donations.id, deliveryJobs.donationId))
+      .where(eq(deliveryJobs.id, jobId)).for("update");
+    if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
+    if (job.collectedAt || job.status === "collected") {
+      throw new HttpError(409, "The food has already been collected. Record an incident and hold instead of releasing the assignment.", "DELIVERY_ALREADY_COLLECTED");
+    }
+    if (job.status !== "assigned") throw new HttpError(409, "Only an assigned delivery can be released.", "DELIVERY_NOT_ASSIGNED");
+
+    const now = new Date();
+    const previousHelperUserId = job.helperUserId;
+    await tx.update(deliveryJobs).set({
+      status: "open",
+      helperUserId: null,
+      claimedAt: null,
+      claimExpiresAt: null,
+      // A released job is unclaimed again, so the backlog sweep may escalate it.
+      escalatedAt: null,
+      updatedAt: now,
+    }).where(eq(deliveryJobs.id, job.id));
+    if (job.donationStatus === "assigned") {
+      await tx.update(donations).set({ status: "reserved", updatedAt: now }).where(eq(donations.id, job.donationId));
+    }
+    await tx.insert(custodyEvents).values({
+      donationId: job.donationId,
+      deliveryJobId: job.id,
+      actorUserId: identity.id,
+      eventType: "operations.assignment_released",
+      occurredAt: now,
+      details: { reason, previousHelperUserId },
+    });
+    await audit(tx, identity, "delivery.assignment_released", "delivery_job", job.id, reason, { previousHelperUserId });
+    if (previousHelperUserId) {
+      await notifyUser(tx, previousHelperUserId, null, "delivery.released", "Your assignment was released",
+        `${job.name} was returned to the open pool by operations. Recorded reason: ${reason}`, `/app/deliveries/${job.id}`);
+    }
+    await notifyOrganization(tx, job.generatorOrganizationId, job.donationId, "delivery.released",
+      "A delivery was reassigned", `${job.name} is waiting for a new Helper. Reason: ${reason}`, `/app/deliveries/${job.id}`);
+    await notifyOrganization(tx, job.receiverOrganizationId, job.donationId, "delivery.released",
+      "Your delivery was reassigned", `${job.name} is waiting for a new Helper. Reason: ${reason}`, `/app/deliveries/${job.id}`);
+    await notifyAreaHelpers(tx, job.donationId, "delivery.available", "A delivery needs a Helper",
+      `${job.name} is available again after a reassignment. Claim it only if you can complete the collection window.`,
+      `/app/deliveries/${job.id}`);
+    return { status: "open" as const, previousHelperUserId };
+  });
+}
+
+export async function confirmPickup(identity: Identity, jobId: string, input: PickupInput) {  assertOperationsEnabled();
+  return withDomainContext(identity.id, async (tx) => {
+    const [job] = await tx.select({
+      id: deliveryJobs.id,
+      donationId: deliveryJobs.donationId,
+      status: deliveryJobs.status,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       claimExpiresAt: deliveryJobs.claimExpiresAt,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
@@ -732,9 +1043,7 @@ export async function confirmPickup(identity: Identity, jobId: string, input: Pi
       .where(eq(deliveryJobs.id, jobId))
       .for("update");
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
-    if (job.helperUserId !== identity.id) throw new HttpError(403, "Only the assigned Helper can confirm collection.", "HELPER_NOT_ASSIGNED");
-    const [helperProfile] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (helperProfile?.status !== "active") throw new HttpError(403, "Your Helper approval is not active. Contact operations.", "HELPER_NOT_APPROVED");
+    await assertAssignedCollector(tx, identity, { ...job, collectionMode: job.collectionMode ?? "helper_delivery" }, "confirm collection");
     if (job.status !== "assigned") throw new HttpError(409, "This delivery is not waiting for collection.", "DELIVERY_STATE_INVALID");
     const now = new Date();
     if (job.claimExpiresAt && job.claimExpiresAt.getTime() <= now.getTime()) throw new HttpError(409, "The assignment window expired. Ask operations to reassign this delivery.", "ASSIGNMENT_EXPIRED");
@@ -772,14 +1081,12 @@ export async function confirmDeliveryArrival(identity: Identity, jobId: string) 
   assertOperationsEnabled();
   return withDomainContext(identity.id, async (tx) => {
     const [job] = await tx.select({ id: deliveryJobs.id, donationId: deliveryJobs.donationId,
-      status: deliveryJobs.status, helperUserId: deliveryJobs.helperUserId, arrivedAt: deliveryJobs.arrivedAt,
+      status: deliveryJobs.status, helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode, arrivedAt: deliveryJobs.arrivedAt,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId, bestBeforeAt: donations.bestBeforeAt,
       name: donations.name }).from(deliveryJobs).innerJoin(donations, eq(donations.id, deliveryJobs.donationId))
       .where(eq(deliveryJobs.id, jobId)).for("update");
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
-    if (job.helperUserId !== identity.id) throw new HttpError(403, "Only the assigned Helper can report arrival.", "HELPER_NOT_ASSIGNED");
-    const [helper] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (helper?.status !== "active") throw new HttpError(403, "Your Helper approval is not active.", "HELPER_NOT_APPROVED");
+    await assertAssignedCollector(tx, identity, { ...job, collectionMode: job.collectionMode ?? "helper_delivery" }, "report arrival");
     if (job.status !== "collected") throw new HttpError(409, "Arrival can only be recorded for food in transit.", "DELIVERY_STATE_INVALID");
     if (job.arrivedAt) return { arrivedAt: job.arrivedAt };
     if (job.bestBeforeAt.getTime() <= Date.now()) throw new HttpError(409, "The food has expired. Do not hand it over; contact operations.", "DONATION_EXPIRED");
@@ -830,7 +1137,7 @@ export async function getReceiverDeliveryCode(identity: Identity, jobId: string)
       id: deliveryJobs.id,
       status: deliveryJobs.status,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       arrivedAt: deliveryJobs.arrivedAt,
       inspectionConfirmedAt: deliveryJobs.inspectionConfirmedAt,
     }).from(deliveryJobs).where(eq(deliveryJobs.id, jobId)).limit(1);
@@ -857,7 +1164,7 @@ export async function verifyDelivery(identity: Identity, jobId: string, code: st
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       collectedAt: deliveryJobs.collectedAt,
@@ -872,9 +1179,7 @@ export async function verifyDelivery(identity: Identity, jobId: string, code: st
       .where(eq(deliveryJobs.id, jobId))
       .for("update");
     if (!job) throw new HttpError(404, "Delivery not found.", "DELIVERY_NOT_FOUND");
-    if (job.helperUserId !== identity.id) throw new HttpError(403, "Only the assigned Helper can complete this delivery.", "HELPER_NOT_ASSIGNED");
-    const [helperProfile] = await tx.select({ status: helperProfiles.status }).from(helperProfiles).where(eq(helperProfiles.userId, identity.id)).limit(1);
-    if (helperProfile?.status !== "active") throw new HttpError(403, "Your Helper approval is not active. Contact operations.", "HELPER_NOT_APPROVED");
+    await assertAssignedCollector(tx, identity, { ...job, collectionMode: job.collectionMode ?? "helper_delivery" }, "complete this delivery");
     if (job.status !== "collected") throw new HttpError(409, "This delivery is not ready for verification.", "DELIVERY_STATE_INVALID");
     if (!job.arrivedAt || !job.inspectionConfirmedAt) throw new HttpError(409, "Arrival and Receiver acceptance must be recorded before verification.", "INSPECTION_NOT_RECORDED");
     if (!job.collectedAt) throw new HttpError(500, "Collection history is incomplete. Do not complete delivery; contact operations.", "CUSTODY_DATA_INVALID");
@@ -991,7 +1296,7 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       offerId: deliveryJobs.offerId,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       status: deliveryJobs.status,
       claimedAt: deliveryJobs.claimedAt,
       claimExpiresAt: deliveryJobs.claimExpiresAt,
@@ -1025,6 +1330,9 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       receiverContactName: deliveryDestinationDetails.receivingContactName,
       pickupCity: donations.pickupCity,
       donationStatus: donations.status,
+      transitDistanceKm: deliveryJobs.transitDistanceKm,
+      transitEtaMinutes: deliveryJobs.transitEtaMinutes,
+      transitCheckedAt: deliveryJobs.transitCheckedAt,
     }).from(deliveryJobs)
       .innerJoin(donations, eq(donations.id, deliveryJobs.donationId))
       .leftJoin(donationPrivateDetails, eq(donationPrivateDetails.donationId, donations.id))
@@ -1087,14 +1395,30 @@ export async function getDeliveryDetail(identity: Identity, jobId: string) {
       receiverContactName: assignedHelper ? job.receiverContactName : null,
       timeline,
       receipt: receipt ?? null,
+      transit: job.transitDistanceKm === null || job.transitEtaMinutes === null
+        ? null
+        : { distanceKm: Number(job.transitDistanceKm), etaMinutes: job.transitEtaMinutes, checkedAt: job.transitCheckedAt },
+      collectionMode: job.collectionMode,
       isAssignedToMe: assignedHelper,
       canClaim: Boolean(process.env.OPERATIONS_ENABLED === "true" && isEligibleOpenHelper && !assignedHelper && (job.status === "open" || (job.claimExpiresAt && job.claimExpiresAt.getTime() <= Date.now()))),
+      // A receiver that can reach the generator itself can collect the food instead of waiting for
+      // a Helper. Offered only while the job is unassigned and the collection window is open.
+      canSelfCollect: Boolean(
+        process.env.OPERATIONS_ENABLED === "true"
+        && receiverOperator
+        && job.status === "open"
+        && job.collectionMode !== "receiver_collection"
+        && job.pickupLatestAt.getTime() > Date.now(),
+      ),
       canPickup: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "assigned",
       canReportArrival: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "collected" && !job.arrivedAt,
       canConfirmInspection: process.env.OPERATIONS_ENABLED === "true" && receiverOperator && job.status === "collected" && Boolean(job.arrivedAt) && !job.inspectionConfirmedAt,
       canVerify: process.env.OPERATIONS_ENABLED === "true" && assignedHelper && job.status === "collected" && Boolean(job.inspectionConfirmedAt),
       canViewCode: process.env.OPERATIONS_ENABLED === "true" && receiverOperator && job.status === "collected" && Boolean(job.inspectionConfirmedAt),
       canReportIncident: generatorMember || receiverMember || assignedHelper || operations,
+      // Operations may return an uncollected assignment to the pool when a
+      // Helper stops responding. Not offered once food has been collected.
+      canReleaseAssignment: process.env.OPERATIONS_ENABLED === "true" && operations && job.status === "assigned" && !job.collectedAt,
     };
   });
 }
@@ -1203,7 +1527,7 @@ export async function reportDeliveryIncident(identity: Identity, jobId: string, 
       id: deliveryJobs.id,
       donationId: deliveryJobs.donationId,
       status: deliveryJobs.status,
-      helperUserId: deliveryJobs.helperUserId,
+      helperUserId: deliveryJobs.helperUserId, collectionMode: deliveryJobs.collectionMode,
       generatorOrganizationId: deliveryJobs.generatorOrganizationId,
       receiverOrganizationId: deliveryJobs.receiverOrganizationId,
       donationStatus: donations.status,
@@ -1934,6 +2258,48 @@ export async function getDashboard(identity: Identity) {
   });
 }
 
+/**
+ * Operator-assisted account recovery.
+ *
+ * The deployment may not have a working mail provider, in which case a person who
+ * forgets their password has no self-service route back in. This lets an
+ * operations or security administrator issue the *same* single-use reset link
+ * Better Auth would have emailed, and pass it on through a channel they control.
+ *
+ * Controls: a privileged platform role, a confirmed second factor (enforced by
+ * `requireIdentity`), a recorded reason, an audit event, and a link that is
+ * single-use and time-limited. The link is returned once and never logged.
+ */
+export async function issueAccountRecoveryLink(identity: Identity, input: { email: string; reason: string }) {
+  if (!hasAnyRole(identity, ["security_admin", "operations_admin"])) {
+    throw new HttpError(403, "Only an operations or security administrator can issue a recovery link.", "RECOVERY_NOT_PERMITTED");
+  }
+  const email = input.email.trim().toLowerCase();
+  const reason = input.reason.trim();
+  if (reason.length < 20 || reason.length > 500) {
+    throw new HttpError(422, "Record why this recovery is needed (at least 20 characters).", "RECOVERY_REASON_REQUIRED");
+  }
+
+  const { url } = await withPasswordResetCapture(() =>
+    auth.api.requestPasswordReset({ body: { email, redirectTo: "/reset-password" } }),
+  );
+
+  await withDomainContext(identity.id, async (tx) => {
+    await audit(tx, identity, "account.recovery_link_issued", "user", email, reason, {
+      // The address itself is already held by the platform; the audit records
+      // who issued the link and why, not the link.
+      recipientMasked: email.replace(/^(.).*(@.*)$/, "$1***$2"),
+    });
+  });
+
+  if (!url) {
+    // Unknown address, or Better Auth declined to issue a token. Do not say
+    // which: the operator only needs "nothing was issued".
+    return { issued: false as const };
+  }
+  return { issued: true as const, url, email };
+}
+
 export async function createSupportCase(identity: Identity, input: SupportCaseCreate) {
   if (input.organizationId && !canAccessOrganization(identity, input.organizationId)) {
     throw new HttpError(403, "Choose an organisation linked to your account.", "ORGANIZATION_ACCESS_DENIED");
@@ -2118,5 +2484,283 @@ export async function adminOverview(identity: Identity) {
       verifiedDeliveries: verifiedReceipts?.count ?? 0,
       emailOutbox: { pending: Number(outbox?.pending ?? 0), failed: Number(outbox?.failed ?? 0) },
     };
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Launch readiness
+ *
+ * The register's last five gaps are owner acts, not code paths. The point of the tables behind
+ * these functions is that the product stops describing them as "pending" and starts reporting
+ * which named fact is missing, with an expiry that silently re-opens the gap.
+ * ------------------------------------------------------------------ */
+
+const ATTESTATION_LABELS = {
+  legal_entity: "Legal entity",
+  insurance: "Insurance",
+  data_protection_contact: "Data-protection contact",
+  penetration_test: "Independent penetration test",
+} as const;
+
+type AttestationKey = keyof typeof ATTESTATION_LABELS;
+
+function requireAttestationWrite(identity: Identity): void {
+  if (!hasAnyRole(identity, ["security_admin", "operations_admin"])) {
+    throw new HttpError(403, "Only a security or operations administrator can record platform declarations.", "ATTESTATION_WRITE_FORBIDDEN");
+  }
+}
+
+function scannerStatus(): { mode: string; hostConfigured: boolean } {
+  const mode = (process.env.FILE_SCAN_MODE ?? "disabled").trim().toLowerCase();
+  return { mode, hostConfigured: Boolean(process.env.CLAMAV_HOST?.trim()) };
+}
+
+/**
+ * Read the declarations and the rota, then decide what is missing. Callers surface the names of
+ * missing items only; the values themselves stay behind the admin role.
+ */
+export async function getLaunchReadiness(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin", "safety_officer", "support_agent"])) {
+    throw new HttpError(403, "You do not have access to the operations workspace.", "OPERATIONS_ACCESS_REQUIRED");
+  }
+  const [attestations, shifts] = await withUserContext(identity.id, async (tx) => {
+    const attestationRows = await tx.select({
+      key: platformAttestations.key,
+      label: platformAttestations.label,
+      value: platformAttestations.value,
+      evidenceReference: platformAttestations.evidenceReference,
+      recordedBy: platformAttestations.recordedBy,
+      recordedAt: platformAttestations.recordedAt,
+      expiresAt: platformAttestations.expiresAt,
+    }).from(platformAttestations);
+    const shiftRows = await tx.select({
+      userId: onCallShifts.userId,
+      startsAt: onCallShifts.startsAt,
+      endsAt: onCallShifts.endsAt,
+      channel: onCallShifts.channel,
+    }).from(onCallShifts).where(sql`${onCallShifts.endsAt} > now() - interval '1 day'`);
+    return [attestationRows, shiftRows] as const;
+  });
+  const email = getEmailDeliveryStatus();
+  return evaluateReadiness({
+    now: new Date(),
+    attestations: attestations.map((row) => ({
+      key: row.key,
+      label: row.label,
+      value: (row.value ?? {}) as Record<string, unknown>,
+      evidenceReference: row.evidenceReference,
+      recordedBy: row.recordedBy,
+      recordedAt: row.recordedAt.toISOString(),
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+    })),
+    onCallShifts: shifts.map((shift) => ({
+      userId: shift.userId,
+      startsAt: shift.startsAt.toISOString(),
+      endsAt: shift.endsAt.toISOString(),
+      channel: shift.channel,
+    })),
+    email: {
+      configured: email.configured,
+      testSink: email.testSink,
+      localOnly: email.localOnly,
+      missingSettings: email.missingSettings,
+    },
+    scanner: scannerStatus(),
+  });
+}
+
+export async function recordAttestation(identity: Identity, input: AttestationInput) {
+  requireAttestationWrite(identity);
+  const label = ATTESTATION_LABELS[input.key as AttestationKey];
+  return withDomainContext(identity.id, async (tx) => {
+    const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+    if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+      throw new HttpError(422, "Use an ISO date for the expiry.", "ATTESTATION_EXPIRY_INVALID");
+    }
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      throw new HttpError(422, "Record a declaration that is still valid; this expiry has already passed.", "ATTESTATION_EXPIRY_PAST");
+    }
+    await tx.insert(platformAttestations).values({
+      key: input.key,
+      label,
+      value: input.value,
+      evidenceReference: input.evidenceReference,
+      recordedBy: identity.id,
+      recordedAt: new Date(),
+      expiresAt,
+    }).onConflictDoUpdate({
+      target: platformAttestations.key,
+      set: {
+        label,
+        value: input.value,
+        evidenceReference: input.evidenceReference,
+        recordedBy: identity.id,
+        recordedAt: new Date(),
+        expiresAt,
+        // Re-recording re-arms the lapse reminder: the sweep must be able to warn again next year.
+        renewalRemindedAt: null,
+      },
+    });
+    // The declaration and the audit line are written together: a claim with no trail of who made
+    // it is exactly what this table exists to prevent.
+    await audit(tx, identity, `attestation.${input.key}`, "platform_attestation", input.key, undefined, {
+      evidenceReference: input.evidenceReference,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    });
+    return { key: input.key, label, recordedAt: new Date().toISOString(), expiresAt: expiresAt?.toISOString() ?? null };
+  });
+}
+
+export async function clearAttestation(identity: Identity, key: AttestationKey, reason: string) {
+  requireAttestationWrite(identity);
+  if (!(key in ATTESTATION_LABELS)) {
+    throw new HttpError(422, "Unknown declaration.", "ATTESTATION_KEY_INVALID");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const deleted = await tx.delete(platformAttestations).where(eq(platformAttestations.key, key)).returning({ key: platformAttestations.key });
+    if (deleted.length === 0) throw new HttpError(404, "That declaration is not recorded.", "ATTESTATION_NOT_FOUND");
+    await audit(tx, identity, `attestation.${key}.withdrawn`, "platform_attestation", key, reason, {});
+    return { key, withdrawn: true };
+  });
+}
+
+export async function scheduleOnCallShift(identity: Identity, input: OnCallShiftInput) {
+  requireAttestationWrite(identity);
+  const startsAt = new Date(input.startsAt);
+  const endsAt = new Date(input.endsAt);
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    throw new HttpError(422, "Use ISO timestamps for the shift.", "SHIFT_TIME_INVALID");
+  }
+  if (endsAt.getTime() <= startsAt.getTime()) {
+    throw new HttpError(422, "The shift must end after it starts.", "SHIFT_WINDOW_INVALID");
+  }
+  if (endsAt.getTime() <= Date.now()) {
+    throw new HttpError(422, "That shift is already over, so it would not cover anyone.", "SHIFT_IN_PAST");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    // A shift is a promise by a real account holder, so the person must exist before it is recorded.
+    // The lookup goes through a SECURITY DEFINER function: the application role has no sight of the
+    // account table, and a rota entry must not become a way to enumerate it.
+    const personId = input.userId
+      ? (await tx.select({ id: user.id }).from(user).where(eq(user.id, input.userId)).limit(1)).at(0)?.id
+      : (await tx.execute<{ id: string | null }>(sql`select public.app_on_call_person(${input.email ?? ""}) as id`)).rows.at(0)?.id;
+    if (!personId) throw new HttpError(404, "Choose a person with an account.", "SHIFT_PERSON_UNKNOWN");
+    const [shift] = await tx.insert(onCallShifts).values({
+      userId: personId,
+      startsAt,
+      endsAt,
+      channel: input.channel,
+      notes: input.notes || null,
+      createdBy: identity.id,
+    }).returning({ id: onCallShifts.id });
+    await audit(tx, identity, "on_call.shift_scheduled", "on_call_shift", shift.id, undefined, {
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      channel: input.channel,
+      person: personId,
+    });
+    return { id: shift.id, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() };
+  });
+}
+
+/**
+ * The published contact, read through the SECURITY DEFINER functions so a visitor needs no role.
+ * Returns null until a named person has actually been recorded, which is why the privacy page can
+ * promise a working address only when there is one.
+ */
+export async function getPublishedContacts(): Promise<{
+  legalEntity: Record<string, unknown> | null;
+  dataProtection: Record<string, unknown> | null;
+}> {
+  const { rows } = await pool.query<{ entity: Record<string, unknown> | null; contact: Record<string, unknown> | null }>(
+    "select app_legal_entity() as entity, app_public_data_protection_contact() as contact",
+  );
+  return { legalEntity: rows[0]?.entity ?? null, dataProtection: rows[0]?.contact ?? null };
+}
+
+/* ------------------------------------------------------------------ *
+ * Joka directory
+ *
+ * The public page reads a projection with no phone numbers. These functions are the private half:
+ * they are how an operator sees the number, records who answered, and decides whether an entry is
+ * published at all.
+ * ------------------------------------------------------------------ */
+
+function requireDirectoryWrite(identity: Identity): void {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin"])) {
+    throw new HttpError(403, "Only an operations or security administrator can maintain the directory.", "DIRECTORY_WRITE_FORBIDDEN");
+  }
+}
+
+export async function listDirectoryPlaces(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin", "safety_officer", "support_agent"])) {
+    throw new HttpError(403, "You do not have access to the operations workspace.", "OPERATIONS_ACCESS_REQUIRED");
+  }
+  return withUserContext(identity.id, async (tx) => tx.select({
+    slug: directoryPlaces.slug,
+    name: directoryPlaces.name,
+    category: directoryPlaces.category,
+    area: directoryPlaces.area,
+    addressLine: directoryPlaces.addressLine,
+    phone: directoryPlaces.phone,
+    phoneSource: directoryPlaces.phoneSource,
+    phoneKind: directoryPlaces.phoneKind,
+    publishPhone: directoryPlaces.publishPhone,
+    photoUrl: directoryPlaces.photoUrl,
+    consentStatus: directoryPlaces.consentStatus,
+    ownerVerified: directoryPlaces.ownerVerified,
+    published: directoryPlaces.published,
+    lastCheckedOn: directoryPlaces.lastCheckedOn,
+    notes: directoryPlaces.notes,
+  }).from(directoryPlaces).orderBy(directoryPlaces.category, directoryPlaces.name));
+}
+
+export async function updateDirectoryPlace(identity: Identity, input: DirectoryPlaceUpdate) {
+  requireDirectoryWrite(identity);
+  return withDomainContext(identity.id, async (tx) => {
+    const [existing] = await tx.select({
+      slug: directoryPlaces.slug,
+      name: directoryPlaces.name,
+      consentStatus: directoryPlaces.consentStatus,
+      phone: directoryPlaces.phone,
+    })
+      .from(directoryPlaces).where(eq(directoryPlaces.slug, input.slug)).limit(1);
+    if (!existing) throw new HttpError(404, "That place is not in the directory.", "DIRECTORY_PLACE_NOT_FOUND");
+
+    // A number is a person's, not a listing's. Publishing one requires the recorded agreement of the
+    // owner, and the database enforces the same pair, so this check is a courtesy rather than the lock.
+    if (input.publishPhone === true) {
+      const willHaveConsented = input.consentStatus
+        ? input.consentStatus === "consented"
+        : existing.consentStatus === "consented";
+      if (!willHaveConsented) {
+        throw new HttpError(422, "Record the owner's agreement before publishing their number.", "DIRECTORY_PHONE_CONSENT_REQUIRED");
+      }
+      if (!input.phone && !existing.phone) {
+        throw new HttpError(422, "There is no number recorded for this place yet.", "DIRECTORY_PHONE_MISSING");
+      }
+    }
+
+    const patch: Partial<typeof directoryPlaces.$inferInsert> = { updatedAt: new Date() };
+    if (input.phone !== undefined) patch.phone = input.phone ? input.phone : null;
+    if (input.phoneKind !== undefined) patch.phoneKind = input.phoneKind;
+    if (input.consentStatus !== undefined) patch.consentStatus = input.consentStatus;
+    if (input.published !== undefined) patch.published = input.published;
+    if (input.ownerVerified !== undefined) patch.ownerVerified = input.ownerVerified;
+    if (input.photoUrl !== undefined) patch.photoUrl = input.photoUrl;
+    if (input.publishPhone !== undefined) patch.publishPhone = input.publishPhone;
+    if (input.notes !== undefined) patch.notes = input.notes ? input.notes : null;
+    // Confirming details with the owner is the only thing that turns the label green, and it can
+    // only happen on the word of a person who spoke to them, never from a listing.
+    if (input.ownerVerified === true) patch.consentStatus = "consented";
+
+    await tx.update(directoryPlaces).set(patch).where(eq(directoryPlaces.slug, input.slug));
+    await audit(tx, identity, "directory.place_updated", "directory_place", input.slug, undefined, {
+      fields: Object.keys(input).filter((key) => key !== "slug"),
+      published: input.published,
+      ownerVerified: input.ownerVerified,
+      consentStatus: input.consentStatus,
+    });
+    return { slug: input.slug, name: existing.name };
   });
 }

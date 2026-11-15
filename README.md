@@ -24,6 +24,8 @@ If this careful, auditable approach is useful, **[star the repository](https://g
 - Authentication architecture, security evidence, owner-only deployment steps and remaining gaps: [`AUTHENTICATION_IMPLEMENTATION_REPORT.md`](AUTHENTICATION_IMPLEMENTATION_REPORT.md).
 - Local public directory example: `/near-iim-calcutta` (attributed public record, not an Annapurna Link partner or offer).
 
+Direct answers to the questions a receiver or reviewer asks — food cleanliness, helpers who are unavailable, distance, application takeover, liability for harm, the database and firewall, forgotten passwords, and third-party API access — are in [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md) (unverified engineering explanation, with an open-gap register).
+
 Design, safety, legal and operations documents: [`ARCHITECTURE.md`](ARCHITECTURE.md), [`PRODUCT_REQUIREMENTS.md`](PRODUCT_REQUIREMENTS.md), [`OPERATING_MODEL.md`](OPERATING_MODEL.md), [`FOOD_SAFETY_CONTROLS.md`](FOOD_SAFETY_CONTROLS.md) (draft, unverified), [`LEGAL_RESEARCH_REGISTER.md`](LEGAL_RESEARCH_REGISTER.md) (unverified), [`SECURITY_THREAT_MODEL.md`](SECURITY_THREAT_MODEL.md), [`PRIVACY_DATA_MAP.md`](PRIVACY_DATA_MAP.md), [`DATABASE.md`](DATABASE.md), [`TEST_PLAN.md`](TEST_PLAN.md), [`OPERATIONS_RUNBOOK.md`](OPERATIONS_RUNBOOK.md), [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md), [`PARTNER_ONBOARDING.md`](PARTNER_ONBOARDING.md), and the section-by-section build review in [`MASTER_PROMPT_COMPLIANCE.md`](MASTER_PROMPT_COMPLIANCE.md).
 
 The audit and implementation tracker in [`UI_UX_AUDIT.md`](UI_UX_AUDIT.md) and [`UI_UX_IMPLEMENTATION_PLAN.md`](UI_UX_IMPLEMENTATION_PLAN.md), shared interface guidance in [`DESIGN_SYSTEM.md`](DESIGN_SYSTEM.md), and the latest evidence and blockers in [`UI_UX_TEST_REPORT.md`](UI_UX_TEST_REPORT.md) describe what is implemented and what remains unverified. Metrics, when shown, are sourced from the backend; the site must not fabricate meals, impact, partners or approvals.
@@ -178,6 +180,52 @@ docker compose run --rm \
 ```
 
 Never put real passwords or tokens in source, issues, logs, or chat. No demo account or public admin signup is created by default.
+
+## Close the remaining owner gates on a hosted deployment
+
+Six things cannot be done by a commit: incorporating the entity, buying insurance, naming a person
+for personal-data questions, staffing a rota, a mail provider credential, a malware scanner and an
+independent penetration test. Migration 17 stores each of the first four as a record; this is the
+shortest honest path through them.
+
+1. **Make the console reachable.** On a fresh hosted database no account holds a platform role, so
+   `/admin` is empty. After verifying and activating your own account, run the same guarded
+   bootstrap against the hosted database from a machine that can reach it:
+
+   ```sh
+   ALLOW_ADMIN_BOOTSTRAP=true \
+   BOOTSTRAP_ADMIN_EMAIL='you@your-domain.test' \
+   BOOTSTRAP_ADMIN_REASON='Owner bootstrap so the legal, insurance and rota records can be declared' \
+   MIGRATION_DATABASE_URL='postgres://...' npm run bootstrap:admin
+   ```
+
+   It grants `operations_admin`, writes an audit event, and refuses any account that is not
+   email-verified and active. Sign in afterwards and complete TOTP enrolment, which the platform
+   role requires before it will serve admin APIs.
+2. **Record the four facts** under **Admin → Launch readiness**: legal entity (name, jurisdiction,
+   address, registration reference, liability position), insurance (policy, insurer, coverage,
+   expiry), the named data-protection contact (name, published address, hours, postal address), and
+   the last independent penetration test (provider, report reference, completion date). Each needs
+   an evidence reference and is attributed to you in the audit trail. `/privacy`, `/terms` and
+   `/contact` publish the contact and entity the moment they exist; `/api/health` stops naming them
+   as missing.
+3. **Schedule the first shift.** Pick a named account, a start, an end and a way to reach them. The
+   support page derives its response window from this coverage and publishes nothing when it is
+   absent. `app_escalate_platform_readiness` — run every fifteen minutes by the worker or by the
+   scheduled drain — notifies administrators when a declaration is within 30 days of lapsing and
+   when nobody is on call for the next twelve hours, once per lapse window rather than every sweep.
+4. **Mail.** Either `SMTP_URL` (for example `smtps://resend:YOUR_API_KEY@smtp.resend.com:465`,
+   `smtps://USER:KEY@smtp-relay.brevo.com:465`, or Amazon SES
+   `smtp://USER:PASS@email-smtp.<region>.amazonaws.com:587`) or the explicit
+   `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`/`SMTP_SECURE` set, plus a verified `SMTP_FROM`.
+   Run `RUN_SMTP_VERIFY=true npm run smtp:verify` before sending anything real. Until then the
+   health endpoint reports `email.status: "test_sink"` and recovery runs through the operator path.
+5. **Scanning.** `docker compose --profile scanner up -d` starts a real clamd on the private
+   network, then set `FILE_SCAN_MODE=clamav` and `CLAMAV_HOST=clamd`. Uploads refuse rather than
+   pass unscanned, so enabling the mode without a reachable scanner fails closed. On a platform
+   that cannot run clamd, point `CLAMAV_HOST`/`CLAMAV_PORT` at any reachable clamd.
+6. **The penetration test** has to be commissioned. Record the report reference afterwards; the
+   readiness gate re-opens by itself when the test is more than a year old.
 
 ## Development and checks
 

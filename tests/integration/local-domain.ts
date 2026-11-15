@@ -31,7 +31,12 @@ try {
   // Refuse every non-empty application table, not just the main domain tables.
   // Synthetic approvals must never be added to a database containing real data.
   const tables = await admin.query<{ tablename: string }>("SELECT tablename FROM pg_tables WHERE schemaname='public'");
+  // Reference data seeded by a migration is not "data in the database". The gazetteer is
+  // read-only geography (migration 16), identical on every instance and carrying no personal or
+  // operational record, so it is the one table allowed to arrive pre-populated.
+  const seededReferenceTables = new Set(["geo_places", "directory_places"]);
   for (const { tablename } of tables.rows) {
+    if (seededReferenceTables.has(tablename)) continue;
     const rows = await admin.query<{ count: string }>(`SELECT count(*)::text count FROM public.${pg.escapeIdentifier(tablename)}`);
     assert.equal(rows.rows[0]?.count, "0", `The isolated test database must be empty; ${tablename} contains data.`);
   }
@@ -46,7 +51,7 @@ try {
   const identity = (role: string): Identity => ({
     id: ids[role]!, name: `Fictional ${role}`, email: `${role}@example.test`,
     platformRoles: role === "admin" ? ["operations_admin"] : role === "safety" ? ["safety_officer"] : [],
-    memberships: [], requestedRole: null, helperStatus: null,
+    memberships: [], requestedRole: null, helperStatus: null, twoFactorEnabled: false,
   });
   const [operations, safety, generator, receiver, receiver2, helper1, helper2, outsider] = ["admin", "safety", "generator", "receiver", "receiver2", "helper1", "helper2", "outsider"].map(identity);
   assert(operations && safety && generator && receiver && receiver2 && helper1 && helper2 && outsider);
@@ -232,7 +237,175 @@ try {
   assert(reserveFailure?.status === "rejected" && [404, 409].includes(reserveFailure.reason?.status), "Losing Receiver must receive a safe unavailable/conflict error.");
   const jobCount = await admin.query<{ count: number }>("SELECT count(*)::int count FROM public.delivery_jobs WHERE donation_id=$1", [competing.id]);
   assert.equal(jobCount.rows[0]!.count, 1);
-  console.log("PASS: synthetic onboarding/review, matching, competing claims/reservations, pickup window, RLS code privacy, OTP lock/replay, one receipt/impact and incident hold.");
+  phase = "launch readiness reflects stored declarations";
+  const before = await service.getLaunchReadiness(operations);
+  assert.equal(before.complete, false);
+  for (const key of ["legal_entity", "insurance", "data_protection_contact", "on_call", "penetration_test"]) {
+    assert(before.missing.includes(key as never), `${key} must start unmet.`);
+  }
+  const publishedBefore = await service.getPublishedContacts();
+  assert.equal(publishedBefore.dataProtection, null, "No contact may be published before one is declared.");
+  assert.equal(publishedBefore.legalEntity, null);
+  await assert.rejects(service.getLaunchReadiness(generator), "A Generator must not read platform declarations.");
+  await assert.rejects(service.recordAttestation(generator, {
+    key: "legal_entity", evidenceReference: "fictional", expiresAt: null,
+    value: { entityName: "Fictional Foods Pvt Ltd", jurisdiction: "IN-OD", registeredAddress: "Fictional address", registrationReference: "", liabilityPosition: "Fictional position" },
+  }), "Only an administrator may declare the entity.");
+  // A declaration without held evidence is exactly the claim this table exists to stop.
+  await assert.rejects(service.recordAttestation(operations, {
+    key: "legal_entity", evidenceReference: "", expiresAt: null,
+    value: { entityName: "Fictional Foods Pvt Ltd", jurisdiction: "IN-OD", registeredAddress: "Fictional address", registrationReference: "", liabilityPosition: "Fictional position" },
+  }));
+  await service.recordAttestation(operations, {
+    key: "legal_entity", evidenceReference: "fictional-mca-cin", expiresAt: null,
+    value: { entityName: "Fictional Foods Pvt Ltd", jurisdiction: "IN-OD", registeredAddress: "Fictional address", registrationReference: "", liabilityPosition: "Fictional position" },
+  });
+  await service.recordAttestation(operations, {
+    key: "insurance", evidenceReference: "fictional-policy", expiresAt: "2030-01-01",
+    value: { insurer: "Fictional Insurance", policyReference: "POL-FICTIONAL", coverageSummary: "Fictional cover", liabilityLimit: "Fictional limit" },
+  });
+  await service.recordAttestation(operations, {
+    key: "data_protection_contact", evidenceReference: "fictional-notice", expiresAt: null,
+    value: { contactName: "Fictional Contact", contactEmail: "privacy@example.test", hours: "Mon-Fri 09:00-18:00 IST", postalAddress: "Fictional address" },
+  });
+  const today = new Date().toISOString().slice(0, 10);
+  await service.recordAttestation(operations, {
+    key: "penetration_test", evidenceReference: "fictional-report", expiresAt: null,
+    value: { provider: "Fictional Security", reportReference: "PT-FICTIONAL", completedOn: today, scopeSummary: "Fictional scope" },
+  });
+  // A rota entry that ended before now never counts as coverage.
+  await service.scheduleOnCallShift(operations, {
+    email: `${prefix}-admin@example.test`,
+    startsAt: new Date(Date.now() - 48 * 3_600_000).toISOString(),
+    endsAt: new Date(Date.now() - 24 * 3_600_000).toISOString(),
+    channel: "fictional phone", notes: "past shift",
+  }).then(() => { throw new Error("A shift that is already over must be refused."); }, () => undefined);
+  const coverageBefore = await admin.query<{ coverage: { coveredNow: boolean; hoursAhead: number } }>("SELECT public.app_on_call_coverage() coverage");
+  assert.equal(coverageBefore.rows[0]!.coverage.coveredNow, false);
+  await service.scheduleOnCallShift(operations, {
+    email: `${prefix}-admin@example.test`,
+    startsAt: new Date(Date.now() - 3_600_000).toISOString(),
+    endsAt: new Date(Date.now() + 23 * 3_600_000).toISOString(),
+    channel: "fictional phone", notes: "covering shift",
+  });
+  const gate = await service.getLaunchReadiness(operations);
+  const declaredKeys = ["legal_entity", "insurance", "data_protection_contact", "on_call", "penetration_test"] as const;
+  for (const key of declaredKeys) {
+    assert(!gate.missing.includes(key), `${key} must be met once declared with evidence: ${gate.items.find((item) => item.key === key)?.detail}`);
+  }
+  const coverageAfter = await admin.query<{ coverage: { coveredNow: boolean; hoursAhead: number } }>("SELECT public.app_on_call_coverage() coverage");
+  assert.equal(coverageAfter.rows[0]!.coverage.coveredNow, true);
+  assert(coverageAfter.rows[0]!.coverage.hoursAhead >= 20, "Coverage must reflect the recorded shift, not a configured promise.");
+  const published = await service.getPublishedContacts();
+  assert.equal((published.dataProtection as { contactEmail?: string } | null)?.contactEmail, "privacy@example.test");
+  assert.equal((published.legalEntity as { entityName?: string } | null)?.entityName, "Fictional Foods Pvt Ltd");
+  // The public endpoint must agree with the gate it reports on, and must expose names only.
+  const publicGate = await admin.query<{ readiness: Record<string, boolean> }>("SELECT public.app_launch_readiness() readiness");
+  for (const key of declaredKeys) {
+    assert.equal(publicGate.rows[0]!.readiness[key === "on_call" ? "on_call" : key], true, `app_launch_readiness must report ${key} as met.`);
+  }
+  // An expired policy re-opens the gap by itself: no one has to remember to edit a document.
+  await admin.query("UPDATE public.platform_attestations SET expires_at = now() - interval '1 day' WHERE key = 'insurance'");
+  const lapsed = await service.getLaunchReadiness(operations);
+  assert(lapsed.missing.includes("insurance"), "A lapsed policy must make readiness fail without any code change.");
+  const lapsedPublic = await admin.query<{ readiness: Record<string, boolean> }>("SELECT public.app_launch_readiness() readiness");
+  assert.equal(lapsedPublic.rows[0]!.readiness.insurance, false);
+  phase = "lapsing declarations and a rota gap announce themselves";
+  // Insurance 20 days out is inside the 30-day horizon: the sweep must warn the administrators once.
+  await admin.query("UPDATE public.platform_attestations SET expires_at = now() + interval '20 days', renewal_reminded_at = NULL WHERE key = 'insurance'");
+  const sweep = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(sweep.rows[0]!.expiring_declarations, 1, "A policy inside the horizon must produce exactly one reminder.");
+  const reminded = await admin.query<{ count: number }>(
+    "SELECT count(*)::int count FROM public.notifications WHERE kind = 'readiness.declaration_expiring' AND user_id = $1",
+    [ids.admin],
+  );
+  assert.equal(reminded.rows[0]!.count, 1);
+  // Running the sweep again must not repeat itself inside the same lapse window.
+  const repeat = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(repeat.rows[0]!.expiring_declarations, 0);
+  // With the rota emptied, coverage is announced once and then stays quiet for twelve hours.
+  await admin.query("DELETE FROM public.on_call_shifts");
+  const gap = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(gap.rows[0]!.coverage_gaps, 1);
+  const gapRepeat = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(gapRepeat.rows[0]!.coverage_gaps, 0);
+  const gapNotices = await admin.query<{ count: number }>(
+    "SELECT count(*)::int count FROM public.notifications WHERE kind = 'readiness.coverage_gap'",
+  );
+  assert(gapNotices.rows[0]!.count >= 1);
+  // Re-recording the declaration re-arms the reminder, so next year's lapse is not silent.
+  await service.recordAttestation(operations, {
+    key: "insurance", evidenceReference: "fictional-renewal", expiresAt: "2031-01-01",
+    value: { insurer: "Fictional Insurance", policyReference: "POL-FICTIONAL-2", coverageSummary: "Fictional cover", liabilityLimit: "Fictional limit" },
+  });
+  const rearmed = await admin.query<{ renewal_reminded_at: string | null }>(
+    "SELECT renewal_reminded_at FROM public.platform_attestations WHERE key = 'insurance'",
+  );
+  assert.equal(rearmed.rows[0]!.renewal_reminded_at, null);
+  phase = "the Joka directory hides numbers and waits for a person";
+  const seededDirectory = await admin.query<{ places: Record<string, unknown>[] }>("SELECT public.app_public_directory() places");
+  assert(seededDirectory.rows[0]!.places.length >= 25, "The seeded directory must be visible on the public projection.");
+  for (const entry of seededDirectory.rows[0]!.places) {
+    assert.equal(entry.phone ?? null, null, "No seeded place may publish a phone number before its owner agrees.");
+    assert(!("notes" in entry), "Internal notes must not reach the public projection.");
+    assert.equal(entry.ownerVerified, false, "No seeded place may claim owner confirmation.");
+  }
+  const privateRead = await service.listDirectoryPlaces(operations);
+  assert(privateRead.length >= 25);
+  assert(privateRead.some((place) => place.phone), "The operator view must show the numbers that exist.");
+  await assert.rejects(service.listDirectoryPlaces(generator), "A Generator must not read the private directory.");
+  await assert.rejects(service.updateDirectoryPlace(generator, { slug: "halla-bowl", published: false }));
+  assert.equal(await admin.query("SELECT public.app_public_directory() places").then((result) => (result.rows[0]!.places as { slug: string }[]).some((entry) => entry.slug === "halla-bowl")), true);
+  // Confirming with the owner is the only path to the green label, and it also records consent.
+  await service.updateDirectoryPlace(operations, { slug: "halla-bowl", ownerVerified: true });
+  const verifiedRow = await admin.query<{ owner_verified: boolean; consent_status: string }>(
+    "SELECT owner_verified, consent_status FROM public.directory_places WHERE slug = 'halla-bowl'",
+  );
+  assert.deepEqual(verifiedRow.rows[0], { owner_verified: true, consent_status: "consented" });
+  // A number stays private until the owner agrees, and then only that number.
+  const phoneBefore = await admin.query<{ places: { slug: string; phone: string | null }[] }>("SELECT public.app_public_directory() places");
+  assert.equal(phoneBefore.rows[0]!.places.find((entry) => entry.slug === "halla-bowl")?.phone ?? null, null, "An unconsented number must stay private.");
+  await assert.rejects(
+    service.updateDirectoryPlace(operations, { slug: "shree-shyam-banquet", publishPhone: true }),
+    "Publishing a number without the owner's agreement must be refused.",
+  );
+  await service.updateDirectoryPlace(operations, { slug: "halla-bowl", publishPhone: true });
+  const phoneAfter = await admin.query<{ places: { slug: string; phone: string | null }[] }>("SELECT public.app_public_directory() places");
+  assert.equal(phoneAfter.rows[0]!.places.find((entry) => entry.slug === "halla-bowl")?.phone, "+919007087129");
+  const otherPhones = phoneAfter.rows[0]!.places.filter((entry) => entry.slug !== "halla-bowl" && entry.phone);
+  assert.equal(otherPhones.length, 0, "Consent for one place must not publish anyone else's number.");
+  // Unpublishing removes it from the public projection without deleting the record.
+  await service.updateDirectoryPlace(operations, { slug: "halla-bowl", published: false });
+  const afterHide = await admin.query<{ places: { slug: string }[] }>("SELECT public.app_public_directory() places");
+  assert.equal(afterHide.rows[0]!.places.some((entry) => entry.slug === "halla-bowl"), false);
+  // The application role cannot read the table on its own: phone numbers need a signed-in operator.
+  const directoryAppPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+  try {
+    const leaked = await directoryAppPool.query<{ count: string }>("SELECT count(*)::text count FROM public.directory_places");
+    assert.equal(leaked.rows[0]?.count, "0", "Phone numbers must not be readable without a role.");
+  } finally {
+    await directoryAppPool.end();
+  }
+
+  // The application role cannot read or write declarations on its own: it needs a signed-in
+  // administrator, which is what FORCE ROW LEVEL SECURITY is there to enforce.
+  const appPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+  try {
+    const leaked = await appPool.query<{ count: string }>("SELECT count(*)::text count FROM public.platform_attestations");
+    assert.equal(leaked.rows[0]?.count, "0", "Declarations must not be visible without an authenticated role.");
+    await assert.rejects(appPool.query("INSERT INTO public.platform_attestations (key,label,value) VALUES ('insurance','Insurance','{}'::jsonb)"));
+  } finally {
+    await appPool.end();
+  }
+  console.log("PASS: synthetic onboarding/review, matching, competing claims/reservations, pickup window, RLS code privacy, OTP lock/replay, one receipt/impact, incident hold and launch readiness.");
   await db.pool.end();
   await db.authPool.end();
 } catch (error) {

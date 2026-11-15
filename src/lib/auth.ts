@@ -1,6 +1,7 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
 import { betterAuth } from "better-auth";
+import { twoFactor } from "better-auth/plugins";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { eq, sql } from "drizzle-orm";
@@ -8,6 +9,7 @@ import { z } from "zod";
 import * as schema from "@/db/schema";
 import { authDb, withUserContext } from "@/db";
 import { enqueueAuthEmail } from "@/email/outbox";
+import { capturePasswordResetUrl } from "@/email/reset-link-capture";
 import { registrationDetailsSchema } from "@/domain/validation";
 import { parseAdditionalOrigins } from "@/lib/production-config";
 
@@ -98,12 +100,25 @@ export const auth = betterAuth({
   trustedOrigins,
   database: drizzleAdapter(authDb, {
     provider: "pg",
-    schema: { user: schema.user, session: schema.session, account: schema.account, verification: schema.verification, rateLimit: schema.rateLimit },
+    schema: { user: schema.user, session: schema.session, account: schema.account, verification: schema.verification, rateLimit: schema.rateLimit, twoFactor: schema.twoFactor },
     transaction: true,
   }),
   user: {
     additionalFields: intakeFields,
   },
+  // A platform role can release a hold, verify an organisation or reissue a
+  // delivery code. A password alone is not an acceptable control for that, so
+  // every account holding a platform role must enrol a second factor before the
+  // application APIs will serve it (see `requireIdentity`).
+  plugins: [
+    twoFactor({
+      issuer: "Annapurna Link",
+      // A privileged operator who loses the phone must still be able to get in.
+      // Operations can review and remove the factor after an identity check,
+      // and the removal is audited by Better Auth and by the application.
+      backupCodeOptions: { amount: 10, length: 10 },
+    }),
+  ],
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: true,
@@ -111,7 +126,12 @@ export const auth = betterAuth({
     maxPasswordLength: 128,
     autoSignIn: false,
     revokeSessionsOnPasswordReset: true,
-    sendResetPassword: async ({ user, url }) => enqueueAuthEmail("password_reset", user.email, url),
+    sendResetPassword: async ({ user, url }) => {
+      // Keep queueing the real email, and let an authorised operator-assisted
+      // recovery read the same link inside an explicit capture scope.
+      capturePasswordResetUrl(url);
+      await enqueueAuthEmail("password_reset", user.email, url);
+    },
   },
   emailVerification: {
     sendOnSignUp: true,

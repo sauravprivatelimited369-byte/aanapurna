@@ -46,9 +46,30 @@ export const user = pgTable("user", {
   registrationStateOrRegion: text("registration_state_or_region"),
   registrationPostalCode: text("registration_postal_code"),
   registrationProfileNotes: text("registration_profile_notes"),
+  // Set by Better Auth's two-factor plugin after a second factor is confirmed.
+  twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
   createdAt: instant("created_at").notNull().defaultNow(),
   updatedAt: instant("updated_at").notNull().defaultNow(),
 });
+
+/**
+ * Better Auth two-factor secrets. The application role is given no privilege at
+ * all on this table: the shared secret and backup codes are read only by the
+ * authentication role inside Better Auth.
+ */
+export const twoFactor = pgTable(
+  "two_factor",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    verified: boolean("verified").notNull().default(true),
+    failedVerificationCount: integer("failed_verification_count").notNull().default(0),
+    lockedUntil: instant("locked_until"),
+  },
+  (table) => [index("two_factor_user_idx").on(table.userId)],
+);
 
 export const session = pgTable(
   "session",
@@ -170,6 +191,9 @@ export const serviceAreas = pgTable(
     countryCode: text("country_code").notNull().default("IN"),
     stateOrRegion: text("state_or_region"),
     cityOrDistrict: text("city_or_district"),
+    // Null means "no limit configured": the estimate is shown but nothing is refused.
+    maxTransitKm: numeric("max_transit_km", { precision: 6, scale: 2 }),
+    averageSpeedKmph: numeric("average_speed_kmph", { precision: 5, scale: 1 }).notNull().default("20"),
     timezone: text("timezone").notNull().default("Asia/Kolkata"),
     active: boolean("active").notNull().default(false),
     createdAt: instant("created_at").notNull().defaultNow(),
@@ -189,6 +213,9 @@ export const organizations = pgTable(
     cityOrDistrict: text("city_or_district").notNull(),
     stateOrRegion: text("state_or_region"),
     postalCode: text("postal_code"),
+    // Optional exact location. When absent, the city name is matched against the gazetteer.
+    latitude: numeric("latitude", { precision: 9, scale: 6 }),
+    longitude: numeric("longitude", { precision: 9, scale: 6 }),
     timezone: text("timezone").notNull().default("Asia/Kolkata"),
     contactName: text("contact_name").notNull(),
     contactEmail: text("contact_email").notNull(),
@@ -325,15 +352,97 @@ export const deliveryJobs = pgTable(
     collectionCondition: text("collection_condition"),
     deliveryCondition: text("delivery_condition"),
     exceptionReason: text("exception_reason"),
+    // How the food travels: by an approved Helper, or collected by the receiving organisation.
+    collectionMode: text("collection_mode").notNull().default("helper_delivery"),
+    // Recorded once at assignment. Null means the distance could not be established.
+    transitDistanceKm: numeric("transit_distance_km", { precision: 6, scale: 2 }),
+    transitEtaMinutes: integer("transit_eta_minutes"),
+    transitCheckedAt: instant("transit_checked_at"),
+    // Set by the escalation sweep once operations staff have been told an open
+    // job has gone unclaimed, so the same job is not reported every run.
+    escalatedAt: instant("escalated_at"),
     createdAt: instant("created_at").notNull().defaultNow(),
     updatedAt: instant("updated_at").notNull().defaultNow(),
   },
   (table) => [
     index("delivery_jobs_helper_status_idx").on(table.helperUserId, table.status),
+    index("delivery_jobs_open_escalation_idx").on(table.status, table.escalatedAt, table.createdAt),
     index("delivery_jobs_receiver_status_idx").on(table.receiverOrganizationId, table.status),
     uniqueIndex("delivery_jobs_active_helper_uq").on(table.helperUserId, table.donationId),
   ],
 );
+
+/**
+ * Read-only gazetteer of Indian places, matched against the free-text city the onboarding form
+ * captures. It exists so a distance can be estimated without collecting coordinates from anyone
+ * first, and so the application never invents a number it cannot support.
+ */
+/**
+ * Owner declarations that no code can verify. Each row names who declared it, when it must be
+ * renewed, and what evidence is held. The launch gate reads these instead of trusting prose.
+ */
+export const platformAttestations = pgTable("platform_attestations", {
+  key: text("key").primaryKey(),
+  label: text("label").notNull(),
+  value: jsonb("value").notNull().default({}),
+  evidenceReference: text("evidence_reference"),
+  recordedBy: text("recorded_by").references(() => user.id, { onDelete: "set null" }),
+  recordedAt: instant("recorded_at").notNull().defaultNow(),
+  expiresAt: instant("expires_at"),
+  // Cleared on every re-record so a renewal re-arms the lapse reminder.
+  renewalRemindedAt: instant("renewal_reminded_at"),
+});
+
+/** A staffed rota. Readiness requires real coverage, not an intention to be reachable. */
+export const onCallShifts = pgTable("on_call_shifts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  startsAt: instant("starts_at").notNull(),
+  endsAt: instant("ends_at").notNull(),
+  channel: text("channel").notNull(),
+  notes: text("notes"),
+  createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+  createdAt: instant("created_at").notNull().defaultNow(),
+}, (table) => [index("on_call_shifts_window_idx").on(table.startsAt, table.endsAt)]);
+
+/**
+ * Curated food sources near the Joka campus. Public columns are published with an "unconfirmed"
+ * label; phone numbers stay private because ringing a business about a scheme it has never heard of
+ * is an approach a person makes deliberately, not a side effect of a page render.
+ */
+export const directoryPlaces = pgTable("directory_places", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  area: text("area").notNull(),
+  addressLine: text("address_line"),
+  latitude: numeric("latitude", { precision: 9, scale: 6 }),
+  longitude: numeric("longitude", { precision: 9, scale: 6 }),
+  phone: text("phone"),
+  // Both this and a recorded owner consent are required before the public reader returns a number.
+  publishPhone: boolean("publish_phone").notNull().default(false),
+  phoneSource: text("phone_source"),
+  phoneKind: text("phone_kind").notNull().default("unknown"),
+  sourceUrl: text("source_url"),
+  lastCheckedOn: text("last_checked_on").notNull(),
+  consentStatus: text("consent_status").notNull().default("unknown"),
+  ownerVerified: boolean("owner_verified").notNull().default(false),
+  published: boolean("published").notNull().default(false),
+  photoUrl: text("photo_url"),
+  notes: text("notes"),
+  createdAt: instant("created_at").notNull().defaultNow(),
+  updatedAt: instant("updated_at").notNull().defaultNow(),
+}, (table) => [index("directory_places_category_idx").on(table.category, table.name)]);
+
+export const geoPlaces = pgTable("geo_places", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  normalizedName: text("normalized_name").notNull().unique(),
+  latitude: numeric("latitude", { precision: 9, scale: 6 }).notNull(),
+  longitude: numeric("longitude", { precision: 9, scale: 6 }).notNull(),
+  createdAt: instant("created_at").notNull().defaultNow(),
+});
 
 export const deliveryDestinationDetails = pgTable("delivery_destination_details", {
   deliveryJobId: uuid("delivery_job_id").primaryKey().references(() => deliveryJobs.id, { onDelete: "cascade" }),
@@ -522,6 +631,9 @@ export const privateDocuments = pgTable(
     documentType: text("document_type").notNull(),
     scanStatus: text("scan_status").notNull().default("unscanned"),
     expiresAt: instant("expires_at"),
+    // Set when operations have been reminded that this evidence is expiring, so
+    // the reminder is sent once per document rather than on every sweep.
+    expiryNotifiedAt: instant("expiry_notified_at"),
     createdAt: instant("created_at").notNull().defaultNow(),
   },
   (table) => [index("private_documents_org_idx").on(table.organizationId, table.createdAt)],

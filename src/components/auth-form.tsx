@@ -146,6 +146,8 @@ export function AuthForm({
   const [postalCode, setPostalCode] = useState("");
   const [profileNotes, setProfileNotes] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [twoFactorStep, setTwoFactorStep] = useState(false);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
   const [working, setWorking] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [errorLink, setErrorLink] = useState<{ href: string; label: string } | undefined>();
@@ -205,6 +207,15 @@ export function AuthForm({
         const result = await authClient.signIn.email({ email: email.trim(), password });
         if (result.error) {
           showError(result.error);
+          return;
+        }
+        // A privileged account with a second factor gets no session yet: Better
+        // Auth returns a redirect flag and waits for the code. Redirecting here
+        // would bounce the user back without an explanation.
+        if ((result.data as { twoFactorRedirect?: boolean } | null)?.twoFactorRedirect) {
+          setTwoFactorStep(true);
+          setPassword("");
+          setMessage("Enter the six-digit code from your authenticator app, or one of your backup codes.");
           return;
         }
         // The server decides the destination from trusted database records.
@@ -293,6 +304,27 @@ export function AuthForm({
     }
   }
 
+  async function submitSecondFactor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWorking(true);
+    setError("");
+    const cleaned = twoFactorCode.trim();
+    try {
+      // Six digits is a TOTP code; a longer value is treated as a backup code.
+      const result = cleaned.replace(/\D/g, "").length === 6 && cleaned.replace(/\D/g, "").length === cleaned.length
+        ? await authClient.twoFactor.verifyTotp({ code: cleaned, trustDevice: false })
+        : await authClient.twoFactor.verifyBackupCode({ code: cleaned });
+      if (result.error) {
+        showError(result.error);
+        return;
+      }
+      router.replace("/auth/continue");
+      router.refresh();
+    } finally {
+      setWorking(false);
+    }
+  }
+
   return (
     <div className="auth-page">
       <aside className="auth-aside">
@@ -313,18 +345,20 @@ export function AuthForm({
           <p>{copy.description}</p>
           {mode === "signup" && <div className="auth-steps" aria-label="Account setup steps"><span className="is-current"><b>1</b> Account</span><span><b>2</b> Verify email</span><span><b>3</b> Human review</span></div>}
 
-          {emailDelivery?.configured === false && (mode === "verify" || mode === "forgot") && <div className="auth-error" role="alert">Email delivery is not configured on this deployment (missing: {emailDelivery.missingSettings.join(", ")}). No email will actually be sent until the site owner enters those values in the secure deployment settings.</div>}
+          {emailDelivery?.configured === false && (mode === "verify" || mode === "forgot") && <div className="auth-error" role="alert">Email delivery is not configured on this deployment (missing: {emailDelivery.missingSettings.join(", ")}). No email will actually be sent until the site owner enters those values in the secure deployment settings.{mode === "forgot" && " An operations or security administrator can still issue a single-use reset link from the operations screen and pass it to you directly."}</div>}
 
           {resetInvalid ? <div className="account-state-actions">
             <Link className="button button--primary" href="/forgot-password">Request a new reset link</Link>
             <Link className="button button--ghost" href="/login">Back to sign in</Link>
-          </div> : <form className="form-stack" onSubmit={onSubmit}>
+          </div> : <form className="form-stack" onSubmit={twoFactorStep ? submitSecondFactor : onSubmit}>
             {mode === "signup" && <>
               <div className="form-field"><label htmlFor="name">Full name</label><input className="form-control" id="name" name="name" autoComplete="name" maxLength={120} required value={name} onChange={(event) => setName(event.target.value)} placeholder="Name you use at work" /></div>
               <div className="form-field"><label htmlFor="requested-role">I am registering as</label><select className="form-control" id="requested-role" name="requestedRole" value={requestedRole} onChange={(event) => onRoleChange(event.target.value as RequestedRole)} aria-describedby="requested-role-help"><option value="generator">Food Generator</option><option value="receiver">Receiver Organisation</option><option value="helper">Delivery Helper</option></select><span className="form-hint" id="requested-role-help">This records a request for {roleLabels[requestedRole]} access. It does not approve your role. Admin registration is not public.</span></div>
             </>}
 
-            {(mode === "login" || mode === "signup" || mode === "forgot" || mode === "verify") && <div className="form-field"><label htmlFor="email">Email address</label><input className="form-control" id="email" name="email" type="email" autoComplete="email" maxLength={254} required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.org" /></div>}
+            {!twoFactorStep && (mode === "login" || mode === "signup" || mode === "forgot" || mode === "verify") && <div className="form-field"><label htmlFor="email">Email address</label><input className="form-control" id="email" name="email" type="email" autoComplete="email" maxLength={254} required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.org" /></div>}
+{twoFactorStep ? <div className="form-field"><label htmlFor="two-factor-code">Authenticator or backup code</label><input className="form-control otp-input" id="two-factor-code" inputMode="numeric" autoComplete="one-time-code" maxLength={12} required value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} placeholder="123456" autoFocus /><span className="form-hint">Use the six-digit code from your authenticator app, or one backup code. Codes are rate limited.</span></div> : <>
+
 
             {mode === "signup" && <>
               <div className="form-field"><label htmlFor="phone">Phone number</label><input className="form-control" id="phone" name="phone" type="tel" autoComplete="tel" maxLength={32} required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+91 98765 43210" aria-describedby="phone-help" /><span className="form-hint" id="phone-help">Used only for account and delivery coordination.</span></div>
@@ -352,6 +386,8 @@ export function AuthForm({
               <span>I have read the <Link href="/terms">Terms</Link> and <Link href="/privacy">Privacy notice</Link> and understand that my role requires separate human approval.</span>
             </label>}
 
+            </>}
+            {twoFactorStep && <button className="button button--ghost button--small" type="button" onClick={() => { setTwoFactorStep(false); setTwoFactorCode(""); setMessage(""); }}>Use a different account</button>}
             <button className="button button--primary auth-submit" type="submit" disabled={working || submitted}>{working ? "Please wait…" : submitted ? "Request recorded" : copy.action} <ArrowRight size={17} aria-hidden="true" /></button>
           </form>}
 

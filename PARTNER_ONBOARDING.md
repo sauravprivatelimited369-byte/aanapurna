@@ -38,8 +38,10 @@ identity check, transport, and the escalation numbers. A Helper never receives a
 ## Re-validation
 
 Documents expire and kitchens change. Set an expiry per evidence type and re-check on a calendar the
-owner controls. The software has no expiry automation yet: today this is a manual list, and that is a
-known gap recorded in `LAUNCH_CHECKLIST.md`.
+owner controls. The backlog sweep now reminds operations and safety staff once per document when it
+is within `ESCALATION_DOCUMENT_HORIZON_DAYS` (default 14) of its expiry date, so the manual list has a
+trigger. The re-validation decision itself is still a human action, and nothing suspends an
+organisation automatically when a document lapses.
 
 ## Suspension
 

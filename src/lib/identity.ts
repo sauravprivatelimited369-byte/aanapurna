@@ -23,7 +23,23 @@ export type Identity = {
   }>;
   requestedRole: "generator" | "receiver" | "helper" | null;
   helperStatus: "pending" | "active" | "suspended" | "rejected" | null;
+  /** True once a second factor (authenticator app) has been confirmed. */
+  twoFactorEnabled: boolean;
 };
+
+/**
+ * A platform role can release a safety hold, verify an organisation or reissue a
+ * delivery code. Those accounts must hold a second factor before the application
+ * APIs will serve them. Ordinary Generator, Receiver and Helper accounts are not
+ * forced into it: requiring an authenticator app to donate food would lose more
+ * volunteers than it protects.
+ *
+ * Enrolment itself is not blocked — it runs through the Better Auth endpoints,
+ * not through `requireIdentity`.
+ */
+export function requiresTwoFactorEnrolment(identity: Pick<Identity, "platformRoles" | "twoFactorEnabled">): boolean {
+  return identity.platformRoles.length > 0 && !identity.twoFactorEnabled;
+}
 
 export async function getIdentity(requestHeaders?: Headers): Promise<Identity | null> {
   const request = requestHeaders ?? await headers();
@@ -68,6 +84,7 @@ export async function getIdentity(requestHeaders?: Headers): Promise<Identity | 
       memberships: membershipRows,
       requestedRole: profile.requestedRole,
       helperStatus: helperProfile?.status ?? null,
+      twoFactorEnabled: Boolean((session.user as { twoFactorEnabled?: boolean }).twoFactorEnabled),
     };
   });
 }
@@ -75,6 +92,13 @@ export async function getIdentity(requestHeaders?: Headers): Promise<Identity | 
 export async function requireIdentity(requestHeaders?: Headers): Promise<Identity> {
   const identity = await getIdentity(requestHeaders);
   if (!identity) throw new HttpError(401, "Sign in with a verified account to continue.", "AUTHENTICATION_REQUIRED");
+  if (requiresTwoFactorEnrolment(identity)) {
+    throw new HttpError(
+      403,
+      "Enrol an authenticator app on your account before using restricted platform features. Open Profile and security to finish enrolment.",
+      "TWO_FACTOR_ENROLMENT_REQUIRED",
+    );
+  }
   return identity;
 }
 

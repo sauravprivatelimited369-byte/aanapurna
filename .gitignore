@@ -31,3 +31,7 @@ logs/
 
 # Local development email and other private runtime data
 .local-data/
+
+# Reference photos pulled for the owner to look at. Copyright stays with the photographer, so they
+# are never committed and never served by the application.
+ops/research/photos/
