@@ -284,6 +284,11 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
 - **Fixed since:** an authorised operator can issue a single-use password-reset link from the
   operations console when mail cannot be delivered; platform-role accounts must confirm a second
   factor; the CSP is enforcing.
+- **Restore drill attempted and partially landed:** Supabase branching is refused on the current plan
+  and this sandbox cannot reach the database directly, so a restore was not performed; a recorded
+  baseline, a manifest query and a comparator now make the next restore checkable in minutes
+  (`ops/RESTORE_DRILL.md`). The drill also caught that migration 15 had been applied without being
+  recorded in `drizzle.__drizzle_migrations`; that record is now written and the count reads 15.
 - **Still open:** no standby rota or named coordinator (people), no distance/ETA logic or receiver
   self-collection path (product), and no SMTP credential, so no mail reaches a user on its own. See
   the status column in [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

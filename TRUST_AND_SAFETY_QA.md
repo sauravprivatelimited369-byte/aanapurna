@@ -366,7 +366,7 @@ Everything below is a real, open gap. None of it is solved by adding copy to the
 | G4d | No independent penetration test | **Open** — cannot be self-administered | Unknown vulnerabilities remain unknown | External review | Owner |
 | G5 | No legal entity, insurance, liability position or signed partner agreement | **Open** | Nobody is contractually answerable for harm | Legal | Owner |
 | G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | **Open** | Incident response is a document, not a capability | People | Owner |
-| G7 | Backups scripted but hosted restore unproven | **Open** | Data loss could be unrecoverable | Ops | Owner |
+| G7 | Backups scripted but hosted restore unproven | **Partially fixed** — restore is now verifiable: baseline manifest, manifest query and comparator (`ops/RESTORE_DRILL.md`). Supabase branching refused on the current plan; the restore itself needs one owner action | Recovery time still unknown | Ops | Owner: Pro plan branch, or run `pg_dump`/`pg_restore` once |
 | G8 | No human account-recovery path or published response time | **Partially fixed** — operator-issued single-use reset link exists in the operations console (role-gated, second factor required, reason audited) | No published response time yet; recovery depends on someone watching the queue | Code + people | Owner: staffed rota |
 | G9a | Partner evidence expiring while the organisation stays verified | **Partially fixed (migration 14)** — operations are now reminded 14 days ahead, once per document | Re-validation decision is still manual | Code + ops | Operations |
 | G9b | File scanning not configured | **Open** (uploads stay blocked when scanning is disabled) | Upload risk | Code + ops | Engineering |

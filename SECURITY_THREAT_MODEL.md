@@ -62,7 +62,9 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
    never delivered. Self-service reset therefore does not work; an operator can issue the same
    single-use reset link from the operations console and hand it over.
 6. **No independent penetration test** and no formal threat-model review by an outside party.
-7. **Backups are scripted but not exercised** in this environment; a restore drill is unproven here.
+7. **Backups are scripted but a restore has not been performed.** The verification half is now
+   built and baselined (`ops/RESTORE_DRILL.md`); the restore itself needs a Pro-plan branch or one
+   owner-run `pg_dump`/`pg_restore`.
 
 ## Security regression tests
 
