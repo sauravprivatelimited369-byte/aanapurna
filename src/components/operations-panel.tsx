@@ -40,6 +40,9 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
   const [dataRequests, setDataRequests] = useState<DataRequest[]>([]);
   const [recalls, setRecalls] = useState<Recall[]>([]);
   const [recallable, setRecallable] = useState<RecallableDonation[]>([]);
+  const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recoveryReason, setRecoveryReason] = useState("");
+  const [recoveryLink, setRecoveryLink] = useState("");
   const [overview, setOverview] = useState<Overview | null>(initialOverview);
   const [loading, setLoading] = useState(true);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -108,6 +111,31 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
 
   const selectOptions = areas.filter((area) => area.active);
 
+  async function issueRecovery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusyId("recovery"); setError(""); setMessage(""); setRecoveryLink("");
+    try {
+      const response = await fetch("/api/admin/account-recovery", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: recoveryEmail.trim(), reason: recoveryReason.trim() }),
+      });
+      const result = await response.json() as { issued?: boolean; url?: string; error?: { message?: string } };
+      if (!response.ok) throw new Error(result.error?.message ?? "The recovery link could not be issued.");
+      if (!result.issued || !result.url) {
+        setMessage("No link was issued. Check the address on the account.");
+      } else {
+        setRecoveryLink(result.url);
+        setMessage("Single-use link issued. Hand it to the account holder only through a channel you can verify. It expires and cannot be used twice.");
+      }
+      setRecoveryEmail(""); setRecoveryReason("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The recovery link could not be issued.");
+    } finally {
+      setBusyId("");
+    }
+  }
+
   return <div className="operations-stack">
     <div className="inline-notice"><strong>Controlled launch.</strong> Human policy approval and the independent launch gate are separate. This screen does not inspect, certify or declare food safe. Resolve an incident to close its record only; any safety hold remains in place until a separate authorised process is implemented.</div>
     {error && <div className="auth-error" role="alert"><span>{error}</span>{!loading && <button className="button button--secondary button--small" type="button" onClick={() => { setError(""); setLoading(true); setLoadAttempt((value) => value + 1); }}>Retry operations data</button>}</div>}
@@ -119,6 +147,7 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
       {isOperations && <a href="#service-areas">Service areas</a>}
       {(isOperations || isSupport) && <a href="#support-cases">Support queue</a>}
       {(isOperations || isSupport || isSecurity) && <a href="#privacy-requests">Privacy requests</a>}
+      {(isOperations || isSecurity) && <a href="#account-recovery">Account recovery</a>}
     </nav>}
 
     {overview && <section className="app-grid">
@@ -225,6 +254,16 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
           <button className="button button--secondary button--small" type="submit" disabled={busyId === `policy-${policy.id}`}>{busyId === `policy-${policy.id}` ? "Saving…" : "Approve as Safety Officer"}</button>
         </form>}
       </article>)}</div> : <div className="empty-state"><div><strong>No food policy versions</strong><p>Draft and approve a written policy before any real donation activity is enabled.</p></div></div>}
+    </section>}
+
+    {(isOperations || isSecurity) && <section id="account-recovery" className="app-card app-card--full">
+      <div className="app-card-title"><div><h2>Account recovery</h2><p>Issue the single-use password-reset link for an account and hand it over yourself. Use this when this deployment cannot deliver mail. Your second factor is required and the reason is audited.</p></div></div>
+      <form className="form-stack" onSubmit={issueRecovery}>
+        <div className="form-field"><label htmlFor="recovery-email">Account email</label><input className="form-control" id="recovery-email" type="email" required maxLength={254} value={recoveryEmail} onChange={(event) => setRecoveryEmail(event.target.value)} placeholder="person@example.org" /></div>
+        <div className="form-field"><label htmlFor="recovery-reason">Why is this needed?</label><textarea className="form-control" id="recovery-reason" required minLength={20} maxLength={500} value={recoveryReason} onChange={(event) => setRecoveryReason(event.target.value)} placeholder="For example: identity confirmed by phone with the organisation owner; the person cannot receive mail" /></div>
+        <button className="button button--secondary" type="submit" disabled={busyId === "recovery" || recoveryReason.trim().length < 20}>{busyId === "recovery" ? "Issuing…" : "Issue single-use link"}</button>
+      </form>
+      {recoveryLink && <div className="inline-notice"><strong>Single-use link, shown once</strong><p style={{ wordBreak: "break-all" }}><code>{recoveryLink}</code></p><p>Do not paste this into a public channel. It resets one account and stops working after use or expiry.</p></div>}
     </section>}
 
     {isOperations && <section id="service-areas" className="app-card app-card--full">

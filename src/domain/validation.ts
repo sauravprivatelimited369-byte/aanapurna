@@ -191,6 +191,14 @@ export const incidentSchema = z.object({
   description: safeText(1_000),
 }).strict();
 
+/** Operator-assisted account recovery: a target address and the justification. */
+export const accountRecoverySchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  // The reason is the only record of why a privileged person reset someone else's
+  // password, so it is not optional and not one word.
+  reason: z.string().trim().min(20).max(500),
+}).strict();
+
 /** Operations release of an uncollected assignment; the reason is the record. */
 export const deliveryReleaseSchema = z.object({
   reason: safeText(500),

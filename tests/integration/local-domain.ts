@@ -46,7 +46,7 @@ try {
   const identity = (role: string): Identity => ({
     id: ids[role]!, name: `Fictional ${role}`, email: `${role}@example.test`,
     platformRoles: role === "admin" ? ["operations_admin"] : role === "safety" ? ["safety_officer"] : [],
-    memberships: [], requestedRole: null, helperStatus: null,
+    memberships: [], requestedRole: null, helperStatus: null, twoFactorEnabled: false,
   });
   const [operations, safety, generator, receiver, receiver2, helper1, helper2, outsider] = ["admin", "safety", "generator", "receiver", "receiver2", "helper1", "helper2", "outsider"].map(identity);
   assert(operations && safety && generator && receiver && receiver2 && helper1 && helper2 && outsider);

@@ -26,6 +26,8 @@ import {
   custodyEvents,
 } from "@/db/schema";
 import { HttpError } from "@/lib/http";
+import { auth } from "@/lib/auth";
+import { withPasswordResetCapture } from "@/email/reset-link-capture";
 import { canAccessOrganization, hasAnyRole, type Identity } from "@/lib/identity";
 import {
   createDeliveryCode,
@@ -2045,6 +2047,48 @@ export async function getDashboard(identity: Identity) {
       demoMode: process.env.DEMO_MODE === "true",
     };
   });
+}
+
+/**
+ * Operator-assisted account recovery.
+ *
+ * The deployment may not have a working mail provider, in which case a person who
+ * forgets their password has no self-service route back in. This lets an
+ * operations or security administrator issue the *same* single-use reset link
+ * Better Auth would have emailed, and pass it on through a channel they control.
+ *
+ * Controls: a privileged platform role, a confirmed second factor (enforced by
+ * `requireIdentity`), a recorded reason, an audit event, and a link that is
+ * single-use and time-limited. The link is returned once and never logged.
+ */
+export async function issueAccountRecoveryLink(identity: Identity, input: { email: string; reason: string }) {
+  if (!hasAnyRole(identity, ["security_admin", "operations_admin"])) {
+    throw new HttpError(403, "Only an operations or security administrator can issue a recovery link.", "RECOVERY_NOT_PERMITTED");
+  }
+  const email = input.email.trim().toLowerCase();
+  const reason = input.reason.trim();
+  if (reason.length < 20 || reason.length > 500) {
+    throw new HttpError(422, "Record why this recovery is needed (at least 20 characters).", "RECOVERY_REASON_REQUIRED");
+  }
+
+  const { url } = await withPasswordResetCapture(() =>
+    auth.api.requestPasswordReset({ body: { email, redirectTo: "/reset-password" } }),
+  );
+
+  await withDomainContext(identity.id, async (tx) => {
+    await audit(tx, identity, "account.recovery_link_issued", "user", email, reason, {
+      // The address itself is already held by the platform; the audit records
+      // who issued the link and why, not the link.
+      recipientMasked: email.replace(/^(.).*(@.*)$/, "$1***$2"),
+    });
+  });
+
+  if (!url) {
+    // Unknown address, or Better Auth declined to issue a token. Do not say
+    // which: the operator only needs "nothing was issued".
+    return { issued: false as const };
+  }
+  return { issued: true as const, url, email };
 }
 
 export async function createSupportCase(identity: Identity, input: SupportCaseCreate) {

@@ -17,7 +17,7 @@
 
 - Added a public, statically rendered walkthrough at `/preview` so reading the product no longer requires an account: one fictional handover end to end (listing, partial acceptance, dispatch conflict, custody timeline, the delivery code's shape only, receipt, sample totals), badged as sample data and set to `noindex, follow`. Data lives in `src/domain/demo-workspace.ts` and never touches PostgreSQL. Entry points added to the header, mobile menu, footer, landing hero and the sign-in page; `/login` now states that signing in is optional for reading and required only for acting.
 - Added `demoWorkspaceProblems()` and `tests/demo-workspace.test.ts` (8 tests) holding the fixture to the same record rules as production data: quantity ordering, exactly one winning Helper, custody events in order, unique references, reserved `example.org` contacts, no phone numbers and no delivery-code material.
-- Moved response security headers into the application (`next.config.ts` `headers()`): nosniff, `X-Frame-Options: DENY`, referrer policy, permissions policy, COOP, a report-only CSP, and `no-store` on `/api/auth/*`. Before this, those headers existed only in the Caddyfile, so the hosted deployment served responses without them. Added `tests/security-headers.test.ts` (4 tests), including a check that the public impact endpoint keeps its own cache policy.
+- Moved response security headers into the application (`next.config.ts` `headers()`): nosniff, `X-Frame-Options: DENY`, referrer policy, permissions policy, COOP, and `no-store` on `/api/auth/*`. Before this, those headers existed only in the Caddyfile, so the hosted deployment served responses without them. Added `tests/security-headers.test.ts` (4 tests), including a check that the public impact endpoint keeps its own cache policy.
 - Wrote `MASTER_PROMPT_COMPLIANCE.md`: every section of the master build prompt mapped to Done / Partial / Missing / Blocked (owner) with file evidence and the concrete remaining gap, plus the next five work items. The honest summary is that the core lifecycle is implemented and tested locally, while documentation set, worker heartbeat, account/session screens, recall records and browser evidence remain open.
 - Verified in this sandbox: `tsc --noEmit` clean, `eslint .` clean, `vitest run` 19 files / 146 tests passing, `next build` succeeding with `/preview` prerendered as static, and `GET /preview` over HTTP returning 200 with the sample notice and `noindex`.
 - CI run [43601223057](https://github.com/sauravprivatelimited369-byte/aanapurna/actions/runs/43601223057) at `810facb` — all six jobs success, including the Playwright browser workflows and both Windows jobs. The previous docs-only commit `c11243a` failed only `Windows one-click first start and persistence` (the known transient managed-launcher flake); no code differed.
@@ -281,6 +281,9 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   `worker_execute` only on the sweep, and `public_execute = false`. The application code that calls
   them is on the branch and has **not** been deployed; the hosted site therefore still runs the
   previous build, and no end-to-end dispatch notification has been observed in production.
+- **Fixed since:** an authorised operator can issue a single-use password-reset link from the
+  operations console when mail cannot be delivered; platform-role accounts must confirm a second
+  factor; the CSP is enforcing.
 - **Still open:** no standby rota or named coordinator (people), no distance/ETA logic or receiver
-  self-collection path (product), and no SMTP credential, so password reset still cannot reach a
-  user. See the status column in [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).
+  self-collection path (product), and no SMTP credential, so no mail reaches a user on its own. See
+  the status column in [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

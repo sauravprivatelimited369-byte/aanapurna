@@ -99,6 +99,13 @@
       "when": 1794720000000,
       "tag": "20261115090000_helper_dispatch_and_escalation",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794734400000,
+      "tag": "20261115120000_two_factor_for_privileged_accounts",
+      "breakpoints": true
     }
   ]
 }

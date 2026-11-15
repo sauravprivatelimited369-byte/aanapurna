@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { AccountSecurity } from "@/components/account-security";
+import { TwoFactorPanel } from "@/components/two-factor-panel";
+import { requiresTwoFactorEnrolment } from "@/lib/identity";
 import { getIdentity } from "@/lib/identity";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +57,12 @@ export default async function ProfilePage() {
           </div>)}</div> : <div className="empty-state"><div><strong>No organisation membership</strong><p>Start or track a partner request in Partner setup. Membership is granted by a human review, never by signing in.</p></div></div>}
         </section>
       </div>
+
+      <TwoFactorPanel enabled={identity.twoFactorEnabled} requiredForRole={identity.platformRoles.length > 0} />
+
+      {requiresTwoFactorEnrolment(identity) && <div className="auth-error" role="alert" style={{ marginBottom: 14 }}>
+        <strong>Restricted features are blocked.</strong> Your account holds a platform role, so application actions are refused until a second factor is confirmed above. Pages stay readable.
+      </div>}
 
       <AccountSecurity />
 

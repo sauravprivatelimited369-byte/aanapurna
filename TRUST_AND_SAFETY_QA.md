@@ -152,7 +152,9 @@ field on the helper profile.
 ## 4. What if someone tries to take over the application and use it for malicious intent?
 
 **Short answer: a deliberate, layered set of controls exists and is tested; the honest residual risk
-is no second factor, a report-only CSP, and no independent penetration test.**
+is that the second factor is enforced for platform roles only, that pre-rendered public pages need a
+weaker script policy than the rest of the site, and that there is still no independent penetration
+test.**
 
 **Enforced today** (full table in `SECURITY_THREAT_MODEL.md`):
 
@@ -173,11 +175,13 @@ is no second factor, a report-only CSP, and no independent penetration test.**
 | Supabase's own public API roles | Migration 12 revokes every privilege from `anon` and `authenticated` and resets defaults, so a future table cannot inherit them — this closed a real bypass found during hosted deployment |
 | A stranger origin | Hosted smoke test asserts the deployed origin rejects a foreign `Origin` |
 
-**Residual risks, accepted and written down rather than hidden:** no second factor on any account
-(Better Auth 2FA is not enabled); CSP is report-only because there is no nonce pipeline yet; RLS is
-not `FORCE`'d, so a careless future `GRANT` is the scenario it would catch; no independent
-penetration test and no outside threat-model review; account erasure is impossible while audit rows
-are append-only.
+**Residual risks, accepted and written down rather than hidden:** the second factor is required
+before application APIs serve a platform-role account, but ordinary Generator, Receiver and Helper
+accounts are not forced into it; the Content-Security-Policy is enforcing with a per-request nonce on
+every server-rendered page, while the pre-rendered public pages cannot carry a nonce and keep
+`'unsafe-inline'` for scripts; RLS is not `FORCE`'d, so a careless future `GRANT` is the scenario it
+would catch; no independent penetration test and no outside threat-model review; account erasure is
+impossible while audit rows are append-only.
 
 **Also true, and outside this repository:** the hosted deployment runs on Vercel and Supabase. A
 compromise of the *owner's* Vercel or Supabase account is a compromise of the application, and no
@@ -350,17 +354,20 @@ Everything below is a real, open gap. None of it is solved by adding copy to the
 
 | # | Gap | Status | Impact | Kind | Owner |
 |---|---|---|---|---|---|
-| G1 | Hosted email is a capture sink; password reset and verification reach nobody | **Open** | Locked-out users cannot recover without operator help | Config | Owner: SMTP provider credential |
+| G1 | Hosted email is a capture sink; reset and verification mail reaches nobody | **Partially fixed** — an authorised operator can now issue the same single-use reset link from the operations screen (audited, 2FA-gated) and hand it over; verification mail still reaches nobody | Self-service reset is gone, but a locked-out person is no longer stranded | Config + code | Owner: SMTP provider credential for the email half |
 | G2a | No notification when a delivery job opens | **Fixed (migration 14)** — area Helpers are notified inside a checked database function | — | Code | — |
 | G2b | No unclaimed-job escalation | **Fixed (migration 14)** — sweep notifies operations once per stale job or lapsed claim | — | Code + schedule | — |
 | G2c | An unresponsive Helper blocked the delivery; `assigned -> open` was forbidden | **Fixed (migration 14)** — audited operations release, pre-collection only | — | Code | — |
 | G2d | No standby rota, named coordinator or published pickup window | **Open** | Dispatch still depends on people being reachable | People | Operations |
 | G3 | No distance, travel time or ETA; only service-area equality. No receiver self-collection path | **Open** — stall backstop added, routing not | Unsafe to expand beyond a compact pilot area | Code | Product decision |
-| G4 | No second factor; CSP report-only; RLS not `FORCE`'d; no independent penetration test | **Open** | Account takeover and defence-in-depth gaps remain | Code + review | Engineering + external reviewer |
+| G4a | No second factor | **Fixed (migration 15)** — TOTP enrolment with 10 backup codes, required for platform roles before application APIs serve them | — | Code | — |
+| G4b | CSP report-only | **Fixed** — enforcing nonce-based policy from `src/proxy.ts`; pre-rendered public pages use a documented relaxed policy | — | Code | — |
+| G4c | RLS not `FORCE`'d | **Open** | A future careless `GRANT` would not be caught by policies | Code | Engineering |
+| G4d | No independent penetration test | **Open** — cannot be self-administered | Unknown vulnerabilities remain unknown | External review | Owner |
 | G5 | No legal entity, insurance, liability position or signed partner agreement | **Open** | Nobody is contractually answerable for harm | Legal | Owner |
 | G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | **Open** | Incident response is a document, not a capability | People | Owner |
 | G7 | Backups scripted but hosted restore unproven | **Open** | Data loss could be unrecoverable | Ops | Owner |
-| G8 | No human account-recovery path or published response time | **Open** | "Our team will help" is not currently true | People | Owner |
+| G8 | No human account-recovery path or published response time | **Partially fixed** — operator-issued single-use reset link exists in the operations console (role-gated, second factor required, reason audited) | No published response time yet; recovery depends on someone watching the queue | Code + people | Owner: staffed rota |
 | G9a | Partner evidence expiring while the organisation stays verified | **Partially fixed (migration 14)** — operations are now reminded 14 days ahead, once per document | Re-validation decision is still manual | Code + ops | Operations |
 | G9b | File scanning not configured | **Open** (uploads stay blocked when scanning is disabled) | Upload risk | Code + ops | Engineering |
 | G10 | Food-safety policy is `draft`; no qualified professional has signed it or the area rules | **Open** | No real food may move | Professional review | Owner |

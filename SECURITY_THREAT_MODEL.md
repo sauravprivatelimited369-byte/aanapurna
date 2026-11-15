@@ -33,7 +33,7 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
 | 8 | Duplicate receipt or double assignment | Unique constraints on `delivery_receipts.donation_id` and `delivery_job_id`; the claim is one conditional UPDATE with a status guard | migrations, `/api/jobs/[id]/claim` |
 | 9 | Editing history | Append-only triggers on `audit_events` and `custody_events`; no DELETE policy or grant on `recall_records` | migrations |
 | 10 | CSRF | Same-origin assertion on every mutation plus SameSite cookies | `src/lib/http.ts` |
-| 11 | XSS | React escaping; no `dangerouslySetInnerHTML` in application code; CSP report-only today | `next.config.ts` |
+| 11 | XSS | React escaping; no `dangerouslySetInnerHTML` in application code; enforcing nonce-based CSP on every server-rendered page (pre-rendered public pages use a documented relaxed policy) | `src/proxy.ts` |
 | 12 | Upload abuse | Size and MIME checks, private storage outside the web root, authorised download handler, scan mode flag | `/api/documents/[id]`, `/api/organizations/[id]/documents` |
 | 13 | Enumeration | Uniform 404s, rate limits on sensitive endpoints, no email-existence disclosure on login or reset | `src/lib/http.ts` |
 | 14 | Notification flooding | Outbox with bounded retries and dead-letter visibility; worker heartbeat shows a stalled drainer | `src/worker` |
@@ -46,25 +46,32 @@ agents, security administrators, anonymous visitors, and a hostile party with a 
 
 ## Residual risks (accepted, documented, not fixed)
 
-1. **CSP is report-only.** No nonce pipeline exists yet, so an enforcing policy would break the app.
+1. **CSP is enforcing, with one documented exception.** Server-rendered documents get a fresh nonce
+   and `'strict-dynamic'`; the eleven pre-rendered public pages cannot carry a per-request nonce and
+   keep `'unsafe-inline'` for scripts. They hold no session, no mutating form and no personal data.
 2. **RLS is not FORCE'd.** Policies apply because the runtime role is not the owner; a future
    careless `GRANT` is the scenario `FORCE` would catch.
-3. **No second factor.** Better Auth's 2FA is not enabled. The strongest current control for a
-   privileged account is a 12+ character password, immediate session revocation and an audited trail.
+3. **The second factor is required for platform roles only.** `requireIdentity` returns
+   `403 TWO_FACTOR_ENROLMENT_REQUIRED` until an administrator, safety officer, support agent or
+   security administrator has confirmed TOTP, and the enrolment flow offers backup codes. A partner
+   account (Generator, Receiver, Helper) is protected by its password, the session controls and the
+   audit trail, not by a second factor.
 4. **Account erasure is impossible** while audit and custody events are append-only. Personal data
    requires an anonymisation path before real users exist.
 5. **Capture SMTP.** The hosted deployment currently reports `test_sink`: messages are accepted and
-   never delivered. Password reset therefore does not work for a user who has forgotten theirs.
+   never delivered. Self-service reset therefore does not work; an operator can issue the same
+   single-use reset link from the operations console and hand it over.
 6. **No independent penetration test** and no formal threat-model review by an outside party.
 7. **Backups are scripted but not exercised** in this environment; a restore drill is unproven here.
 
 ## Security regression tests
 
 - `tests/authorization.test.ts` — role and tenant boundaries.
-- `tests/database-migrations.test.ts` — RLS on 24 tables, 10 required functions, app role cannot
+- `tests/database-migrations.test.ts` — RLS on 25 tables, 12 required functions, app role cannot
   escalate its own account status, worker may write its heartbeat while the app role may only read
   it, no delete grant on recall records, PostgREST privileges revoked.
-- `tests/security-headers.test.ts` — hardening headers and the report-only CSP are present.
+- `tests/security-headers.test.ts` — hardening headers, the enforcing nonce policy, the narrow
+  pre-rendered exception and per-request nonce uniqueness.
 - `tests/recall-and-account-security.test.ts` — strict input schemas reject smuggled ids and weak
   passwords.
 - `scripts/test-auth-security.mjs`, `scripts/test-auth-roles.mjs` — hosted/CI authentication attacks.

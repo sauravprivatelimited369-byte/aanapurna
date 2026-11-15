@@ -17,6 +17,7 @@ const migrationFiles = [
   "20261114120000_revoke_public_api_privileges.sql",
   "20261114150000_recall_records_and_worker_heartbeat.sql",
   "20261115090000_helper_dispatch_and_escalation.sql",
+  "20261115120000_two_factor_for_privileged_accounts.sql",
 ];
 
 let database: PGlite;
@@ -652,5 +653,60 @@ describe("Helper dispatch and backlog escalation", () => {
     // The only permitted route back to `open` requires a cleared Helper and a
     // platform operations role; ordinary open/assigned/collected paths remain.
     expect(source).toMatch(/NEW\.status::text = 'open'[\s\S]*NEW\.helper_user_id IS NULL[\s\S]*app_has_platform_role/);
+  });
+});
+
+describe("Second factor storage", () => {
+  it("keeps two-factor secrets away from the application role", async () => {
+    const privileges = await database.query<{
+      app_select: boolean;
+      app_insert: boolean;
+      auth_select: boolean;
+      auth_insert: boolean;
+      auth_delete: boolean;
+      rls: boolean;
+    }>(`
+      SELECT
+        has_table_privilege('annapurna_app', 'public.two_factor', 'SELECT') AS app_select,
+        has_table_privilege('annapurna_app', 'public.two_factor', 'INSERT') AS app_insert,
+        has_table_privilege('annapurna_auth', 'public.two_factor', 'SELECT') AS auth_select,
+        has_table_privilege('annapurna_auth', 'public.two_factor', 'INSERT') AS auth_insert,
+        has_table_privilege('annapurna_auth', 'public.two_factor', 'DELETE') AS auth_delete,
+        (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.two_factor'::regclass) AS rls
+    `);
+    expect(privileges.rows[0]).toEqual({
+      app_select: false,
+      app_insert: false,
+      auth_select: true,
+      auth_insert: true,
+      auth_delete: true,
+      rls: true,
+    });
+  });
+
+  it("adds the per-user enrolment flag the sign-in flow reads", async () => {
+    const column = await database.query<{ data_type: string; column_default: string; is_nullable: string }>(`
+      SELECT data_type, column_default, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'user' AND column_name = 'two_factor_enabled'
+    `);
+    expect(column.rows[0]).toMatchObject({ data_type: "boolean", is_nullable: "NO" });
+    expect(column.rows[0]?.column_default).toContain("false");
+  });
+
+  it("restricts a two-factor row to its owner under row-level security", async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('2fa-owner', 'Factor owner', '2fa-owner@example.test', true),
+        ('2fa-other', 'Other account', '2fa-other@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('2fa-owner', 'active'), ('2fa-other', 'active');
+      INSERT INTO public.two_factor (id, user_id, secret, backup_codes) VALUES
+        ('2fa-row', '2fa-owner', 'encrypted-secret', 'hashed-codes');
+    `);
+    // The app role holds no privilege at all, so even a policy cannot expose it.
+    await expect(withRole("annapurna_app", "2fa-other", async () => {
+      await database.query("SELECT secret FROM public.two_factor");
+    })).rejects.toThrow(/permission denied/i);
   });
 });

@@ -46,9 +46,30 @@ export const user = pgTable("user", {
   registrationStateOrRegion: text("registration_state_or_region"),
   registrationPostalCode: text("registration_postal_code"),
   registrationProfileNotes: text("registration_profile_notes"),
+  // Set by Better Auth's two-factor plugin after a second factor is confirmed.
+  twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
   createdAt: instant("created_at").notNull().defaultNow(),
   updatedAt: instant("updated_at").notNull().defaultNow(),
 });
+
+/**
+ * Better Auth two-factor secrets. The application role is given no privilege at
+ * all on this table: the shared secret and backup codes are read only by the
+ * authentication role inside Better Auth.
+ */
+export const twoFactor = pgTable(
+  "two_factor",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    secret: text("secret").notNull(),
+    backupCodes: text("backup_codes").notNull(),
+    verified: boolean("verified").notNull().default(true),
+    failedVerificationCount: integer("failed_verification_count").notNull().default(0),
+    lockedUntil: instant("locked_until"),
+  },
+  (table) => [index("two_factor_user_idx").on(table.userId)],
+);
 
 export const session = pgTable(
   "session",

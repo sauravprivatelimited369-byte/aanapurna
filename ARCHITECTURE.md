@@ -79,10 +79,12 @@ donation stays recalled.
 
 ## Known architectural gaps
 
-- RLS is enabled on 24 tables but not `FORCE`d. The runtime role is not the owner, so policies do
+- RLS is enabled on the application tables (including the second-factor table) but not `FORCE`d. The runtime role is not the owner, so policies do
   apply; `FORCE` would additionally protect against a future grant mistake.
-- CSP is report-only: the application has no nonce pipeline yet, so enforcing it today would break
-  Next.js inline bootstrap scripts.
+- The Content-Security-Policy is enforcing and nonce-based (`src/proxy.ts`). Documents rendered per
+  request get a fresh nonce that Next.js attaches to its own scripts. The pre-rendered public pages
+  are built once, cannot carry a per-request nonce, and keep `'unsafe-inline'` for scripts; the list
+  is explicit and every other route defaults to the strict policy.
 - The Vercel-hosted deployment runs the web tier only. The worker is a separate process and must be
   hosted where long-lived processes are allowed (Docker topology).
 - Account erasure is not possible under the append-only audit guard. A documented anonymisation
