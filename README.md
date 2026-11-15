@@ -343,3 +343,8 @@ None of it inspects food. Every new field is a human declaration with a name and
 ## Safety and production status
 
 This repository is not approved for a real-world pilot or production use. Real food operations require a human-approved policy, partner verification and local legal/privacy/security review. Email credentials, domain/TLS, private-storage scanner, backup/restore and real PostgreSQL integration are additional deployment gates. See [`LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md), [`BUILD_STATUS.md`](BUILD_STATUS.md), [`BASELINE_AUDIT.md`](BASELINE_AUDIT.md) and [`DECISIONS/ADR-0001-public-restaurant-discovery.md`](DECISIONS/ADR-0001-public-restaurant-discovery.md).
+
+## License
+
+This software is open source under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+
