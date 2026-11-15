@@ -848,17 +848,22 @@ select.form-control { appearance: auto; }
 /* Under 560px the header cannot hold brand + both language names + join + menu at 320px. The
    inactive language collapses to its first letter so the control still exists and still works:
    replacing it with nothing would leave the reader stuck in a language they may not read. */
-@media (max-width: 560px) {
-  .locale-switcher { gap: 0; }
+/* Collapse well before the header runs out of room. 640px is chosen rather than tuned to the
+   narrowest test width: the header also holds the brand, the join button and the menu toggle, and
+   guessing the exact pixel where those three stop fitting is how the 390px overflow got in. */
+@media (max-width: 640px) {
+  .locale-switcher { gap: 0; max-width: 7.5rem; }
   .locale-switcher__choice { padding: 0.3rem 0.42rem; font-size: 0.72rem; }
   .locale-switcher__choice:not(.is-active)::after { content: attr(data-short); display: inline; }
   .locale-switcher__choice:not(.is-active) span.long-label { display: none; }
-  .header-actions { gap: 6px; }
+  .header-actions { gap: 6px; min-width: 0; }
+  .header-actions > * { flex: 0 1 auto; min-width: 0; }
   .header-join { padding-inline: 8px; }
+  .header-inner > * { min-width: 0; }
 }
-@media (max-width: 380px) {
+@media (max-width: 430px) {
   .header-actions .locale-switcher { display: none; }
-  .mobile-nav-panel .locale-switcher { display: inline-flex; margin-top: 0.75rem; }
+  .mobile-nav-panel .locale-switcher { display: inline-flex; margin-top: 0.75rem; max-width: none; }
   /* The panel is full width, so the full names fit again. */
   .mobile-nav-panel .locale-switcher__choice:not(.is-active)::after { content: none; }
   .mobile-nav-panel .locale-switcher__choice:not(.is-active) span.long-label { display: inline; }
