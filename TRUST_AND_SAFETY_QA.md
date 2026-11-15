@@ -396,8 +396,12 @@ independent test — with an evidence reference, the administrator who recorded 
 `/api/health` can report *which* requirement is unmet without publishing a policy number or an
 address, and the operations console shows the detail to a signed-in administrator. Insurance
 expiring, a rota ending or a test ageing past twelve months re-opens the gap without anyone editing a
-document. What none of this does is incorporate the company, buy the cover, nominate the person or
-commission the test; it only makes the absence visible and checkable.
+document. A recorded fact can still rot quietly, so migration 18 runs a sweep that tells the
+administrators when a declaration is inside thirty days of lapsing, and says out loud when nobody is
+on call for the next twelve hours. It reports only when somebody actually received the notice, so an
+unstaffed deployment stays reported as unstaffed. What none of this does is incorporate the company,
+buy the cover, nominate the person or commission the test; it makes the absence visible, checkable and
+self-announcing.
 
 ---
 

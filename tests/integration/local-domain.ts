@@ -310,6 +310,46 @@ try {
   assert(lapsed.missing.includes("insurance"), "A lapsed policy must make readiness fail without any code change.");
   const lapsedPublic = await admin.query<{ readiness: Record<string, boolean> }>("SELECT public.app_launch_readiness() readiness");
   assert.equal(lapsedPublic.rows[0]!.readiness.insurance, false);
+  phase = "lapsing declarations and a rota gap announce themselves";
+  // Insurance 20 days out is inside the 30-day horizon: the sweep must warn the administrators once.
+  await admin.query("UPDATE public.platform_attestations SET expires_at = now() + interval '20 days', renewal_reminded_at = NULL WHERE key = 'insurance'");
+  const sweep = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(sweep.rows[0]!.expiring_declarations, 1, "A policy inside the horizon must produce exactly one reminder.");
+  const reminded = await admin.query<{ count: number }>(
+    "SELECT count(*)::int count FROM public.notifications WHERE kind = 'readiness.declaration_expiring' AND user_id = $1",
+    [ids.admin],
+  );
+  assert.equal(reminded.rows[0]!.count, 1);
+  // Running the sweep again must not repeat itself inside the same lapse window.
+  const repeat = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(repeat.rows[0]!.expiring_declarations, 0);
+  // With the rota emptied, coverage is announced once and then stays quiet for twelve hours.
+  await admin.query("DELETE FROM public.on_call_shifts");
+  const gap = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(gap.rows[0]!.coverage_gaps, 1);
+  const gapRepeat = await admin.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness(30)",
+  );
+  assert.equal(gapRepeat.rows[0]!.coverage_gaps, 0);
+  const gapNotices = await admin.query<{ count: number }>(
+    "SELECT count(*)::int count FROM public.notifications WHERE kind = 'readiness.coverage_gap'",
+  );
+  assert(gapNotices.rows[0]!.count >= 1);
+  // Re-recording the declaration re-arms the reminder, so next year's lapse is not silent.
+  await service.recordAttestation(operations, {
+    key: "insurance", evidenceReference: "fictional-renewal", expiresAt: "2031-01-01",
+    value: { insurer: "Fictional Insurance", policyReference: "POL-FICTIONAL-2", coverageSummary: "Fictional cover", liabilityLimit: "Fictional limit" },
+  });
+  const rearmed = await admin.query<{ renewal_reminded_at: string | null }>(
+    "SELECT renewal_reminded_at FROM public.platform_attestations WHERE key = 'insurance'",
+  );
+  assert.equal(rearmed.rows[0]!.renewal_reminded_at, null);
   // The application role cannot read or write declarations on its own: it needs a signed-in
   // administrator, which is what FORCE ROW LEVEL SECURITY is there to enforce.
   const appPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });

@@ -39,7 +39,7 @@
     "on_call_shifts": 0
   },
   "totalRows": 71,
-  "schemaFingerprint": "4d92959de2ccfd424aa854b6f977866c",
-  "migrations": 17,
+  "schemaFingerprint": "dd97d7b6678d29b7ea9bff03381851c1",
+  "migrations": 18,
   "policies": 74
 }

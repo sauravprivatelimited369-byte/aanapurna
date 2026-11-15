@@ -389,6 +389,8 @@ export const platformAttestations = pgTable("platform_attestations", {
   recordedBy: text("recorded_by").references(() => user.id, { onDelete: "set null" }),
   recordedAt: instant("recorded_at").notNull().defaultNow(),
   expiresAt: instant("expires_at"),
+  // Cleared on every re-record so a renewal re-arms the lapse reminder.
+  renewalRemindedAt: instant("renewal_reminded_at"),
 });
 
 /** A staffed rota. Readiness requires real coverage, not an intention to be reachable. */

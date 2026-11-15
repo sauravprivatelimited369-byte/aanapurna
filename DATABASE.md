@@ -1,6 +1,6 @@
 # Database implementation and limits
 
-PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and seventeen ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
+PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and eighteen ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
 `20261114120000_revoke_public_api_privileges.sql`, removes every table, sequence
 and function privilege held by Supabase's `anon` and `authenticated` PostgREST
 roles and resets the matching default privileges, so a future object cannot
@@ -21,7 +21,12 @@ readers expose only what each caller is entitled to: `app_launch_readiness()` re
 `app_on_call_coverage()` returns coverage without identities, `app_public_data_protection_contact()`
 and `app_legal_entity()` return the published contact and entity, and each returns nothing until a
 declaration exists. `app_on_call_person(email)` resolves a rota entry to an account id without
-granting the application role sight of `public."user"`.
+granting the application role sight of `public."user"`. Migration 18,
+`20261115193000_readiness_escalation.sql`, adds `platform_attestations.renewal_reminded_at` and
+`app_escalate_platform_readiness(horizon_days)`, which notifies the administrators a declaration is
+lapsing and announces a rota with nobody on it for the next twelve hours — once per lapse window,
+and only when somebody actually received the notice, so an unstaffed deployment is reported rather
+than quietly marked as warned.
 
 ## Existing model
 

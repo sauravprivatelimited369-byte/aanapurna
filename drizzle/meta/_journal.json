@@ -120,6 +120,13 @@
       "when": 1794835200000,
       "tag": "20261115180000_owner_attestations_and_launch_gate",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794839400000,
+      "tag": "20261115193000_readiness_escalation",
+      "breakpoints": true
     }
   ]
 }

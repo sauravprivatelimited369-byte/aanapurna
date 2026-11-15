@@ -305,6 +305,15 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   re-opens the gap by itself. The support page's response window is derived from real coverage, and
   `/privacy` and `/contact` publish a contact only once one is recorded. This makes the absence of
   each fact checkable; it does not create the entity, buy the cover or commission the test.
-- **Still open:** no standby rota, no named coordinator and no legal entity or insurance (people and
-  lawyers), and no SMTP credential, so no mail reaches a user on its own. See the status column in
+- **Declarations self-announce (migration 18):** `app_escalate_platform_readiness` notifies
+  administrators when a declaration is within 30 days of lapsing and when nobody is on call for the
+  next twelve hours, once per lapse window, via the worker (every 15 minutes) or the scheduled drain.
+  It reports only when a notice was actually delivered to somebody.
+- **Scanner in one command:** the Compose files carry an optional `scanner` profile running clamd;
+  `FILE_SCAN_MODE=clamav` still has to be set deliberately, and `CLAMAV_HOST` is deliberately unset
+  by default so readiness cannot claim a scanner exists because a container might be running.
+- **Still open:** no standby rota, no named coordinator, no legal entity or insurance, no mail
+  credential, no scanner host and no independent test (people, lawyers and money), so readiness
+  remains incomplete on every deployment. The difference is that each one is now a named, dated,
+  alerted record rather than a paragraph. See the status column in
   [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

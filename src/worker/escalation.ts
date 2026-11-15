@@ -23,6 +23,15 @@ export type EscalationResult = {
   expiringDocuments: number;
 };
 
+/**
+ * Readiness sweep result. Kept separate so a readiness failure cannot make the backlog sweep look
+ * like it failed, and vice versa.
+ */
+export type ReadinessSweepResult = {
+  expiringDeclarations: number;
+  coverageGaps: number;
+};
+
 /** Minutes an open job may sit unclaimed before operations are told. */
 export const DEFAULT_ESCALATION_THRESHOLD_MINUTES = 30;
 
@@ -40,6 +49,33 @@ export function escalationThresholdMinutes(env: NodeJS.ProcessEnv = process.env)
 
 export function escalationDocumentHorizonDays(env: NodeJS.ProcessEnv = process.env): number {
   return positiveInteger(env.ESCALATION_DOCUMENT_HORIZON_DAYS, DEFAULT_DOCUMENT_HORIZON_DAYS);
+}
+
+/** Days before expiry at which a legal, insurance or audit declaration is escalated. */
+export const DEFAULT_READINESS_HORIZON_DAYS = 30;
+
+export function readinessHorizonDays(env: NodeJS.ProcessEnv = process.env): number {
+  return positiveInteger(env.READINESS_HORIZON_DAYS, DEFAULT_READINESS_HORIZON_DAYS);
+}
+
+/**
+ * Remind the people who can renew an owner declaration, and say out loud when nobody is on call.
+ * The records themselves cannot rot silently after this: a lapsing policy and a rota gap both
+ * produce a notification that the operations console shows.
+ */
+export async function runReadinessSweep(
+  pool: Pool,
+  options: { horizonDays?: number } = {},
+): Promise<ReadinessSweepResult> {
+  const horizon = options.horizonDays ?? readinessHorizonDays();
+  const { rows } = await pool.query<{ expiring_declarations: number; coverage_gaps: number }>(
+    "select * from public.app_escalate_platform_readiness($1)",
+    [horizon],
+  );
+  return {
+    expiringDeclarations: Number(rows[0]?.expiring_declarations ?? 0),
+    coverageGaps: Number(rows[0]?.coverage_gaps ?? 0),
+  };
 }
 
 export async function runEscalationSweep(

@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "@/lib/database-config";
 import { verifyGithubOidcToken, fetchGithubJwks } from "@/worker/github-oidc";
 import { drainEmailOutboxOnce } from "@/worker/outbox-drain";
-import { runEscalationSweep } from "@/worker/escalation";
+import { runEscalationSweep, runReadinessSweep } from "@/worker/escalation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,12 +105,26 @@ export async function POST(request: Request) {
       }));
       escalation = { status: "error" };
     }
+    // Whole-register readiness: lapsing declarations and a rota with nobody on it. Reported
+    // separately for the same reason.
+    let readiness: { status: "ok"; expiringDeclarations: number; coverageGaps: number } | { status: "error" };
+    try {
+      readiness = { status: "ok", ...(await runReadinessSweep(pool)) };
+    } catch (error) {
+      console.error(JSON.stringify({
+        level: "error",
+        event: "worker.readiness_sweep_failed",
+        message: error instanceof Error ? error.message : "unknown",
+      }));
+      readiness = { status: "error" };
+    }
     return json({
       status: result.delivered ? "ok" : "deferred",
       schedule: "one-batch",
       via: authorization.via,
       ...result,
       escalation,
+      readiness,
     }, 200);
   } catch (error) {
     console.error(JSON.stringify({

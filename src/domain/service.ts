@@ -2594,6 +2594,8 @@ export async function recordAttestation(identity: Identity, input: AttestationIn
         recordedBy: identity.id,
         recordedAt: new Date(),
         expiresAt,
+        // Re-recording re-arms the lapse reminder: the sweep must be able to warn again next year.
+        renewalRemindedAt: null,
       },
     });
     // The declaration and the audit line are written together: a claim with no trail of who made
