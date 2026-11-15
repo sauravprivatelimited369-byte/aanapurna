@@ -31,7 +31,7 @@ try {
   const tables = await db.query("SELECT tablename FROM pg_tables WHERE schemaname='public'");
   // Read-only reference data seeded by a migration (the gazetteer, migration 16) is not a record of
   // anything and must not block a synthetic run. Every application table still has to be empty.
-  const seededReferenceTables = new Set(['geo_places']);
+  const seededReferenceTables = new Set(['geo_places', 'directory_places']);
   for (const { tablename } of tables.rows) {
     if (seededReferenceTables.has(tablename)) continue;
     const result = await db.query(`SELECT count(*)::text AS count FROM public.${pg.escapeIdentifier(tablename)}`);

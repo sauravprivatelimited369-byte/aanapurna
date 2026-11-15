@@ -31,6 +31,7 @@ export default function NearbyIimCalcuttaPage() {
               <a href="https://application.iimcal.ac.in/about/contacts" target="_blank" rel="noreferrer">IIM Calcutta campus address ↗</a>
             </div>
             <p className="nearby-data-note">Public directory data may be incomplete or out of date. It is shown for local orientation only and is not a safety, capacity, licence, or partnership check.</p>
+            <p className="nearby-data-note"><Link href="/joka">See the wider Joka directory →</Link> Every kitchen, hotel and banquet venue within a few kilometres, listed from public sources and unconfirmed with its owner.</p>
           </aside>
         </div>
 

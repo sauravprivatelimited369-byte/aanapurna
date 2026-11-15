@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { LaunchReadinessPanel } from "@/components/launch-readiness-panel";
+import { DirectoryPanel } from "@/components/directory-panel";
 import { OrganizationDocuments } from "@/components/organization-documents";
 
 type ServiceArea = { id: string; label: string; countryCode: string; stateOrRegion: string | null; cityOrDistrict: string | null; timezone: string; active: boolean };
@@ -149,6 +150,7 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
       {(isOperations || isSupport) && <a href="#support-cases">Support queue</a>}
       {(isOperations || isSupport || isSecurity) && <a href="#privacy-requests">Privacy requests</a>}
       {(isOperations || isSecurity) && <a href="#launch-readiness">Launch readiness</a>}
+      {(isOperations || isSecurity) && <a href="#directory-places">Nearby food sources</a>}
       {(isOperations || isSecurity) && <a href="#account-recovery">Account recovery</a>}
     </nav>}
 
@@ -259,6 +261,8 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
     </section>}
 
     {(isOperations || isSecurity) && <LaunchReadinessPanel canWrite={isOperations || isSecurity} />}
+
+    {(isOperations || isSecurity) && <DirectoryPanel canWrite={isOperations || isSecurity} />}
 
     {(isOperations || isSecurity) && <section id="account-recovery" className="app-card app-card--full">
       <div className="app-card-title"><div><h2>Account recovery</h2><p>Issue the single-use password-reset link for an account and hand it over yourself. Use this when this deployment cannot deliver mail. Your second factor is required and the reason is audited.</p></div></div>

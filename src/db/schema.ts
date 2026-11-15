@@ -405,6 +405,34 @@ export const onCallShifts = pgTable("on_call_shifts", {
   createdAt: instant("created_at").notNull().defaultNow(),
 }, (table) => [index("on_call_shifts_window_idx").on(table.startsAt, table.endsAt)]);
 
+/**
+ * Curated food sources near the Joka campus. Public columns are published with an "unconfirmed"
+ * label; phone numbers stay private because ringing a business about a scheme it has never heard of
+ * is an approach a person makes deliberately, not a side effect of a page render.
+ */
+export const directoryPlaces = pgTable("directory_places", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  area: text("area").notNull(),
+  addressLine: text("address_line"),
+  latitude: numeric("latitude", { precision: 9, scale: 6 }),
+  longitude: numeric("longitude", { precision: 9, scale: 6 }),
+  phone: text("phone"),
+  phoneSource: text("phone_source"),
+  phoneKind: text("phone_kind").notNull().default("unknown"),
+  sourceUrl: text("source_url"),
+  lastCheckedOn: text("last_checked_on").notNull(),
+  consentStatus: text("consent_status").notNull().default("unknown"),
+  ownerVerified: boolean("owner_verified").notNull().default(false),
+  published: boolean("published").notNull().default(false),
+  photoUrl: text("photo_url"),
+  notes: text("notes"),
+  createdAt: instant("created_at").notNull().defaultNow(),
+  updatedAt: instant("updated_at").notNull().defaultNow(),
+}, (table) => [index("directory_places_category_idx").on(table.category, table.name)]);
+
 export const geoPlaces = pgTable("geo_places", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),

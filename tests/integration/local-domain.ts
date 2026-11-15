@@ -34,7 +34,7 @@ try {
   // Reference data seeded by a migration is not "data in the database". The gazetteer is
   // read-only geography (migration 16), identical on every instance and carrying no personal or
   // operational record, so it is the one table allowed to arrive pre-populated.
-  const seededReferenceTables = new Set(["geo_places"]);
+  const seededReferenceTables = new Set(["geo_places", "directory_places"]);
   for (const { tablename } of tables.rows) {
     if (seededReferenceTables.has(tablename)) continue;
     const rows = await admin.query<{ count: string }>(`SELECT count(*)::text count FROM public.${pg.escapeIdentifier(tablename)}`);
@@ -350,6 +350,39 @@ try {
     "SELECT renewal_reminded_at FROM public.platform_attestations WHERE key = 'insurance'",
   );
   assert.equal(rearmed.rows[0]!.renewal_reminded_at, null);
+  phase = "the Joka directory hides numbers and waits for a person";
+  const seededDirectory = await admin.query<{ places: Record<string, unknown>[] }>("SELECT public.app_public_directory() places");
+  assert(seededDirectory.rows[0]!.places.length >= 25, "The seeded directory must be visible on the public projection.");
+  for (const entry of seededDirectory.rows[0]!.places) {
+    assert(!("phone" in entry), "The public projection must never carry a phone number.");
+    assert(!("notes" in entry), "Internal notes must not reach the public projection.");
+    assert.equal(entry.ownerVerified, false, "No seeded place may claim owner confirmation.");
+  }
+  const privateRead = await service.listDirectoryPlaces(operations);
+  assert(privateRead.length >= 25);
+  assert(privateRead.some((place) => place.phone), "The operator view must show the numbers that exist.");
+  await assert.rejects(service.listDirectoryPlaces(generator), "A Generator must not read the private directory.");
+  await assert.rejects(service.updateDirectoryPlace(generator, { slug: "halla-bowl", published: false }));
+  assert.equal(await admin.query("SELECT public.app_public_directory() places").then((result) => (result.rows[0]!.places as { slug: string }[]).some((entry) => entry.slug === "halla-bowl")), true);
+  // Confirming with the owner is the only path to the green label, and it also records consent.
+  await service.updateDirectoryPlace(operations, { slug: "halla-bowl", ownerVerified: true });
+  const verifiedRow = await admin.query<{ owner_verified: boolean; consent_status: string }>(
+    "SELECT owner_verified, consent_status FROM public.directory_places WHERE slug = 'halla-bowl'",
+  );
+  assert.deepEqual(verifiedRow.rows[0], { owner_verified: true, consent_status: "consented" });
+  // Unpublishing removes it from the public projection without deleting the record.
+  await service.updateDirectoryPlace(operations, { slug: "halla-bowl", published: false });
+  const afterHide = await admin.query<{ places: { slug: string }[] }>("SELECT public.app_public_directory() places");
+  assert.equal(afterHide.rows[0]!.places.some((entry) => entry.slug === "halla-bowl"), false);
+  // The application role cannot read the table on its own: phone numbers need a signed-in operator.
+  const directoryAppPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+  try {
+    const leaked = await directoryAppPool.query<{ count: string }>("SELECT count(*)::text count FROM public.directory_places");
+    assert.equal(leaked.rows[0]?.count, "0", "Phone numbers must not be readable without a role.");
+  } finally {
+    await directoryAppPool.end();
+  }
+
   // The application role cannot read or write declarations on its own: it needs a signed-in
   // administrator, which is what FORCE ROW LEVEL SECURITY is there to enforce.
   const appPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });

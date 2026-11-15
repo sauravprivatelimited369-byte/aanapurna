@@ -70,7 +70,7 @@ export function PublicFooter() {
           <p className="footer-launch-note"><ShieldCheck size={15} aria-hidden="true" /> Controlled launch · human approvals pending</p>
         </div>
         <div className="footer-links">
-          <div><span className="footer-heading">Explore</span><Link href="/">Home</Link><Link href="/how-it-works">How it works</Link><Link href="/#impact">Our impact</Link><Link href="/near-iim-calcutta">Local discovery</Link><Link href="/preview">Sample handover</Link></div>
+          <div><span className="footer-heading">Explore</span><Link href="/">Home</Link><Link href="/how-it-works">How it works</Link><Link href="/#impact">Our impact</Link><Link href="/near-iim-calcutta">Local discovery</Link><Link href="/joka">Joka directory</Link><Link href="/preview">Sample handover</Link></div>
           <div><span className="footer-heading">The work</span><Link href="/about">About us</Link><Link href="/food-safety">Food safety disclaimer</Link><Link href="/contact">Contact</Link><Link href="/login">Account support</Link></div>
           <div><span className="footer-heading">Policies</span><Link href="/privacy">Privacy <small>Draft</small></Link><Link href="/terms">Terms <small>Draft</small></Link><Link href="/accessibility">Accessibility</Link></div>
         </div>

@@ -15,6 +15,7 @@ import {
   helperProfiles,
   notifications,
   organizationMemberships,
+  directoryPlaces,
   onCallShifts,
   organizations,
   platformAttestations,
@@ -64,6 +65,7 @@ import {
   type dataRequestUpdateSchema,
   type attestationSchema,
   type onCallShiftSchema,
+  type directoryPlaceUpdateSchema,
 } from "@/domain/validation";
 import { z } from "zod";
 
@@ -87,6 +89,7 @@ type DataRequestCreate = z.infer<typeof dataRequestCreateSchema>;
 type DataRequestUpdate = z.infer<typeof dataRequestUpdateSchema>;
 type AttestationInput = z.infer<typeof attestationSchema>;
 type OnCallShiftInput = z.infer<typeof onCallShiftSchema>;
+type DirectoryPlaceUpdate = z.infer<typeof directoryPlaceUpdateSchema>;
 
 type Policy = z.infer<typeof policyRulesSchema> & { version: string };
 
@@ -2673,4 +2676,70 @@ export async function getPublishedContacts(): Promise<{
     "select app_legal_entity() as entity, app_public_data_protection_contact() as contact",
   );
   return { legalEntity: rows[0]?.entity ?? null, dataProtection: rows[0]?.contact ?? null };
+}
+
+/* ------------------------------------------------------------------ *
+ * Joka directory
+ *
+ * The public page reads a projection with no phone numbers. These functions are the private half:
+ * they are how an operator sees the number, records who answered, and decides whether an entry is
+ * published at all.
+ * ------------------------------------------------------------------ */
+
+function requireDirectoryWrite(identity: Identity): void {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin"])) {
+    throw new HttpError(403, "Only an operations or security administrator can maintain the directory.", "DIRECTORY_WRITE_FORBIDDEN");
+  }
+}
+
+export async function listDirectoryPlaces(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin", "safety_officer", "support_agent"])) {
+    throw new HttpError(403, "You do not have access to the operations workspace.", "OPERATIONS_ACCESS_REQUIRED");
+  }
+  return withUserContext(identity.id, async (tx) => tx.select({
+    slug: directoryPlaces.slug,
+    name: directoryPlaces.name,
+    category: directoryPlaces.category,
+    area: directoryPlaces.area,
+    addressLine: directoryPlaces.addressLine,
+    phone: directoryPlaces.phone,
+    phoneSource: directoryPlaces.phoneSource,
+    phoneKind: directoryPlaces.phoneKind,
+    photoUrl: directoryPlaces.photoUrl,
+    consentStatus: directoryPlaces.consentStatus,
+    ownerVerified: directoryPlaces.ownerVerified,
+    published: directoryPlaces.published,
+    lastCheckedOn: directoryPlaces.lastCheckedOn,
+    notes: directoryPlaces.notes,
+  }).from(directoryPlaces).orderBy(directoryPlaces.category, directoryPlaces.name));
+}
+
+export async function updateDirectoryPlace(identity: Identity, input: DirectoryPlaceUpdate) {
+  requireDirectoryWrite(identity);
+  return withDomainContext(identity.id, async (tx) => {
+    const [existing] = await tx.select({ slug: directoryPlaces.slug, name: directoryPlaces.name })
+      .from(directoryPlaces).where(eq(directoryPlaces.slug, input.slug)).limit(1);
+    if (!existing) throw new HttpError(404, "That place is not in the directory.", "DIRECTORY_PLACE_NOT_FOUND");
+
+    const patch: Partial<typeof directoryPlaces.$inferInsert> = { updatedAt: new Date() };
+    if (input.phone !== undefined) patch.phone = input.phone ? input.phone : null;
+    if (input.phoneKind !== undefined) patch.phoneKind = input.phoneKind;
+    if (input.consentStatus !== undefined) patch.consentStatus = input.consentStatus;
+    if (input.published !== undefined) patch.published = input.published;
+    if (input.ownerVerified !== undefined) patch.ownerVerified = input.ownerVerified;
+    if (input.photoUrl !== undefined) patch.photoUrl = input.photoUrl;
+    if (input.notes !== undefined) patch.notes = input.notes ? input.notes : null;
+    // Confirming details with the owner is the only thing that turns the label green, and it can
+    // only happen on the word of a person who spoke to them, never from a listing.
+    if (input.ownerVerified === true) patch.consentStatus = "consented";
+
+    await tx.update(directoryPlaces).set(patch).where(eq(directoryPlaces.slug, input.slug));
+    await audit(tx, identity, "directory.place_updated", "directory_place", input.slug, undefined, {
+      fields: Object.keys(input).filter((key) => key !== "slug"),
+      published: input.published,
+      ownerVerified: input.ownerVerified,
+      consentStatus: input.consentStatus,
+    });
+    return { slug: input.slug, name: existing.name };
+  });
 }

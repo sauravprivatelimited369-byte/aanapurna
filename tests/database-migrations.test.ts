@@ -21,6 +21,7 @@ const migrationFiles = [
   "20261115140000_transit_limits_and_self_collection.sql",
   "20261115180000_owner_attestations_and_launch_gate.sql",
   "20261115193000_readiness_escalation.sql",
+  "20261115203000_joka_directory.sql",
 ];
 
 let database: PGlite;

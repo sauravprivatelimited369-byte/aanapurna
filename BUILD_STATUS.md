@@ -312,6 +312,12 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
 - **Scanner in one command:** the Compose files carry an optional `scanner` profile running clamd;
   `FILE_SCAN_MODE=clamav` still has to be set deliberately, and `CLAMAV_HOST` is deliberately unset
   by default so readiness cannot claim a scanner exists because a container might be running.
+- **Joka directory (migration 19):** 31 kitchens, hotels, guest houses and banquet venues within a
+  few kilometres of the campus gate, seeded from public listings with the date each was read. The
+  public page at `/joka` publishes names, areas and addresses only, and labels every card
+  "not yet confirmed with the owner". Numbers live in the operators' view; `phone_kind` records
+  whether a number is the business's line or a booking-marketplace line, and no licence status is
+  stored or implied. Photos are accepted only when an operator enters one the owner supplied.
 - **Still open:** no standby rota, no named coordinator, no legal entity or insurance, no mail
   credential, no scanner host and no independent test (people, lawyers and money), so readiness
   remains incomplete on every deployment. The difference is that each one is now a named, dated,

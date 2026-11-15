@@ -97,6 +97,23 @@ about a food-rescue scheme. In order:
 5. **Re-verify this file** before use: every row is dated 2026-11-15 and none of it was confirmed by
    a phone call, a visit or an FSSAI lookup.
 
+## What happened to this note
+
+The list is now seeded into `public.directory_places` (migration 19) and rendered at `/joka`. Names,
+areas and addresses are published because they are on a signboard already; each row says "not yet
+confirmed with the owner". The published numbers are held in the operators' view only
+(`/api/admin/directory-places`), because ringing a business about a scheme it has never heard of is an
+approach a person makes deliberately. `phone_kind` marks which numbers are booking-marketplace lines
+rather than the business's own.
+
+Two things were deliberately not copied in:
+
+- **Photos from listing sites.** They belong to whoever took them. The directory accepts a photo only
+  when an operator records one the owner supplied, and the public card says "no photo supplied"
+  until then.
+- **A licence status.** Nothing here records or implies an FSSAI number. That question is asked of
+  the owner, and the answer is a person's note, not a scraped field.
+
 ## Sources
 
 Zomato listing pages for Halla Bowl, Oh! Kitchen and Eatli; Justdial pages for Joka restaurants, Joka

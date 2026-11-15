@@ -403,3 +403,23 @@ export const onCallShiftSchema = z.object({
   message: "Schedule shifts of at most fourteen days.",
   path: ["endsAt"],
 });
+
+/**
+ * Directory maintenance. Publishing a place, recording who actually answered the phone, and noting
+ * that the owner confirmed the details are three separate decisions; this schema allows any subset
+ * but at least one, and never a licence claim.
+ */
+export const directoryPlaceUpdateSchema = z.object({
+  slug: z.string().trim().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/),
+  phone: z.string().trim().max(40).regex(/^[+0-9 ()-]*$/, "Use digits, spaces, brackets, + and - only.").nullable().optional(),
+  phoneKind: z.enum(["unknown", "direct", "business_line", "marketplace_line"]).optional(),
+  consentStatus: z.enum(["unknown", "contacted", "consented", "declined"]).optional(),
+  published: z.boolean().optional(),
+  ownerVerified: z.boolean().optional(),
+  // A photo the owner handed over. Listing-site images are copyrighted and are not copied in.
+  photoUrl: z.string().trim().url().max(500).startsWith("https://").nullable().optional(),
+  notes: z.string().trim().max(8_000).nullable().optional(),
+}).strict().refine(
+  (value) => Object.keys(value).some((key) => key !== "slug"),
+  { message: "Change at least one field." },
+);
