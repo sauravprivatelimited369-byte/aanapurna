@@ -31,7 +31,12 @@ try {
   // Refuse every non-empty application table, not just the main domain tables.
   // Synthetic approvals must never be added to a database containing real data.
   const tables = await admin.query<{ tablename: string }>("SELECT tablename FROM pg_tables WHERE schemaname='public'");
+  // Reference data seeded by a migration is not "data in the database". The gazetteer is
+  // read-only geography (migration 16), identical on every instance and carrying no personal or
+  // operational record, so it is the one table allowed to arrive pre-populated.
+  const seededReferenceTables = new Set(["geo_places"]);
   for (const { tablename } of tables.rows) {
+    if (seededReferenceTables.has(tablename)) continue;
     const rows = await admin.query<{ count: string }>(`SELECT count(*)::text count FROM public.${pg.escapeIdentifier(tablename)}`);
     assert.equal(rows.rows[0]?.count, "0", `The isolated test database must be empty; ${tablename} contains data.`);
   }
