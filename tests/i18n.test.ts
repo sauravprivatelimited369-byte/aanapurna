@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LOCALES, LOCALE_NAMES, isLocale, resolveLocale, t, formatDate, htmlLang } from "@/lib/i18n";
+import { LOCALES, LOCALE_NAMES, LOCALE_SHORT_NAMES, isLocale, resolveLocale, t, formatDate, htmlLang } from "@/lib/i18n";
 import { privacyNotice, responseWindowParagraph } from "@/domain/privacy-notice";
 
 describe("locale resolution", () => {
@@ -128,5 +128,23 @@ describe("the privacy notice exists in both languages", () => {
 
   it("covers both languages the switcher offers", () => {
     for (const locale of LOCALES) expect(privacyNotice[locale]).toBeDefined();
+  });
+});
+
+describe("the language control has to survive a 320px phone", () => {
+  it("offers a compact label in the language's own script", () => {
+    // The header holds brand + switch + join + menu, which does not fit at 320px with two full
+    // names. Collapsing to a glyph keeps the control present; removing it would trap the reader in
+    // a language they may not read.
+    expect(LOCALE_SHORT_NAMES.or).toMatch(/[\u0B00-\u0B7F]/);
+    expect(LOCALE_SHORT_NAMES.en.length).toBeLessThanOrEqual(2);
+    expect(LOCALE_SHORT_NAMES.or.length).toBeLessThan(LOCALE_NAMES.or.length);
+  });
+
+  it("keeps the full name available to a screen reader", () => {
+    // CSS may hide the spelled-out label visually, but an assistive technology must still hear
+    // "English" rather than "EN".
+    expect(LOCALE_NAMES.en).toBe("English");
+    expect(LOCALE_NAMES.or).toBe("ଓଡ଼ିଆ");
   });
 });

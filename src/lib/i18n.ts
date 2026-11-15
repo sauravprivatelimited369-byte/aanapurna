@@ -31,6 +31,15 @@ export const LOCALE_NAMES: Record<Locale, string> = {
   en: "English",
 };
 
+/**
+ * A one-glyph fallback for the narrowest screens, where the full pair does not fit beside the brand
+ * and the menu. Still in the language's own script, so it is recognisable rather than an abbreviation.
+ */
+export const LOCALE_SHORT_NAMES: Record<Locale, string> = {
+  or: "ଓ",
+  en: "EN",
+};
+
 export const LOCALE_COOKIE = "annapurna_locale";
 
 export function isLocale(value: unknown): value is Locale {

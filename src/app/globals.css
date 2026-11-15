@@ -845,6 +845,25 @@ select.form-control { appearance: auto; }
 .locale-switcher__choice:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
 .locale-switcher__choice:disabled { opacity: 0.6; cursor: progress; }
 
+/* Under 560px the header cannot hold brand + both language names + join + menu at 320px. The
+   inactive language collapses to its first letter so the control still exists and still works:
+   replacing it with nothing would leave the reader stuck in a language they may not read. */
+@media (max-width: 560px) {
+  .locale-switcher { gap: 0; }
+  .locale-switcher__choice { padding: 0.3rem 0.42rem; font-size: 0.72rem; }
+  .locale-switcher__choice:not(.is-active)::after { content: attr(data-short); display: inline; }
+  .locale-switcher__choice:not(.is-active) span.long-label { display: none; }
+  .header-actions { gap: 6px; }
+  .header-join { padding-inline: 8px; }
+}
+@media (max-width: 380px) {
+  .header-actions .locale-switcher { display: none; }
+  .mobile-nav-panel .locale-switcher { display: inline-flex; margin-top: 0.75rem; }
+  /* The panel is full width, so the full names fit again. */
+  .mobile-nav-panel .locale-switcher__choice:not(.is-active)::after { content: none; }
+  .mobile-nav-panel .locale-switcher__choice:not(.is-active) span.long-label { display: inline; }
+}
+
 /* ---- Request timeline ----------------------------------------------------
    Reads as a sequence, not a dashboard. The rule down the left is what makes
    it a timeline rather than a list of unrelated rows. */

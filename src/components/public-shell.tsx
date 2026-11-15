@@ -53,6 +53,9 @@ export async function PublicHeader({ active }: { active?: string }) {
               <span className="sr-only">Site navigation</span>
             </summary>
             <nav className="mobile-nav-panel" aria-label="Mobile navigation">
+              {/* The header switcher collapses below 380px, so the menu carries its own. Without
+                  this a phone user would lose the only way to change language. */}
+              <LocaleSwitcher current={locale} />
               <NavigationLinks active={active} mobile />
               <Link className="mobile-nav-link" href="/preview">Preview the workspace</Link>
               <Link className="mobile-nav-link" href="/login">Log in</Link>

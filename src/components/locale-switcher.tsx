@@ -11,7 +11,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { LOCALE_NAMES, type Locale } from "@/lib/i18n";
+import { LOCALE_NAMES, LOCALE_SHORT_NAMES, type Locale } from "@/lib/i18n";
 
 export function LocaleSwitcher({ current }: { current: Locale }) {
   const router = useRouter();
@@ -38,10 +38,14 @@ export function LocaleSwitcher({ current }: { current: Locale }) {
           lang={locale === "or" ? "or-IN" : "en-IN"}
           className={locale === current ? "locale-switcher__choice is-active" : "locale-switcher__choice"}
           aria-pressed={locale === current}
+          data-short={LOCALE_SHORT_NAMES[locale]}
           disabled={busy}
           onClick={() => void choose(locale)}
         >
-          {LOCALE_NAMES[locale]}
+          {/* The full name always reaches the accessibility tree; CSS only hides it visually on a
+              narrow screen, so a screen reader still hears "English" rather than "EN". */}
+          <span className="long-label">{LOCALE_NAMES[locale]}</span>
+          <span className="sr-only">{LOCALE_NAMES[locale]}</span>
         </button>
       ))}
     </div>

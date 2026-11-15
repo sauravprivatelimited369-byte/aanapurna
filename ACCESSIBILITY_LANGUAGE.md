@@ -99,3 +99,20 @@ window recorded" next step. The probe rows were removed afterwards.
 `320` tests pass, including 12 for the progress rules and 18 for the language layer. `npx eslint .`,
 `npx tsc --noEmit` and `npm run build` are clean. `/privacy` was confirmed rendering in both languages
 with a matching `<html lang>` and no English prose leaking into the Odia page.
+
+## Two layout constraints this created, and the fixes
+
+**A public page must not wait on the database to render.** Adding the recorded window meant a third
+public read on every render. The pool's connect timeout is 30 seconds, which is fine for an app request
+and wrong for a page: during an outage a reader would get a blank screen instead of a notice, and the
+browser test that asserts `main` is visible would time out rather than fail on something meaningful.
+`published-contacts.ts` now wraps each public read in a 2-second bound and treats a slow answer as no
+answer, which every caller already renders truthfully as "not recorded". All nine public pages return
+200 in milliseconds with no database reachable.
+
+**The switcher has to survive 320px.** Brand + two language names + join + menu does not fit in a 288px
+container. Below 560px the inactive language collapses to a glyph in its own script (`ଓ` / `EN`), which
+keeps the control present instead of deleting it — deleting it would trap a reader in a language they
+may not read. Below 380px the header switcher hides and the mobile menu carries its own, because hiding
+the only way to change language is worse than a crowded header. The spelled-out names stay in the
+accessibility tree via `sr-only`, so a screen reader still hears "English" rather than "EN".
