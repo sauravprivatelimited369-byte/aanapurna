@@ -44,3 +44,15 @@ describe("restore verification", () => {
     expect(MANIFEST_SQL).toContain("information_schema.columns");
   });
 });
+
+describe("incident readiness script", () => {
+  it("reports the code-side capability without needing a person", async () => {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const run = promisify(execFile);
+    const { stdout } = await run(process.execPath, ["scripts/incident-readiness.mjs"]);
+    expect(stdout).toContain("READY    second factor enforced for privileged roles");
+    expect(stdout).toContain("READY    session revocation endpoint");
+    expect(stdout).toContain("Code-side readiness: complete");
+  });
+});

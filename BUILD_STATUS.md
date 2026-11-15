@@ -293,6 +293,10 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   optional coordinates or a checked-in gazetteer, a claim beyond the area's `max_transit_km` is
   refused, a receiving organisation can collect its own food, and every policy-bearing table is now
   `FORCE ROW LEVEL SECURITY`. There is still no traffic-aware routing.
+- **Incident readiness (machine half):** `scripts/incident-readiness.mjs` verifies session
+  revocation, the append-only audit trail, second-factor enforcement, operator recovery and
+  data-request intake; `ops/INCIDENT_READINESS.md` is the 45-minute drill. Running the drill needs two
+  people.
 - **Still open:** no standby rota or named coordinator (people), and no SMTP credential, so no mail
   reaches a user on its own. See the status column in
   [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

@@ -21,7 +21,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "This request list is temporarily unavailable.";
 }
 
-export function SupportPanel({ memberships }: { memberships: Membership[] }) {
+export function SupportPanel({ memberships, responseWindowHours }: { memberships: Membership[]; responseWindowHours: number | null }) {
   const [cases, setCases] = useState<SupportCase[]>([]);
   const [requests, setRequests] = useState<DataRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,6 +96,8 @@ export function SupportPanel({ memberships }: { memberships: Membership[] }) {
   }
 
   return <div className="app-grid">
+    {responseWindowHours !== null && <section className="app-card app-card--full"><div className="inline-notice"><strong>Response window.</strong> This deployment aims to answer a support or privacy request within {responseWindowHours} hour{responseWindowHours === 1 ? "" : "s"}. That is a target set by the operator, not a legal deadline.</div></section>}
+    {responseWindowHours === null && <section className="app-card app-card--full"><div className="inline-notice"><strong>No response window is published.</strong> Nobody has staffed one on this deployment, so no time is promised. The request is still recorded here and is visible to the operations queue.</div></section>}
     <section className="app-card app-card--span-6">
       <div className="app-card-title"><div><h2>Contact support</h2><p>Share a clear description. Do not include passwords, sign-in links or unnecessary health or identity details.</p></div></div>
       <form className="form-stack" onSubmit={(event) => void submit(event, "/api/support", "Your support request was submitted. Track its reference below when the request list is available.")}>
