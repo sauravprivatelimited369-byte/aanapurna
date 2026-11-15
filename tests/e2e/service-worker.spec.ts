@@ -37,6 +37,18 @@ test("the security policy permits the worker that shows a notification", async (
   expect(csp).toContain("worker-src 'self'");
 });
 
+test("health says whether notifications are switched on, and never leaks the key", async ({ page }) => {
+  const response = await page.request.get("/api/health");
+  const body = await response.json() as Record<string, unknown>;
+  // The status is a boolean rather than an omission, so a deployment that has lost its keys is
+  // visible from the outside without anybody signing in to look at a toggle.
+  expect(body.push).toBeDefined();
+  expect(typeof (body.push as { configured: unknown }).configured).toBe("boolean");
+  // A VAPID public key is 87 characters of base64url. If one ever appears in this public payload,
+  // it will match this shape.
+  expect(JSON.stringify(body)).not.toMatch(/[A-Za-z0-9_-]{80,}/);
+});
+
 test("the subscribe endpoint refuses an anonymous caller", async ({ page }) => {
   const response = await page.request.get("/api/account/push");
   expect(response.status()).toBe(401);

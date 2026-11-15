@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkDatabase, pool } from "@/db";
 import { getEmailDeliveryStatus } from "@/email/config";
+import { pushConfigured } from "@/push/vapid";
 import { evaluateReadiness } from "@/domain/readiness";
 import { evaluateWorkerHealth, WORKER_SERVICE_KEY, type WorkerHealth } from "@/worker/heartbeat";
 
@@ -88,6 +89,9 @@ export async function GET() {
       lastEvent: typeof worker.details.event === "string" ? worker.details.event : null,
       lastError: typeof worker.details.lastError === "string" ? worker.details.lastError : null,
     },
+    // Whether a person can turn on notifications to their own device. A boolean, deliberately: the
+    // subscription key is handed out by the authenticated account API, never by this public page.
+    push: { configured: pushConfigured() },
     realOperationsEnabled: process.env.OPERATIONS_ENABLED === "true",
     // Names of unmet requirements only, never their values.
     launchReadiness: {

@@ -42,7 +42,14 @@ function explicitSmtpEnv(overrides: Record<string, string> = {}): NodeJS.Process
 
 describe("production configuration preflight", () => {
   it("accepts a complete synthetic production configuration", () => {
-    const result = validateProductionConfig(baseEnv(), { allowTestDomains: true });
+    const result = validateProductionConfig(
+      baseEnv({
+        WEB_PUSH_PUBLIC_KEY: "B".repeat(87),
+        WEB_PUSH_PRIVATE_KEY: "P".repeat(43),
+        WEB_PUSH_SUBJECT: "https://app.example.test",
+      }),
+      { allowTestDomains: true },
+    );
     expect(result.problems).toEqual([]);
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
@@ -236,5 +243,65 @@ describe("Vercel build configuration", () => {
     // `npm ci` omits devDependencies and `next build` fails its type check.
     expect(config.installCommand).toBe("npm ci --include=dev");
     expect(config.buildCommand).toBe("npm run db:migrate && npm run db:check && npm run build");
+  });
+});
+
+describe("Web Push is reported, never guessed at", () => {
+  const vapidPublic = "B".repeat(87);
+  const vapidPrivate = "P".repeat(43);
+
+  it("warns plainly when push is off and does not fail the deployment", () => {
+    const result = validateProductionConfig(baseEnv(), { allowTestDomains: true });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.join(" ")).toContain("notifications to a person's device are off");
+  });
+
+  it("is silent about push once a usable pair and subject are present", () => {
+    const result = validateProductionConfig(
+      baseEnv({
+        WEB_PUSH_PUBLIC_KEY: vapidPublic,
+        WEB_PUSH_PRIVATE_KEY: vapidPrivate,
+        WEB_PUSH_SUBJECT: "https://app.example.test",
+      }),
+      { allowTestDomains: true },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.warnings.filter((warning) => warning.includes("WEB_PUSH"))).toEqual([]);
+  });
+
+  it("names a half-configured pair instead of showing a button that cannot work", () => {
+    const result = validateProductionConfig(baseEnv({ WEB_PUSH_PUBLIC_KEY: vapidPublic }), {
+      allowTestDomains: true,
+    });
+    expect(result.warnings.join(" ")).toContain("must be set together");
+  });
+
+  it("treats a wrongly shaped key as push being off", () => {
+    const result = validateProductionConfig(
+      baseEnv({ WEB_PUSH_PUBLIC_KEY: "too-short", WEB_PUSH_PRIVATE_KEY: vapidPrivate }),
+      { allowTestDomains: true },
+    );
+    expect(result.warnings.join(" ")).toContain("wrong shape");
+  });
+
+  it("objects to a subject a push service could not deliver mail to", () => {
+    const result = validateProductionConfig(
+      baseEnv({
+        WEB_PUSH_PUBLIC_KEY: vapidPublic,
+        WEB_PUSH_PRIVATE_KEY: vapidPrivate,
+        WEB_PUSH_SUBJECT: "support@example.test",
+      }),
+      { allowTestDomains: true },
+    );
+    expect(result.warnings.join(" ")).toContain("mailto: address or an https: URL");
+  });
+
+  it("reports nothing about the key values themselves", () => {
+    const result = validateProductionConfig(
+      baseEnv({ WEB_PUSH_PUBLIC_KEY: vapidPublic, WEB_PUSH_PRIVATE_KEY: vapidPrivate }),
+      { allowTestDomains: true },
+    );
+    const output = [...result.problems, ...result.warnings].join(" ");
+    expect(output).not.toContain(vapidPrivate);
   });
 });
