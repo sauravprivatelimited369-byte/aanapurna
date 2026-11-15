@@ -815,3 +815,38 @@ export const dataScrubLog = pgTable(
   },
   (table) => [index("data_scrub_log_time_idx").on(table.executedAt)],
 );
+
+/**
+ * A browser or phone that has agreed to receive notifications while the site is closed.
+ *
+ * One row per device, not per person: somebody with a phone and a laptop has two, and a notification
+ * that reaches only the one they happen to be looking at is the problem this table exists to solve.
+ * The endpoint is the push service's URL and is the identity of the subscription — it is unique, and
+ * re-subscribing the same browser updates the keys rather than creating a second row.
+ *
+ * `endpoint` and the two keys are secrets of a sort: anyone holding them can send that device a push.
+ * They are readable only to the owning account through RLS, and the application never returns them to
+ * a browser.
+ */
+export const pushSubscriptions = pgTable(
+  "push_subscriptions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    /** A short label so somebody can recognise which device they are revoking. Never a full UA string. */
+    deviceLabel: text("device_label"),
+    createdAt: instant("created_at").notNull().defaultNow(),
+    lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
+    /** Set when a push service says the subscription is gone (404/410). Kept for the record, unused. */
+    revokedAt: instant("revoked_at"),
+    /** Last delivery failure, for the health screen. Never contains the endpoint or the payload. */
+    lastError: text("last_error"),
+  },
+  (table) => [
+    uniqueIndex("push_subscriptions_endpoint_key").on(table.endpoint),
+    index("push_subscriptions_user_idx").on(table.userId, table.revokedAt),
+  ],
+);

@@ -9,12 +9,11 @@ export const metadata: Metadata = { title: "Privacy" };
 export const dynamic = "force-dynamic";
 
 /**
- * The privacy notice, rendered from a two-language source.
+ * The privacy notice, rendered from `privacy-notice.ts`.
  *
- * The page holds no prose of its own. Copy lives in `privacy-notice.ts` so that the Odia and English
- * versions sit next to each other, and a change to one is visible as a change to the other. What stays
- * here is only what comes from the database: who the contact is, and whether a response window has
- * been recorded.
+ * The page holds no prose of its own. Copy lives in the data file, so a wording change is a visible
+ * diff in one place. What stays here is only what comes from the database: who the contact is, and
+ * whether a response window has been recorded.
  */
 export default async function PrivacyPage() {
   const locale = await currentLocale();

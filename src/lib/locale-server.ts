@@ -6,7 +6,7 @@ import { LOCALE_COOKIE, resolveLocale, type Locale } from "@/lib/i18n";
  * The language for the current request.
  *
  * Read on the server so the first paint is already in the right language. Doing this in the browser
- * would show an Odia reader an English page that swaps itself a moment later, which for a privacy
+ * would show a Hindi reader an English page that swaps itself a moment later, which for a privacy
  * notice is long enough to decide the page is not for them.
  */
 export async function currentLocale(): Promise<Locale> {

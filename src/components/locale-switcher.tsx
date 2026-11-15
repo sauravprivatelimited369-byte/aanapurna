@@ -16,12 +16,12 @@
  * that works on a 320px phone.
  *
  * Each option carries `lang` so the list renders each name in its own script, and the names are
- * never translated: somebody looking for Odia is looking for ଓଡ଼ିଆ.
+ * never translated: somebody looking for Bengali is looking for বাংলা.
  */
 
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { LOCALE_NAMES, LOCALES, t, type Locale } from "@/lib/i18n";
+import { LOCALE_NAMES, LOCALES, htmlLang, t, type Locale } from "@/lib/i18n";
 
 export function LocaleSwitcher({ current }: { current: Locale }) {
   const router = useRouter();
@@ -52,7 +52,7 @@ export function LocaleSwitcher({ current }: { current: Locale }) {
         onChange={(event) => void choose(event.target.value as Locale)}
       >
         {LOCALES.map((locale) => (
-          <option key={locale} value={locale} lang={locale === "or" ? "or-IN" : `${locale}-IN`}>
+          <option key={locale} value={locale} lang={htmlLang(locale)}>
             {LOCALE_NAMES[locale]}
           </option>
         ))}

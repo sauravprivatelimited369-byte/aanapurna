@@ -55,7 +55,7 @@ async function main(): Promise<void> {
               'app_apply_retention','app_redact_user','app_guard_audit_mutation',
               'app_export_person','app_record_profile_correction','app_overdue_privacy_requests',
               'app_overdue_support_cases','app_privacy_response_window_hours','app_public_response_window_contact',
-              'app_org_coordinates','app_normalize_place','app_notification_recipients'
+              'app_org_coordinates','app_normalize_place','app_notification_recipients','app_push_targets','app_unpushed_notifications','app_mark_push_delivered','app_revoke_push_subscription'
             )) AS required_functions,
         (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS migrations,
         -- Supabase's public PostgREST roles must not reach application objects.
@@ -86,8 +86,8 @@ async function main(): Promise<void> {
     if (row.rls_tables < 31) problems.push(`expected at least 31 RLS-protected tables, found ${row.rls_tables}`);
     // Migration 24 added two functions to the distance-ranked matching path. The count is exact rather
     // than a floor because a missing function here is a silently broken feature, not a degraded one.
-    if (row.required_functions !== 33) problems.push(`expected required database functions, found ${row.required_functions}/33`);
-    if (row.migrations < 25) problems.push(`expected at least 25 applied migrations, found ${row.migrations}`);
+    if (row.required_functions !== 36) problems.push(`expected required database functions, found ${row.required_functions}/36`);
+    if (row.migrations < 26) problems.push(`expected at least 25 applied migrations, found ${row.migrations}`);
     if (row.exposed_tables > 0) problems.push(`Supabase public API roles can reach ${row.exposed_tables} application table(s); apply 20261114120000_revoke_public_api_privileges`);
     if (row.exposed_functions > 0) problems.push(`Supabase public API roles can execute ${row.exposed_functions} application function(s); apply 20261114120000_revoke_public_api_privileges`);
     console.info(JSON.stringify({

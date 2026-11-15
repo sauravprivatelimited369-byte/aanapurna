@@ -26,8 +26,7 @@ import { translator } from "@/lib/i18n";
  * /food-safety, the impact figures on /impact, and the Kolkata directory on its own page — all
  * already linked from the navigation and the footer, so nothing was lost, only relocated.
  *
- * The copy is translated. Odia is the default because that is who this is for; English, Hindi and
- * Bengali follow the reader's choice.
+ * The copy is translated. English is the default; Hindi and Bengali follow the reader's choice.
  */
 
 const roles = [

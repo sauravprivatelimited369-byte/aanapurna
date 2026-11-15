@@ -28,6 +28,7 @@ const migrationFiles = [
   "20261116120000_privacy_subject_rights.sql",
   "20261117090000_distance_ranked_matching.sql",
   "20261117100000_notification_email_recipients.sql",
+  "20261117110000_push_subscriptions.sql",
 ];
 
 let database: PGlite;
@@ -123,13 +124,13 @@ describe("PostgreSQL migration and authorization contracts", () => {
             'app_worker_defer_outbox','app_worker_mark_outbox_sent','app_worker_mark_outbox_failed',
             'app_guard_user_profile_status',
             'app_notify_platform_roles','app_current_agreement_version',
-            'app_org_coordinates','app_normalize_place','app_notification_recipients'
+            'app_org_coordinates','app_normalize_place','app_notification_recipients','app_push_targets','app_unpushed_notifications','app_mark_push_delivered','app_revoke_push_subscription'
           )) AS required_functions
     `);
     // Migration 20 added two forced-RLS tables and two functions; migration 24 added the two functions
     // that resolve an organisation's coordinates. Both floors rise so removing one fails the suite.
     expect(result.rows[0]?.rls_tables).toBeGreaterThanOrEqual(25);
-    expect(result.rows[0]?.required_functions).toBe(15);
+    expect(result.rows[0]?.required_functions).toBe(19);
   });
 
   it("adds recall records as append-only, policy-protected evidence with one open recall per donation", async () => {
@@ -1650,5 +1651,126 @@ describe("notification email can actually be addressed and queued", () => {
         [`<notify-policy2-${Date.now()}@annapurna-link.local>`],
       ).then(() => "inserted").catch(() => "refused"));
     expect(arbitrary).toBe("refused");
+  });
+});
+
+describe("notifications can reach the device a person is holding", () => {
+  /**
+   * Push is the only channel that arrives while somebody is standing in a kitchen. These assertions
+   * cover the parts that fail silently: a device belonging to one person visible to another, a
+   * notification pushed twice, and a stale notification pushed about food collected yesterday.
+   */
+  it("shows a person only their own devices, and refuses to register one for somebody else", async () => {
+    await database.query(
+      `INSERT INTO public."user" (id,name,email,email_verified) VALUES
+       ('push-suite-a','A','push-a-suite@example.test',true),('push-suite-b','B','push-b-suite@example.test',true)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    // A registers a device.
+    await withRole("annapurna_app", "push-suite-a", async () => {
+      await database.query(
+        `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth, device_label)
+         VALUES ('push-suite-a','https://push.example.test/suite-a','keykeykeykey','authauth','Chrome on Android')`,
+      );
+    });
+    const mine = await withRole("annapurna_app", "push-suite-a", async () =>
+      Number((await database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.push_subscriptions")).rows[0]!.count));
+    expect(mine).toBe(1);
+
+    // B sees nothing of A's, which is the whole point of the table being per person.
+    const theirs = await withRole("annapurna_app", "push-suite-b", async () =>
+      Number((await database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.push_subscriptions")).rows[0]!.count));
+    expect(theirs).toBe(0);
+
+    // B cannot write a device row owned by A.
+    const crossWrite = await withRole("annapurna_app", "push-suite-b", async () =>
+      database.query(
+        `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth)
+         VALUES ('push-suite-a','https://push.example.test/evil','keykeykeykey','authauth')`,
+      ).then(() => "allowed").catch(() => "refused"));
+    expect(crossWrite).toBe("refused");
+  });
+
+  it("delivers each notification once, and never a stale one", async () => {
+    // Written by the real notification function, so this covers the path every notification takes.
+    await withRole("annapurna_app", "push-suite-a", async () => {
+      await database.query(
+        `SELECT public.app_notify_user('push-suite-a', NULL, 'test.push', 'Offer expiring',
+           'A claim expires in 45 minutes.', '/app/offers')`,
+      );
+    });
+    const pending = await database.query<{ id: string }>("SELECT id FROM public.app_unpushed_notifications(100)");
+    expect(pending.rows.length).toBeGreaterThan(0);
+
+    await database.query("SELECT public.app_mark_push_delivered($1::uuid[])", [pending.rows.map((row) => row.id)]);
+    const after = await database.query("SELECT id FROM public.app_unpushed_notifications(100)");
+    expect(after.rows.length).toBe(0);
+
+    // A notification older than the window is skipped rather than fired late: pushing about food that
+    // was collected yesterday is noise, and the person already has it in the list and by email.
+    await database.query(
+      `INSERT INTO public.notifications (user_id, kind, title, body, href, created_at)
+       VALUES ('push-suite-a','test.stale','Old news','Two days late.','/app', now() - interval '2 days')`,
+    );
+    const stale = await database.query("SELECT id FROM public.app_unpushed_notifications(100)");
+    expect(stale.rows.length).toBe(0);
+  });
+
+  it("revokes a dead device instead of retrying it forever, and keeps the record", async () => {
+    const before = await database.query<{ id: string }>(
+      `SELECT id FROM public.push_subscriptions
+       WHERE user_id = 'push-suite-a' AND endpoint = 'https://push.example.test/suite-a'`,
+    );
+    const id = before.rows[0]!.id;
+    await database.query("SELECT public.app_revoke_push_subscription($1::uuid, 'push_service_410')", [id]);
+    const after = await database.query<{ revoked_at: Date | null; last_error: string | null }>(
+      "SELECT revoked_at, last_error FROM public.push_subscriptions WHERE id = $1::uuid", [id],
+    );
+    expect(after.rows[0]!.revoked_at).not.toBeNull();
+    expect(after.rows[0]!.last_error).toContain("410");
+    // Revoked, not deleted: "this device was registered and then stopped accepting pushes" is the fact
+    // somebody asks for when a notification is claimed never to have arrived.
+    expect((await database.query("SELECT count(*) FROM public.push_subscriptions WHERE id = $1::uuid", [id])).rows[0]).toBeTruthy();
+
+    // And a revoked device is no longer a push target.
+    const targets = await database.query("SELECT id FROM public.app_push_targets('push-suite-a')");
+    expect(targets.rows.length).toBe(0);
+  });
+});
+
+describe("a session cannot read somebody else's device", () => {
+  /**
+   * `app_push_targets` had to be granted to the app role as well as the worker, because the web process
+   * sends pushes too. That grant is only safe because the function checks the caller: the endpoint and
+   * keys are what let anybody holding them send that device a push, so reading another person's is
+   * reading their credentials.
+   */
+  it("refuses a session asking about another person's devices", async () => {
+    await database.query(
+      `INSERT INTO public."user" (id,name,email,email_verified) VALUES
+       ('authz-suite-a','A','authz-a-suite@example.test',true),('authz-suite-b','B','authz-b-suite@example.test',true)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+    await database.query(
+      `INSERT INTO public.push_subscriptions (user_id, endpoint, p256dh, auth)
+       VALUES ('authz-suite-a','https://push.example.test/authz-suite','keykeykeykey','authauth')
+       ON CONFLICT (endpoint) DO NOTHING`,
+    );
+
+    const crossRead = await withRole("annapurna_app", "authz-suite-b", async () =>
+      database.query("SELECT * FROM public.app_push_targets('authz-suite-a')")
+        .then(() => "allowed").catch(() => "refused"));
+    expect(crossRead).toBe("refused");
+
+    // Its own devices are fine, and being empty is not an error.
+    const ownRead = await withRole("annapurna_app", "authz-suite-b", async () =>
+      database.query("SELECT * FROM public.app_push_targets('authz-suite-b')")
+        .then(() => "allowed").catch(() => "refused"));
+    expect(ownRead).toBe("allowed");
+
+    // The worker has no session identity and is how the drain addresses anybody. This is the check that
+    // makes the wider grant safe rather than a hole.
+    const workerRead = await database.query<{ id: string }>("SELECT * FROM public.app_push_targets('authz-suite-a')");
+    expect(workerRead.rows.length).toBeGreaterThan(0);
   });
 });

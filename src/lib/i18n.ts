@@ -1,24 +1,18 @@
 /**
- * Four languages, each one because somebody here reads it.
+ * The languages this interface is published in.
  *
- * This product serves Sambalpur, in Odisha. Publishing an English-only privacy notice to people who
- * read Odia is not a presentation problem: a notice in a language you do not read is not notice, and
- * a rights flow you cannot follow is not a right. English stays because the organisation, its
- * auditors and its lawyers work in it.
+ * English is the default. Hindi and Bengali are offered because the owner asked for them, and the
+ * populations they serve are real: western Odisha has a substantial Hindi-speaking population —
+ * migrant workers, traders, transport contractors — and Bengali is the language of many readers the
+ * directory pages are written for.
  *
- * Hindi and Bengali were added on the owner's instruction, and they are not decoration. Western
- * Odisha has a substantial Hindi-speaking population — migrant workers, traders, transport
- * contractors — and a Bengali speaker in Kolkata is the audience of the directory pages. A language
- * list that offers four languages and translates three sentences is worse than one that offers two
- * and means it, so the rule below matters more with four than it did with two.
- *
- * Odia remains the default. Adding languages must never demote the majority language of the place
- * this is built for.
+ * Odia was removed on the owner's instruction. Nothing in the code should treat Odia as a language
+ * this product speaks, and the switcher no longer offers it.
  *
  * The translations are written as prose rather than assembled from fragments. Sentence order differs
  * between languages, so a template like `"within " + hours + " hours"` cannot be translated by
- * substitution — Odia and Hindi put the number where English does not. Where a number or a date is
- * involved, the whole sentence is stored per language.
+ * substitution — Hindi puts the number where English does not. Where a number or a date is involved,
+ * the whole sentence is stored per language.
  *
  * This is a dictionary, not a framework. There is no pluralisation engine and no message extraction.
  * A framework here would be machinery to maintain for a problem a table already solves.
@@ -34,13 +28,12 @@
  * `server-only` guard. The dictionary is public text and the resolver is pure; there is no secret
  * here. The cookie and header read lives in `locale-server.ts`, which *is* server-only.
  */
-export const LOCALES = ["or", "en", "hi", "bn"] as const;
+export const LOCALES = ["en", "hi", "bn"] as const;
 export type Locale = (typeof LOCALES)[number];
-export const DEFAULT_LOCALE: Locale = "or";
+export const DEFAULT_LOCALE: Locale = "en";
 
 /** What each language calls itself, for the switcher. Never translate a language's own name. */
 export const LOCALE_NAMES: Record<Locale, string> = {
-  or: "ଓଡ଼ିଆ",
   en: "English",
   hi: "हिन्दी",
   bn: "বাংলা",
@@ -56,86 +49,19 @@ export function isLocale(value: unknown): value is Locale {
  * A person's language, from the cookie they chose, falling back to what their browser asked for.
  *
  * Order matters: an explicit choice outranks a header, because somebody who has already told us they
- * read Odia should not be moved back to English by a browser default on their next device.
+ * read Hindi should not be moved back to English by a browser default on their next device.
  */
 export function resolveLocale(cookieValue: unknown, acceptLanguage: string | null): Locale {
   if (isLocale(cookieValue)) return cookieValue;
   if (!acceptLanguage) return DEFAULT_LOCALE;
   for (const part of acceptLanguage.split(",")) {
     const tag = part.split(";")[0]?.trim().toLowerCase() ?? "";
-    if (tag === "or" || tag.startsWith("or-")) return "or";
     if (tag === "en" || tag.startsWith("en-")) return "en";
     if (tag === "hi" || tag.startsWith("hi-")) return "hi";
     if (tag === "bn" || tag.startsWith("bn-")) return "bn";
   }
   return DEFAULT_LOCALE;
 }
-
-const OR = {
-  "request.progress.heading": "ଆପଣଙ୍କ ଅନୁରୋଧ କେଉଁଠି ଅଛି",
-  "request.progress.showTimeline": "ସମୟରେଖା ଦେଖନ୍ତୁ",
-  "request.progress.hideTimeline": "ସମୟରେଖା ଲୁଚାନ୍ତୁ",
-  "request.progress.loading": "ଅନୁରୋଧ ଖୋଜୁଛୁ…",
-  "request.progress.failed": "ଅନୁରୋଧର ସ୍ଥିତି ପଢ଼ିପାରିଲୁ ନାହିଁ।",
-  "request.progress.waited": "ଅପେକ୍ଷା",
-  "request.progress.hours": "ଘଣ୍ଟା",
-  "request.progress.nextStep": "ପରବର୍ତ୍ତୀ ପଦକ୍ଷେପ",
-  "request.progress.queue": "ଆପଣଙ୍କ ପୂର୍ବରୁ {count}ଟି ଖୋଲା ଅନୁରୋଧ ଅଛି",
-  "request.progress.noWindow": "କୌଣସି ସମୟସୀମା ଲେଖା ହୋଇନାହିଁ, ତେଣୁ କୌଣସି ତାରିଖର ପ୍ରତିଶ୍ରୁତି ନାହିଁ।",
-  "request.progress.window": "{hours} ଘଣ୍ଟା ମଧ୍ୟରେ ଉତ୍ତର ଦେବାକୁ ପ୍ରତିଶ୍ରୁତି",
-  "request.progress.overdue": "{hours} ଘଣ୍ଟାର ସମୟସୀମା ଅତିକ୍ରମ ହୋଇଛି",
-  "request.progress.onTime": "ସମୟସୀମା ଭିତରେ ଅଛି",
-  "request.progress.current": "ବର୍ତ୍ତମାନ ଏଠାରେ",
-  "privacy.nav": "ଗୋପନୀୟତା",
-  "common.dateAt": "{date} ରେ, {time} ଘଟିକାରେ",
-  "common.skipToContent": "ମୁଖ୍ୟ ବିଷୟକୁ ଯାଆନ୍ତୁ",
-  "common.language": "ଭାଷା",
-  "common.close": "ବନ୍ଦ କରନ୍ତୁ",
-  "common.menu": "ମେନୁ",
-
-  "nav.home": "ମୂଳ ପୃଷ୍ଠା",
-  "nav.howItWorks": "ଏହା କିପରି କାମ କରେ",
-  "nav.impact": "ଆମର ପ୍ରଭାବ",
-  "nav.foodSafety": "ଖାଦ୍ୟ ସୁରକ୍ଷା",
-  "nav.answers": "ସରଳ ଉତ୍ତର",
-  "nav.about": "ଆମ ବିଷୟରେ",
-  "nav.contact": "ଯୋଗାଯୋଗ",
-  "nav.preview": "ନମୁନା",
-  "nav.login": "ଲଗ୍ ଇନ",
-  "nav.join": "ଆନ୍ନପୂର୍ଣ୍ଣାରେ ଯୋଡ଼ି ହୁଅନ୍ତୁ",
-
-  "home.eyebrow": "ଅତିରିକ୍ତ ଖାଦ୍ୟ · ଦାୟିତ୍ୱପୂର୍ଣ୍ଣ ହସ୍ତାନ୍ତର",
-  "home.title": "ଭଲ ଖାଦ୍ୟର ଏକ <em>ଉଦ୍ଦେଶ୍ୟ ଥିବା ଉଚିତ।</em>",
-  "home.lead": "ଆନ୍ନପୂର୍ଣ୍ଣା ଲିଙ୍କ ଦାତା ଏବଂ ସମ୍ପ୍ରଦାୟ ସଂଗଠନ ମଧ୍ୟରେ ଅତିରିକ୍ତ ଖାଦ୍ୟକୁ ସମନ୍ୱୟ କରେ — ଅନୁମୋଦିତ ସ୍ୱେଚ୍ଛାସେବୀ, ସ୍ପଷ୍ଟ ହ୍ୟାଣ୍ଡଲିଂ ସୂଚନା ଏବଂ ଏକ ନିଶ୍ଚିତ ବିତରଣ ରେକର୍ଡ ସହିତ।",
-  "home.donate": "ଅତିରିକ୍ତ ଖାଦ୍ୟ ଦାନ କରନ୍ତୁ",
-  "home.becomeHelper": "ସ୍ୱେଚ୍ଛାସେବୀ ହୁଅନ୍ତୁ",
-  "home.registerOrg": "ଆପଣଙ୍କ ସଂଗଠନ ପଞ୍ଜୀକରଣ କରନ୍ତୁ",
-  "home.sampleWalkthrough": "ଏକ ନମୁନା ହସ୍ତାନ୍ତର ଦେଖନ୍ତୁ — ଖାତା ଆବଶ୍ୟକ ନାହିଁ",
-  "home.reviewNote": "ଅନୁରୋଧଗୁଡ଼ିକ ମାନବମାନେ ସମୀକ୍ଷା କରନ୍ତି। ଲଞ୍ଚ ଅନୁମୋଦନ ରେକର୍ଡ ନହେବା ପର୍ଯ୍ୟନ୍ତ ଖାଦ୍ୟ କାର୍ଯ୍ୟକଳାପ ବନ୍ଦ ରହେ।",
-  "home.rolesEyebrow": "ତିନୋଟି ଭୂମିକା, ଗୋଟିଏ ଲକ୍ଷ୍ୟ",
-  "home.rolesTitle": "ଆପଣ ଯେଉଁ <em>ଭୂମିକା ନିଭାଇ ପାରିବେ</em> ସେଥିରୁ ଆରମ୍ଭ କରନ୍ତୁ।",
-  "home.rolesIntro": "ପ୍ରବେଶ ଅନୁରୋଧ କରିବାକୁ ଏକ ଭୂମିକା ବାଛନ୍ତୁ। ଭୂମିକା ବାଛିବା ଏକ ସମୀକ୍ଷା ଆରମ୍ଭ କରେ — ଏହା କାହାରିକୁ ଅନୁମୋଦନ ଦିଏ ନାହିଁ।",
-  "home.closingEyebrow": "ମାନବ ସମୀକ୍ଷାରୁ ଆରମ୍ଭ",
-  "home.closingTitle": "ଏକ ଯତ୍ନଶୀଳ ହସ୍ତାନ୍ତର ପରିବର୍ତ୍ତନ ଆଣିପାରେ।",
-  "home.closingText": "ସହଭାଗୀ ପ୍ରବେଶ ଅନୁରୋଧ କରନ୍ତୁ। ଲୋକ, ନୀତି ଓ ସ୍ଥାନୀୟ ଅନୁମୋଦନ ପ୍ରସ୍ତୁତ ନହେବା ପର୍ଯ୍ୟନ୍ତ ପ୍ରକୃତ ଖାଦ୍ୟ କାର୍ଯ୍ୟକଳାପ ବନ୍ଦ ରହିବ।",
-  "home.startRequest": "ପ୍ରବେଶ ଅନୁରୋଧ ଆରମ୍ଭ କରନ୍ତୁ",
-  "home.contactSupport": "ଯୋଗାଯୋଗ ଓ ସହାୟତା",
-
-  "language.coverageNote": "ଏହି ପୃଷ୍ଠାର କିଛି ଅଂଶ ଏପର୍ଯ୍ୟନ୍ତ {language}ରେ ଅନୁବାଦ ହୋଇନାହିଁ। ଯାହା ଅନୁବାଦିତ ହୋଇନାହିଁ ତାହା ଇଂରାଜୀରେ ଦେଖାଯିବ।",
-  "language.untranslatedBanner": "ଏହି ପୃଷ୍ଠା ଏପର୍ଯ୍ୟନ୍ତ {language}ରେ ଅନୁବାଦିତ ହୋଇନାହିଁ। ଏହା ଇଂରାଜୀରେ ଦେଖାଯାଉଛି।",
-  "home.role.generator.title": "ଖାଦ୍ୟ ଦାତା",
-  "home.role.generator.label": "ରେଷ୍ଟୁରାଣ୍ଟ · ହୋଟେଲ · କ୍ୟାଟରର୍",
-  "home.role.generator.text": "ଏକ ସ୍ପଷ୍ଟ ଅତିରିକ୍ତ ଖାଦ୍ୟ ପ୍ରସ୍ତାବ ଏବଂ ଏହାର ପ୍ରସ୍ତୁତି, ସଂରକ୍ଷଣ ଓ ସଂଗ୍ରହ ବିବରଣୀ ସେୟାର କରନ୍ତୁ।",
-  "home.role.generator.action": "ଦାତା ପ୍ରବେଶ ଅନୁରୋଧ କରନ୍ତୁ",
-  "home.role.receiver.title": "ସମ୍ପ୍ରଦାୟ ସଂଗଠନ",
-  "home.role.receiver.label": "ଗ୍ରହୀତା · ଏନଜିଓ · ଆଶ୍ରୟସ୍ଥଳ",
-  "home.role.receiver.text": "ଆପଣଙ୍କ ପ୍ରକୃତ ଗ୍ରହଣ କ୍ଷମତା ଅନୁସାରେ ପ୍ରସ୍ତାବ ସମୀକ୍ଷା କରନ୍ତୁ ଏବଂ ପ୍ରତ୍ୟେକ ହସ୍ତାନ୍ତର ଆସିବା ପରେ ନିଶ୍ଚିତ କରନ୍ତୁ।",
-  "home.role.receiver.action": "ଆପଣଙ୍କ ସଂଗଠନ ପଞ୍ଜୀକରଣ କରନ୍ତୁ",
-  "home.role.helper.title": "ବିତରଣ ସ୍ୱେଚ୍ଛାସେବୀ",
-  "home.role.helper.label": "ସ୍ୱେଚ୍ଛାସେବୀ · ଅନୁମୋଦିତ ଚାଳକ",
-  "home.role.helper.text": "ସ୍ପଷ୍ଟ ଅଭିରକ୍ଷଣ ପଦକ୍ଷେପ ଏବଂ ଭୂମିକା-ସୀମିତ ବିବରଣୀ ସହିତ ସଂଗ୍ରହ ଓ ବିତରଣରେ ସହାୟତା କରନ୍ତୁ।",
-  "home.role.helper.action": "ସ୍ୱେଛାସେବୀ ପ୍ରବେଶ ଅନୁରୋଧ କରନ୍ତୁ",
-} as const;
 
 const EN = {
   "request.progress.heading": "Where your request is",
@@ -337,7 +263,7 @@ const BN = {
 
 export type MessageKey = keyof typeof EN;
 
-const MESSAGES: Record<Locale, Record<MessageKey, string>> = { or: OR, en: EN, hi: HI, bn: BN };
+const MESSAGES: Record<Locale, Record<MessageKey, string>> = { en: EN, hi: HI, bn: BN };
 
 /**
  * Look up a message and substitute `{name}` placeholders.
@@ -361,9 +287,8 @@ export function translator(locale: Locale) {
  *
  * Asia/Kolkata rather than the server's zone: everybody this serves is in one timezone, and a request
  * that says it was answered "tomorrow" because a server ran in UTC is worse than no timestamp.
- * Odia uses the same digits as English here; the day and month names are what change.
  */
-const INTL_TAGS: Record<Locale, string> = { or: "or-IN", en: "en-IN", hi: "hi-IN", bn: "bn-IN" };
+const INTL_TAGS: Record<Locale, string> = { en: "en-IN", hi: "hi-IN", bn: "bn-IN" };
 
 export function formatDate(locale: Locale, value: string | Date | null): string {
   if (!value) return "—";

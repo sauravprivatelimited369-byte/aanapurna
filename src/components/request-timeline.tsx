@@ -15,7 +15,7 @@
 
 import { useCallback, useState } from "react";
 import type { RequestProgress } from "@/domain/request-progress";
-import type { Locale } from "@/lib/i18n";
+import { formatDate, translator, type Locale } from "@/lib/i18n";
 
 type Progress = RequestProgress & { id: string };
 
@@ -37,46 +37,32 @@ type Messages = {
   formatDate: (value: string) => string;
 };
 
+/**
+ * The timeline's copy, from the shared dictionary.
+ *
+ * This used to carry its own four-language branch, which is how a second copy of the strings appears
+ * and then drifts from the first. The dictionary already has every one of these keys in every
+ * language, so the component holds no prose of its own — adding a language is a change in one file.
+ */
 export function buildMessages(locale: Locale): Messages {
-  const or = locale === "or";
-  const date = (value: string) => new Intl.DateTimeFormat(or ? "or-IN" : "en-IN", {
-    dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata",
-  }).format(new Date(value));
-  return or
-    ? {
-        heading: "ଆପଣଙ୍କ ଅନୁରୋଧ କେଉଁଠି ଅଛି",
-        show: "ସମୟରେଖା ଦେଖନ୍ତୁ",
-        hide: "ସମୟରେଖା ଲୁଚାନ୍ତୁ",
-        loading: "ଅନୁରୋଧ ଖୋଜୁଛୁ…",
-        failed: "ଅନୁରୋଧର ସ୍ଥିତି ପଢ଼ିପାରିଲୁ ନାହିଁ।",
-        waited: "ଅପେକ୍ଷା",
-        hours: "ଘଣ୍ଟା",
-        nextStep: "ପରବର୍ତ୍ତୀ ପଦକ୍ଷେପ",
-        queue: (count) => `ଆପଣଙ୍କ ପୂର୍ବରୁ ${count}ଟି ଖୋଲା ଅନୁରୋଧ ଅଛି`,
-        noWindow: "କୌଣସି ସମୟସୀମା ଲେଖା ହୋଇନାହିଁ, ତେଣୁ କୌଣସି ତାରିଖର ପ୍ରତିଶ୍ରୁତି ନାହିଁ।",
-        window: (h) => `${h} ଘଣ୍ଟା ମଧ୍ୟରେ ଉତ୍ତର ଦେବାକୁ ପ୍ରତିଶ୍ରୁତି`,
-        overdue: (h) => `${h} ଘଣ୍ଟାର ସମୟସୀମା ଅତିକ୍ରମ ହୋଇଛି`,
-        onTime: "ସମୟସୀମା ଭିତରେ ଅଛି",
-        current: "ବର୍ତ୍ତମାନ ଏଠାରେ",
-        formatDate: date,
-      }
-    : {
-        heading: "Where your request is",
-        show: "Show the timeline",
-        hide: "Hide the timeline",
-        loading: "Looking up your request…",
-        failed: "The status of this request could not be read.",
-        waited: "Waiting",
-        hours: "hours",
-        nextStep: "What happens next",
-        queue: (count) => `${count} open requests were submitted before yours`,
-        noWindow: "No response window is recorded, so no date is promised.",
-        window: (h) => `Promised answer within ${h} hours`,
-        overdue: (h) => `Past the ${h}-hour window`,
-        onTime: "Inside the window",
-        current: "Here now",
-        formatDate: date,
-      };
+  const t = translator(locale);
+  return {
+    heading: t("request.progress.heading"),
+    show: t("request.progress.showTimeline"),
+    hide: t("request.progress.hideTimeline"),
+    loading: t("request.progress.loading"),
+    failed: t("request.progress.failed"),
+    waited: t("request.progress.waited"),
+    hours: t("request.progress.hours"),
+    nextStep: t("request.progress.nextStep"),
+    queue: (count) => t("request.progress.queue", { count }),
+    noWindow: t("request.progress.noWindow"),
+    window: (hours) => t("request.progress.window", { hours }),
+    overdue: (hours) => t("request.progress.overdue", { hours }),
+    onTime: t("request.progress.onTime"),
+    current: t("request.progress.current"),
+    formatDate: (value) => formatDate(locale, value),
+  };
 }
 
 export function RequestTimeline({ requestId, locale }: { requestId: string; locale: Locale }) {

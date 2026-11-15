@@ -37,6 +37,26 @@ export async function enqueueAuthEmail(kind: AuthEmailKind, recipient: string, u
 }
 
 /**
+ * Turn a site-relative path into the absolute URL the drain will accept.
+ *
+ * The origin has to be the configured one, not whatever request happened to trigger this — an email is
+ * read later, on a different device, and a link built from a preview deployment's hostname would be
+ * dead by the time anybody clicked it. When no origin is configured the message is skipped rather than
+ * queued: a link that cannot be validated is a link that will fail the drain later, and failing now is
+ * cheaper and quieter than a backlog of undeliverable mail.
+ */
+function resolveActionUrl(href: string): string | null {
+  const configured = process.env.APP_URL?.trim();
+  if (!configured) return null;
+  try {
+    const origin = new URL(configured).origin;
+    return new URL(href, origin).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Email somebody that something happened in their account.
  *
  * Until now the outbox carried authentication mail only, so a food offer that expires in an hour
@@ -56,10 +76,16 @@ export async function enqueueNotificationEmail(
   href: string,
 ): Promise<void> {
   if (!recipient || !recipient.includes("@") || !href.startsWith("/")) return;
+  // The drain validates with `new URL(...)` and refuses anything that is not absolute, so a bare
+  // "/app/offers" is rejected as EMAIL_ACTION_URL_INVALID and the message fails on every retry, forever.
+  // That is exactly what happened: the queue said `pending`, the drain said `failed`, and the reason
+  // was a relative path. Resolving it here means the stored payload is already the URL that gets sent.
+  const resolved = resolveActionUrl(href);
+  if (!resolved) return;
   // Headings and bodies are bounded in the database function that writes the notification; the same
   // bounds are applied here so a pathological string cannot become a pathological email.
   const payload: AuthEmailPayload = {
-    url: href,
+    url: resolved,
     heading: heading.slice(0, 160),
     description: `${description.slice(0, 900)}\n\nYou are receiving this because it relates to an account you belong to on Annapurna Link. It is not confirmation of approval, and no food has been certified.`,
     buttonLabel: "Open Annapurna Link",

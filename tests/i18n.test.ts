@@ -3,44 +3,50 @@ import { LOCALES, LOCALE_NAMES, isLocale, resolveLocale, t, formatDate, htmlLang
 import { noticeFor, privacyNotice, responseWindowParagraph } from "@/domain/privacy-notice";
 
 describe("locale resolution", () => {
-  it("defaults to Odia, because that is who this is for", () => {
-    // English as the default would make the majority-language reader do the work of opting in.
-    expect(resolveLocale(undefined, null)).toBe("or");
-    expect(resolveLocale(undefined, "")).toBe("or");
+  it("defaults to English", () => {
+    // English is the default now that Odia has been removed. Hindi and Bengali are offered but their
+    // copy is unreviewed, so making either one the default would hand a first-time reader unreviewed
+    // prose as the baseline rather than as a choice they made.
+    expect(resolveLocale(undefined, null)).toBe("en");
+    expect(resolveLocale(undefined, "")).toBe("en");
   });
 
   it("lets an explicit choice outrank the browser header", () => {
     // Somebody who has already chosen English should not be moved back by a header.
-    expect(resolveLocale("en", "or-IN,or;q=0.9")).toBe("en");
-    expect(resolveLocale("or", "en-GB,en;q=0.9")).toBe("or");
+    expect(resolveLocale("hi", "en-IN,en;q=0.9")).toBe("hi");
+    expect(resolveLocale("en", "hi-IN,hi;q=0.9")).toBe("en");
   });
 
   it("reads the browser header when no choice was made", () => {
-    expect(resolveLocale(undefined, "or-IN,or;q=0.9,en;q=0.8")).toBe("or");
     expect(resolveLocale(undefined, "en-GB,en;q=0.9")).toBe("en");
     // Hindi and Bengali are offered now, so the header must be honoured rather than collapsed to Odia.
     expect(resolveLocale(undefined, "hi-IN,hi;q=0.9")).toBe("hi");
     expect(resolveLocale(undefined, "bn-IN,bn;q=0.9")).toBe("bn");
-    // A language that is still not offered falls back to the default rather than to English.
-    expect(resolveLocale(undefined, "ta-IN,ta;q=0.9")).toBe("or");
+    // A language that is not offered falls back to the default.
+    expect(resolveLocale(undefined, "ta-IN,ta;q=0.9")).toBe("en");
+    // Odia was removed on the owner's instruction. A browser asking for it gets the default, and the
+    // resolver must not quietly reintroduce it.
+    expect(resolveLocale(undefined, "or-IN,or;q=0.9")).toBe("en");
   });
 
   it("ignores a cookie value it did not set", () => {
-    expect(isLocale("or")).toBe(true);
     expect(isLocale("en")).toBe(true);
+    expect(isLocale("or")).toBe(false);
+    expect(isLocale("odia")).toBe(false);
     expect(isLocale("fr")).toBe(false);
     expect(isLocale(null)).toBe(false);
-    expect(resolveLocale("fr", null)).toBe("or");
+    expect(resolveLocale("fr", null)).toBe("en");
   });
 
   it("writes each language's name in its own script", () => {
-    // Never translate a language's own name: somebody looking for Odia looks for ଓଡ଼ିଆ.
-    expect(LOCALE_NAMES.or).toBe("ଓଡ଼ିଆ");
+    // Never translate a language's own name: somebody looking for Bengali looks for বাংলা.
+    expect(LOCALE_NAMES.bn).toBe("বাংলা");
+    expect(LOCALE_NAMES.hi).toBe("हिन्दी");
     expect(LOCALE_NAMES.en).toBe("English");
   });
 
   it("sets the html lang attribute to the right script", () => {
-    expect(htmlLang("or")).toBe("or-IN");
+    expect(htmlLang("hi")).toBe("hi-IN");
     expect(htmlLang("en")).toBe("en-IN");
   });
 });
@@ -48,25 +54,25 @@ describe("locale resolution", () => {
 describe("messages", () => {
   it("substitutes named values", () => {
     expect(t("en", "request.progress.window", { hours: 72 })).toBe("Promised answer within 72 hours");
-    expect(t("or", "request.progress.window", { hours: 72 })).toContain("72");
+    expect(t("hi", "request.progress.window", { hours: 72 })).toContain("72");
   });
 
   it("leaves a placeholder alone rather than printing undefined", () => {
     expect(t("en", "request.progress.window", {})).toContain("{hours}");
   });
 
-  it("has no English falling through in the Odia dictionary", () => {
-    // A missing key silently renders English, which looks translated and is not. Every key the
-    // English side defines must exist in Odia and must differ where prose is involved.
+  it("has no English falling through in the Hindi or Bengali dictionary", () => {
+    // A missing key silently renders English, which looks translated and is not.
     const en = t("en", "request.progress.heading");
-    const or = t("or", "request.progress.heading");
-    expect(or).not.toBe(en);
-    expect(or).toMatch(/[\u0B00-\u0B7F]/); // Odia block
+    expect(t("hi", "request.progress.heading")).not.toBe(en);
+    expect(t("bn", "request.progress.heading")).not.toBe(en);
+    expect(t("hi", "request.progress.heading")).toMatch(/[\u0900-\u097F]/); // Devanagari
+    expect(t("bn", "request.progress.heading")).toMatch(/[\u0980-\u09FF]/); // Bengali
   });
 
   it("formats dates in the reader's language", () => {
     const value = "2026-11-15T06:30:00.000Z";
-    expect(formatDate("or", value)).toMatch(/[\u0B00-\u0B7F]/);
+    expect(formatDate("hi", value)).toMatch(/[\u0900-\u097F]/);
     expect(formatDate("en", value)).toMatch(/2026/);
     expect(formatDate("en", null)).toBe("—");
   });
@@ -79,68 +85,57 @@ describe("messages", () => {
   });
 });
 
-describe("the privacy notice exists in both languages", () => {
-  it("has every section in both", () => {
-    expect(privacyNotice.or.sections).toHaveLength(privacyNotice.en.sections.length);
-  });
-
-  it("keeps the section order aligned so the generated paragraph lands in the right place", () => {
-    // `page.tsx` injects the recorded response window into section 4 by index. If the two languages
-    // drifted out of order that paragraph would appear under the wrong heading.
-    expect(privacyNotice.or.sections.map((s) => s.heading)).toHaveLength(
-      privacyNotice.en.sections.map((s) => s.heading).length,
-    );
+describe("the privacy notice exists in English, and says so where it does not", () => {
+  it("keeps the section order stable so the generated paragraph lands in the right place", () => {
+    // `page.tsx` injects the recorded response window into section 4 by index. If the sections drift
+    // out of order that paragraph appears under the wrong heading.
     expect(privacyNotice.en.sections[4]?.heading).toBe("How long we take");
-    expect(privacyNotice.or.sections[4]?.heading).toContain("ସମୟ");
   });
 
-  it("warns a reader in their own language that this is a draft", () => {
-    expect(privacyNotice.or.draftBannerStrong).toMatch(/[\u0B00-\u0B7F]/);
-    expect(privacyNotice.or.draftBannerStrong).not.toContain("DRAFT");
+  it("warns a reader that this is a draft", () => {
     expect(privacyNotice.en.draftBannerStrong).toContain("DRAFT");
   });
 
-  it("writes real Odia, not transliterated English", () => {
-    for (const section of privacyNotice.or.sections) {
-      for (const paragraph of section.paragraphs) {
-        expect(paragraph.body.length).toBeGreaterThan(40);
-        // At least half the characters must be in the Odia block, or it is English wearing a label.
-        const odia = (paragraph.body.match(/[\u0B00-\u0B7F]/g) ?? []).length;
-        expect(odia / paragraph.body.length).toBeGreaterThan(0.4);
-      }
-    }
+  it("refuses to serve an Odia notice", () => {
+    // Odia was removed on the owner's instruction. `privacyNotice` must not still carry a translation
+    // that no longer has a selector reaching it, and `noticeFor` must not accept the tag.
+    expect((privacyNotice as Record<string, unknown>).or).toBeUndefined();
+    expect(isLocale("or")).toBe(false);
+    const { notice, translated } = noticeFor("or" as never);
+    expect(translated).toBe(false);
+    expect(notice.title).not.toMatch(/[\u0B00-\u0B7F]/);
   });
 
-  it("states the response window in both languages, and never invents a number", () => {
+  it("states the response window, and never invents a number", () => {
     const none = { hours: null, staffedBy: null };
-    expect(responseWindowParagraph("or", none)).toMatch(/[\u0B00-\u0B7F]/);
-    expect(responseWindowParagraph("or", none)).not.toMatch(/\d/);
     expect(responseWindowParagraph("en", none)).toMatch(/none/i);
     expect(responseWindowParagraph("en", none)).not.toMatch(/\d+\s*hour/i);
+    // Hindi and Bengali are offered, so they must state it too rather than fall back.
+    expect(responseWindowParagraph("hi", none)).toMatch(/[\u0900-\u097F]/);
+    expect(responseWindowParagraph("bn", none)).toMatch(/[\u0980-\u09FF]/);
 
     const recorded = { hours: 72, staffedBy: "Privacy desk" };
-    expect(responseWindowParagraph("or", recorded)).toContain("72");
     expect(responseWindowParagraph("en", recorded)).toContain("72 hours");
     expect(responseWindowParagraph("en", recorded)).toContain("Privacy desk");
+    expect(responseWindowParagraph("hi", recorded)).toContain("72");
+    expect(responseWindowParagraph("bn", recorded)).toContain("72");
   });
 
   it("does not name a person as accountable when none was recorded", () => {
     const recorded = { hours: 24, staffedBy: null };
-    expect(responseWindowParagraph("en", recorded)).not.toMatch(/undefined|null/);
-    expect(responseWindowParagraph("or", recorded)).not.toMatch(/undefined|null/);
+    for (const locale of LOCALES) {
+      expect(responseWindowParagraph(locale, recorded)).not.toMatch(/undefined|null/);
+    }
   });
 
   it("says so in the reader's language when it has not been translated", () => {
-    // This used to assert that every offered language had a notice. That is no longer true — Hindi
-    // and Bengali are offered and the notice is not translated into them — so the assertion changes
-    // from "all four exist" to the thing that actually protects a reader: every offered language
-    // either has the notice, or is told it does not and gets English explicitly.
+    // Hindi and Bengali are offered and the notice is not translated into them, so every offered
+    // language must either have the notice, or be told it does not and get English explicitly.
     for (const locale of LOCALES) {
       const { notice, translated } = noticeFor(locale);
       expect(notice.sections.length).toBeGreaterThan(0);
-      expect(translated).toBe(locale === "or" || locale === "en");
+      expect(translated).toBe(locale === "en");
     }
-    // The banner text must exist in every offered language, and must name the language in its own script.
     for (const locale of LOCALES) {
       const banner = t(locale, "language.untranslatedBanner", { language: LOCALE_NAMES[locale] });
       expect(banner).toContain(LOCALE_NAMES[locale]);
@@ -150,12 +145,11 @@ describe("the privacy notice exists in both languages", () => {
 });
 
 describe("the language control has to survive a 320px phone", () => {
-  it("names every language in its own script and offers all four", () => {
-    // Four languages wide enough to overflow the old pill row at 320px, which is why the control is
-    // now one select. What still matters is that each name is in its own script, so a reader can
-    // recognise their own language without having its name translated for them.
-    expect(LOCALES).toEqual(["or", "en", "hi", "bn"]);
-    expect(LOCALE_NAMES.or).toMatch(/[\u0B00-\u0B7F]/); // Odia block
+  it("names every language in its own script and offers exactly three", () => {
+    // Each name is in its own script, so a reader recognises their own language without having its
+    // name translated for them. Odia is deliberately absent.
+    expect(LOCALES).toEqual(["en", "hi", "bn"]);
+    expect(LOCALES).not.toContain("or");
     expect(LOCALE_NAMES.hi).toMatch(/[\u0900-\u097F]/); // Devanagari
     expect(LOCALE_NAMES.bn).toMatch(/[\u0980-\u09FF]/); // Bengali
   });
@@ -164,6 +158,5 @@ describe("the language control has to survive a 320px phone", () => {
     // CSS may hide the spelled-out label visually, but an assistive technology must still hear
     // "English" rather than "EN".
     expect(LOCALE_NAMES.en).toBe("English");
-    expect(LOCALE_NAMES.or).toBe("ଓଡ଼ିଆ");
   });
 });

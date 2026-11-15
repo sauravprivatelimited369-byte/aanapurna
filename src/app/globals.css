@@ -922,3 +922,12 @@ select.form-control { appearance: auto; }
 .closing-aside a { display: inline-block; padding: 4px 0; line-height: 1.5; color: var(--muted, #9a9aa5); text-decoration: underline; text-underline-offset: 3px; }
 .closing-aside a:hover { color: var(--cream, #f5f1e8); }
 .final-cta-panel { flex-wrap: wrap; }
+
+/* Notifications to the device somebody is holding. */
+.push-toggle { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; justify-content: space-between; margin: 0 0 26px; padding: 22px 24px; border: 1px solid #2b2b33; border-radius: 16px; background: #14141a; }
+.push-toggle__text { flex: 1 1 340px; min-width: 0; }
+.push-toggle__text h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.push-toggle__text p { margin: 0; max-width: 62ch; color: #b9b6bd; font-size: 0.92rem; line-height: 1.6; }
+.push-toggle__action { display: flex; align-items: center; }
+.push-toggle__note { display: block; max-width: 34ch; color: #b9b6bd; font-size: 0.88rem; line-height: 1.5; }
+.push-toggle__message { flex-basis: 100%; margin: 0; color: #f2d179; font-size: 0.9rem; }

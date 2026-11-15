@@ -1,5 +1,33 @@
 # Build status
 
+## Odia removed, notifications that reach the device, and the email that never sent — 2026-11-15
+
+- **Odia removed on the owner's instruction.** The switcher offers **English, Hindi and Bengali**; Odia is gone from the locale set, the dictionaries, the privacy notice, the timeline, the date formats and the `<html lang>` mapping. English is now the default — making an unreviewed translation the baseline would hand a first-time reader unreviewed prose as a default rather than as a choice. `isLocale("or")` is asserted false and the privacy notice is asserted to carry no Odia translation, so a stale selector cannot creep back.
+- **Notifications now arrive on the device the person is holding.** Web Push, end to end: `public/sw.js` receives a push and shows a notification even when the site is closed; `src/components/push-toggle.tsx` asks permission and subscribes with the key from the server; `POST/DELETE /api/account/push` register and revoke a device; `src/worker/push-drain.ts` sweeps unpushed notifications every minute. Migration 26 adds `push_subscriptions` (RLS enabled and **forced**, per device, one row each) plus `app_push_targets`, `app_unpushed_notifications`, `app_mark_push_delivered` and `app_revoke_push_subscription`.
+- **Push is driven from the notification rows, not from each call site.** Every notification is written by one of four database functions; wiring push into each would mean a new kind is silently push-less until somebody remembers. The sweep covers all of them, including future ones, and is bounded to the last fifteen minutes so a worker that was down overnight cannot fire stale pushes about food collected yesterday.
+- **The notification email was never sending, and nothing said so.** `enqueueNotificationEmail` stored a site-relative path like `/app/offers`; the drain validates the payload with `new URL(...)`, which rejects a relative path, so every notification email failed as `EMAIL_ACTION_URL_INVALID` on every retry, forever. The queue said `pending`, the drain said `failed`, and the log deliberately hid the reason. Found by running the drain against a real SMTP sink and reading what landed in the mailbox, not by reading the code.
+- **Verified in this sandbox against real infrastructure:**
+  - **26 migrations from scratch** and the full domain suite end to end.
+  - **A real encrypted push delivered**: VAPID-signed, `aes128gcm`, `TTL 3600`, accepted by an HTTPS endpoint, through the shipping `sendPushToUser` with a real row in `push_subscriptions`.
+  - **A dead device revoked rather than retried**: a 410 from the push service set `revoked_at` and `last_error = push_service_410`.
+  - **A real notification email delivered**: queued through the shipping `enqueueNotificationEmail`, drained by the shipping `drainEmailOutboxOnce` against an SMTP sink — status `sent`, message in the mailbox, link `http://localhost:3000/app/offers`.
+  - **A session cannot read another person's device**: `app_push_targets('other-user')` refused for a signed-in caller and allowed for the identity-less worker.
+  - `tsc --noEmit` clean, `eslint .` clean, **350 tests / 33 files**, `next build` green.
+
+### Two bugs this caught that would each have shipped dead
+
+**`web-push` has no ESM default export.** `webpush.default.setVapidDetails(...)` compiled, typechecked and would have thrown `Cannot read properties of undefined` on every single push. Fixed, and the guard now returns early rather than throwing.
+
+**`app_push_targets` was granted to the worker only.** The web process sends pushes too, so every push from the application failed with `permission denied for function app_push_targets`. Granting it to the app role then opened a hole — any session could read anyone's endpoint and keys by passing their id — so the function now authorises per caller: a session may ask only about itself, the identity-less worker may ask about anybody.
+
+### Open
+
+- **No native Hindi or Bengali speaker has reviewed any translated text.** Odia's removal does not change this; it narrows the surface but the two remaining translations are still unreviewed drafts and the DRAFT banners stay.
+- **Push requires keys that are not configured anywhere yet.** `WEB_PUSH_PUBLIC_KEY` / `WEB_PUSH_PRIVATE_KEY` / `WEB_PUSH_SUBJECT` are documented in `.env.example`; until they are set, push is off and the interface says so rather than showing a button that cannot work. Generating them is an owner action.
+- **No browser here could complete a real end-to-end push.** The delivery path is proven with a real signed request to a real HTTPS endpoint; the service worker, permission prompt and click handler were not exercised in a browser because no browser is installable in this sandbox. They are standard APIs, but "standard" is not "observed".
+- **The email drain still needs SMTP credentials in production**, and the link resolution requires `APP_URL` to be set — without it the message is skipped rather than queued undeliverable.
+- Every human launch approval remains outstanding.
+
 ## Distance matching, notification email, four languages and a shorter home page — 2026-11-15
 
 Four requests from the owner, on `arena/5f99cb20-aanapurna` (PR #13). All CI green at `09f0869`:

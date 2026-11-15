@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * Remember which language somebody reads.
  *
  * A cookie rather than a field on the account, deliberately: a person should be able to read the
- * privacy notice in Odia before signing in, and a language preference is not worth an account.
+ * privacy notice in Hindi before signing in, and a language preference is not worth an account.
  */
 export async function POST(request: Request) {
   enforceRateLimit({ bucket: "locale", subject: getRequestAddressKey(request), max: 60, windowSeconds: 3600 });

@@ -3,7 +3,7 @@ import { ArrowUpRight, Menu, ShieldCheck, X } from "lucide-react";
 import { BrandMark } from "@/components/brand";
 import { LocaleSwitcher } from "@/components/locale-switcher";
 import { currentLocale } from "@/lib/locale-server";
-import { translator, type Locale, type MessageKey } from "@/lib/i18n";
+import { htmlLang, translator, type Locale, type MessageKey } from "@/lib/i18n";
 
 const primaryLinks: { href: string; key: MessageKey }[] = [
   { href: "/", key: "nav.home" },
@@ -22,7 +22,7 @@ function NavigationLinks({ active, mobile = false, locale }: { active?: string; 
       key={link.href}
       className={`${mobile ? "mobile-nav-link" : "nav-link"}${active === link.href ? " is-active" : ""}`}
       href={link.href}
-      lang={locale === "or" ? "or-IN" : `${locale}-IN`}
+      lang={htmlLang(locale)}
       aria-current={active === link.href ? "page" : undefined}
     >{t(link.key)}</Link>)}
   </>;
