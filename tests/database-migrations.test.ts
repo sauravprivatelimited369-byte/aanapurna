@@ -1441,3 +1441,37 @@ describe("privacy subject rights", () => {
     expect(account.rows[0]?.email).toContain("@invalid");
   });
 });
+
+/**
+ * `app_launch_readiness()` returns a *table*, so selecting it as if it were a scalar yields a
+ * Postgres record rather than an object. The driver hands a record back with numeric keys, so the
+ * public health endpoint silently reported `{"0": true, "1": false, ...}` and every named
+ * requirement vanished — including, later, `subject_rights` and `grievance_window`.
+ *
+ * This is the shape the caller depends on. Both forms are asserted so the difference is recorded
+ * rather than rediscovered: the composite has numeric keys, and `to_jsonb` has the column names.
+ */
+describe("launch readiness has to be read as a table", () => {
+  it("returns one row with the column names as keys", async () => {
+    const { rows } = await database.query<{ readiness: Record<string, unknown> }>(
+      "select to_jsonb(app_launch_readiness()) as readiness",
+    );
+    const readiness = rows[0]!.readiness;
+    expect(Object.keys(readiness).sort()).toEqual([
+      "data_protection_contact", "grievance_window", "insurance", "legal_entity",
+      "on_call", "partner_agreement", "partner_insurance", "penetration_test", "subject_rights",
+    ]);
+    for (const value of Object.values(readiness)) expect(typeof value).toBe("boolean");
+  });
+
+  it("does not yield an object when selected as a scalar", async () => {
+    // Documents the trap. If a future Postgres changed this to an object this assertion would fail
+    // and the comment above would be wrong, which is worth knowing.
+    const { rows } = await database.query<{ readiness: Record<string, unknown> }>(
+      "select app_launch_readiness() as readiness",
+    );
+    const keys = Object.keys(rows[0]!.readiness);
+    expect(keys).not.toContain("legal_entity");
+    expect(keys.every((key) => /^\d+$/.test(key))).toBe(true);
+  });
+});

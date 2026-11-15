@@ -26,8 +26,12 @@ async function readWorkerHealth(): Promise<WorkerHealth> {
  */
 async function readDeclaredReadiness(): Promise<Record<string, boolean> | null> {
   try {
+    // `app_launch_readiness()` returns a table, so it must be expanded. Writing
+    // `select app_launch_readiness() as readiness` yields a Postgres *record*, which the driver hands
+    // back with numeric keys — the endpoint then reports `{"0": true, "1": false}` and every named
+    // requirement disappears. `to_jsonb` gives one object with the column names as keys.
     const { rows } = await pool.query<{ readiness: Record<string, boolean> }>(
-      "select app_launch_readiness() as readiness",
+      "select to_jsonb(app_launch_readiness()) as readiness",
     );
     return rows[0]?.readiness ?? null;
   } catch {
