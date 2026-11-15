@@ -914,3 +914,9 @@ select.form-control { appearance: auto; }
 .transit-map__note { margin: 0.5rem 0 0; font-size: 0.78rem; color: var(--muted, rgba(255,255,255,0.62)); line-height: 1.45; }
 .transit-map--unknown { border: 1px dashed var(--line, rgba(255,255,255,0.18)); border-radius: 10px; padding: 0.85rem; }
 .data-row--map { display: block; }
+
+/* A quiet in-body link to the impact page, now that its panel lives on its own page. */
+.closing-aside { flex-basis: 100%; margin: 0; font-size: 0.9rem; }
+.closing-aside a { color: var(--muted, #9a9aa5); text-decoration: underline; text-underline-offset: 3px; }
+.closing-aside a:hover { color: var(--cream, #f5f1e8); }
+.final-cta-panel { flex-wrap: wrap; }

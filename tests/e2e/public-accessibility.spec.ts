@@ -32,6 +32,7 @@ const routes = [
   "/contact",
   "/food-safety",
   "/how-it-works",
+  "/impact",
   "/near-iim-calcutta",
   "/privacy",
   "/terms",

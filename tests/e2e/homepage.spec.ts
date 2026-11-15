@@ -18,11 +18,10 @@ async function fulfill(route: Route, body: unknown, status = 200): Promise<void>
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-test("homepage labels verified impact and gives an honest empty state", async ({ page }) => {
+test("the impact page labels verified figures and gives an honest empty state", async ({ page }) => {
   await page.route(endpoint, (route) => fulfill(route, emptyImpact));
-  await page.goto("/");
+  await page.goto("/impact");
 
-  await expect(page.getByRole("heading", { name: /good food deserves a destination/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: /impact that can be accounted for/i })).toBeVisible();
   await expect(page.getByText("No verified impact figures yet.")).toBeVisible();
   await expect(page.locator(".impact-card")).toHaveCount(0);
@@ -34,7 +33,7 @@ test("local database returns its real empty impact state without a browser mock"
   const response = await page.request.get("/api/public/impact");
   expect(response.status()).toBe(200);
   expect(await response.json()).toEqual(emptyImpact);
-  await page.goto("/");
+  await page.goto("/impact");
   await expect(page.getByText("No verified impact figures yet.")).toBeVisible();
 });
 
@@ -50,7 +49,7 @@ test("impact failure is clear and can be retried", async ({ page }) => {
     await fulfill(route, emptyImpact);
   });
 
-  await page.goto("/");
+  await page.goto("/impact");
   await expect(page.getByText("Verified figures are temporarily unavailable.")).toBeVisible();
   allowSuccess = true;
   await page.getByRole("button", { name: "Retry figures" }).click();
@@ -59,14 +58,30 @@ test("impact failure is clear and can be retried", async ({ page }) => {
   expect(requests).toBeGreaterThanOrEqual(2);
 });
 
-test("homepage meets automated WCAG A/AA checks with verified figures unavailable", async ({ page }) => {
+test("the impact page meets automated WCAG A/AA checks with verified figures unavailable", async ({ page }) => {
   await page.route(endpoint, (route) => fulfill(route, emptyImpact));
-  await page.goto("/");
+  await page.goto("/impact");
   await expect(page.getByText("No verified impact figures yet.")).toBeVisible();
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
     .analyze();
   expect(results.violations, JSON.stringify(results.violations.map(({ id, impact, nodes }) => ({ id, impact, targets: nodes.map((node) => node.target) })), null, 2)).toEqual([]);
+});
+
+test("the shortened homepage links to impact instead of embedding it", async ({ page }) => {
+  await page.route(endpoint, (route) => fulfill(route, emptyImpact));
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: /good food deserves a destination/i })).toBeVisible();
+  // The panel moved to its own page on the owner's request: three sections, not seven.
+  await expect(page.getByRole("heading", { name: /impact that can be accounted for/i })).toHaveCount(0);
+  await expect(page.getByText("No verified impact figures yet.")).toHaveCount(0);
+  // Nothing was dropped, only relocated, so the way there has to exist.
+  const link = page.getByRole("link", { name: /impact/i }).first();
+  await expect(link).toBeVisible();
+  await link.click();
+  await page.waitForURL("**/impact");
+  await expect(page.getByRole("heading", { name: /impact that can be accounted for/i })).toBeVisible();
 });
 
 test("role-specific signup links preserve the selected request without granting approval", async ({ page }) => {

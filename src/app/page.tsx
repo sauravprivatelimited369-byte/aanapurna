@@ -131,6 +131,12 @@ export default async function HomePage() {
               <Link className="button button--secondary" href="/how-it-works">{t("nav.howItWorks")}</Link>
               <Link className="button button--secondary" href="/contact">{t("home.contactSupport")}</Link>
             </div>
+            {/* The impact panel used to sit at the foot of this page. It has its own page now, so the
+                way to it lives here rather than in the closing buttons: it is something to read, not a
+                third call to action competing with the two that matter. */}
+            <p className="closing-aside">
+              <Link href="/impact">{t("nav.impact")}</Link>
+            </p>
           </div>
         </div>
       </section>
