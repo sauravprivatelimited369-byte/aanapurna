@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { RequestTimeline } from "@/components/request-timeline";
+import type { Locale } from "@/lib/i18n";
 
 type Membership = { organizationId: string; organizationName: string };
 type SupportCase = { id: string; reference: string; subject: string; description: string; status: string; createdAt: string; updatedAt: string };
@@ -30,7 +32,7 @@ type ResponseWindow = {
   coverageHours: number;
 };
 
-export function SupportPanel({ memberships, responseWindow }: { memberships: Membership[]; responseWindow: ResponseWindow }) {
+export function SupportPanel({ memberships, responseWindow, locale }: { memberships: Membership[]; responseWindow: ResponseWindow; locale: Locale }) {
   const [cases, setCases] = useState<SupportCase[]>([]);
   const [requests, setRequests] = useState<DataRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,7 +146,7 @@ export function SupportPanel({ memberships, responseWindow }: { memberships: Mem
 
     <section className="app-card app-card--span-6">
       <div className="app-card-title"><div><h2>Your privacy requests</h2><p>Track status and the recorded reviewer response.</p></div></div>
-      {loading ? <div className="skeleton" style={{ height: 80 }} aria-busy="true" role="status" aria-label="Loading privacy requests" /> : requestsError ? <div className="empty-state"><div><strong>Privacy requests are unavailable</strong><p>{requestsError}</p><button className="app-card-link" type="button" disabled={refreshing} aria-busy={refreshing} onClick={() => void refreshLists()}>{refreshing ? "Refreshing lists…" : "Retry request lists"}</button></div></div> : requests.length ? <div className="data-list">{requests.map((item) => <article className="data-row data-row--stack" key={item.id}><span className="data-main"><strong>{item.requestType.replaceAll("_", " ")}</strong><small>Submitted {formatDate(item.createdAt)}{item.description ? ` · ${item.description}` : ""}</small>{item.resolution && <small className="request-resolution">Reviewer update: {item.resolution}</small>}</span><span className={`status-pill status-pill--${item.status}`}>{item.status.replaceAll("_", " ")}</span></article>)}</div> : <div className="empty-state"><div><strong>No privacy requests</strong><p>Requests you submit will appear here until a reviewer records an outcome.</p></div></div>}
+      {loading ? <div className="skeleton" style={{ height: 80 }} aria-busy="true" role="status" aria-label="Loading privacy requests" /> : requestsError ? <div className="empty-state"><div><strong>Privacy requests are unavailable</strong><p>{requestsError}</p><button className="app-card-link" type="button" disabled={refreshing} aria-busy={refreshing} onClick={() => void refreshLists()}>{refreshing ? "Refreshing lists…" : "Retry request lists"}</button></div></div> : requests.length ? <div className="data-list">{requests.map((item) => <article className="data-row data-row--stack" key={item.id}><span className="data-main"><strong>{item.requestType.replaceAll("_", " ")}</strong><small>Submitted {formatDate(item.createdAt)}{item.description ? ` · ${item.description}` : ""}</small><RequestTimeline requestId={item.id} locale={locale} /></span><span className={`status-pill status-pill--${item.status}`}>{item.status.replaceAll("_", " ")}</span></article>)}</div> : <div className="empty-state"><div><strong>No privacy requests</strong><p>Requests you submit will appear here until a reviewer records an outcome.</p></div></div>}
     </section>
   </div>;
 }

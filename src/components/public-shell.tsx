@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { ArrowUpRight, Menu, ShieldCheck, X } from "lucide-react";
 import { BrandMark } from "@/components/brand";
+import { LocaleSwitcher } from "@/components/locale-switcher";
+import { currentLocale } from "@/lib/locale-server";
 
 const primaryLinks = [
   { href: "/", label: "Home" },
@@ -23,7 +25,8 @@ function NavigationLinks({ active, mobile = false }: { active?: string; mobile?:
   </>;
 }
 
-export function PublicHeader({ active }: { active?: string }) {
+export async function PublicHeader({ active }: { active?: string }) {
+  const locale = await currentLocale();
   return (
     <>
       <a className="skip-link" href="#main-content">Skip to main content</a>
@@ -34,6 +37,7 @@ export function PublicHeader({ active }: { active?: string }) {
             <NavigationLinks active={active} />
           </nav>
           <div className="header-actions">
+            <LocaleSwitcher current={locale} />
             <Link href="/preview" className="nav-login">Preview</Link>
             <Link href="/login" className="nav-login">Log in</Link>
             <Link href="/signup" className="button button--small button--primary header-join">

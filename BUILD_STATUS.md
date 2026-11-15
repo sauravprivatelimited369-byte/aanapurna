@@ -325,3 +325,18 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   remains incomplete on every deployment. The difference is that each one is now a named, dated,
   alerted record rather than a paragraph. See the status column in
   [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).
+
+## Language and request visibility (2026-11-15)
+
+- **Done:** a privacy request now shows where it has got to, read from `audit_events` rather than
+  inferred from the status column: what happened, when, how long it has waited, and what happens next.
+  A stage appears only if it occurred. See [`ACCESSIBILITY_LANGUAGE.md`](ACCESSIBILITY_LANGUAGE.md).
+- **Done:** `/privacy`, the response-window statement and the request timeline are published in Odia
+  **and** English, with Odia as the default, a server-rendered `<html lang>`, and a switcher that is
+  remembered in a cookie so it works before signing in.
+- **Still open:** `/answers`, `/terms`, `/food-safety`, `/how-it-works`, the request forms, and every
+  transactional email remain English only. The rights-bearing pages are translated; the surrounding
+  pages are not, and the boundary is stated in the document rather than left to be discovered.
+- **Still open:** no native Odia speaker has reviewed the text. Vocabulary follows published
+  dictionaries, but fluency is not something a dictionary check establishes. Both notices carry the
+  DRAFT banner in their own language until a fluent reviewer signs off.

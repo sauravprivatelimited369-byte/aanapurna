@@ -76,6 +76,7 @@ import {
   type accountRecoveryResolutionSchema,
 } from "@/domain/validation";
 import { z } from "zod";
+import { buildRequestProgress, type RequestProgress } from "@/domain/request-progress";
 
 type OnboardingInput = z.infer<typeof onboardingSchema>;
 type DonationInput = z.infer<typeof donationCreateSchema>;
@@ -2714,6 +2715,87 @@ export async function listDataRequests(identity: Identity) {
     .leftJoin(userProfiles, eq(userProfiles.userId, dataRequests.userId))
     .where(staff ? undefined : eq(dataRequests.userId, identity.id))
     .orderBy(desc(dataRequests.createdAt)).limit(staff ? 100 : 30));
+}
+
+/**
+ * One request, explained: where it is, how long it has waited, and what happens next.
+ *
+ * Reads `audit_events` for this specific request rather than inferring history from the current
+ * status, because the status only says where it ended up. A person who asks "what is happening with
+ * my request" deserves the sequence, not a label.
+ *
+ * A person can always read their own. Staff can read any, because they are the ones who have to
+ * answer for the queue.
+ */
+export async function getRequestProgress(identity: Identity, requestId: string): Promise<RequestProgress & { id: string }> {
+  const staff = hasAnyRole(identity, ["operations_admin", "security_admin", "support_agent"]);
+  return withUserContext(identity.id, async (tx) => {
+    const [request] = await tx.select({
+      id: dataRequests.id,
+      userId: dataRequests.userId,
+      requestType: dataRequests.requestType,
+      status: dataRequests.status,
+      resolution: dataRequests.resolution,
+      completedAt: dataRequests.completedAt,
+      redactedAt: dataRequests.redactedAt,
+      createdAt: dataRequests.createdAt,
+    }).from(dataRequests).where(eq(dataRequests.id, requestId)).limit(1);
+
+    // A missing request and somebody else's request return the same thing, so this endpoint cannot be
+    // used to discover which ids exist.
+    if (!request || (!staff && request.userId !== identity.id)) {
+      throw new HttpError(404, "That request does not exist.", "DATA_REQUEST_NOT_FOUND");
+    }
+
+    const audit = await tx.select({
+      action: auditEvents.action,
+      createdAt: auditEvents.createdAt,
+      details: auditEvents.details,
+    }).from(auditEvents)
+      .where(and(eq(auditEvents.entityType, "data_request"), eq(auditEvents.entityId, requestId)))
+      .orderBy(auditEvents.createdAt);
+
+    // The erasure event is filed against the person, not the request, because the redaction touches
+    // every row about them. Reading redacted_at off the request covers it without widening the query.
+    const window = await tx.execute<{ hours: number | null }>(
+      sql`select public.app_privacy_response_window_hours() as hours`,
+    );
+
+    // How many open requests were submitted before this one, across the whole queue. Deliberately
+    // *not* filtered to this person: "three requests are ahead of yours" is only meaningful if it
+    // counts everybody's. A decided request is not waiting, so it is not counted.
+    //
+    // Wrapped because it is the one number here that is a nicety rather than a right. If the queue
+    // read fails the person still gets their own timeline; they are not shown an invented zero.
+    let aheadInQueue: number | null = null;
+    try {
+      const ahead = await tx.execute<{ ahead: number }>(sql`
+        select count(*)::integer as ahead
+        from public.data_requests d
+        where d.status in ('submitted','in_review','awaiting_user')
+          and d.created_at < ${request.createdAt}
+      `);
+      aheadInQueue = ahead.rows[0]?.ahead ?? null;
+    } catch {
+      aheadInQueue = null;
+    }
+
+    return {
+      id: request.id,
+      ...buildRequestProgress({
+        requestType: request.requestType,
+        status: request.status,
+        createdAt: new Date(request.createdAt).toISOString(),
+        resolution: request.resolution,
+        completedAt: request.completedAt ? new Date(request.completedAt).toISOString() : null,
+        redactedAt: request.redactedAt ? new Date(request.redactedAt).toISOString() : null,
+        audit,
+        windowHours: window.rows[0]?.hours ?? null,
+        aheadInQueue,
+        now: new Date(),
+      }),
+    };
+  });
 }
 
 export async function updateDataRequest(identity: Identity, requestId: string, input: DataRequestUpdate) {

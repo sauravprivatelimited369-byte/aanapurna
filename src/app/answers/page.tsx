@@ -157,7 +157,7 @@ const ANSWERS: readonly Answer[] = [
   },
 ];
 
-export default function AnswersPage() {
+export default async function AnswersPage() {
   return (
     <PublicLayout active="/answers">
       <section className="page-hero"><div className="container">

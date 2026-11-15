@@ -80,7 +80,7 @@ const commitments = [
   },
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
   return (
     <PublicLayout active="/">
       <section className="hero hero--home">

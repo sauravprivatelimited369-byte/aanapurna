@@ -3,7 +3,7 @@ import { PublicLayout } from "@/components/public-shell";
 
 export const metadata: Metadata = { title: "How it works" };
 
-export default function HowItWorksPage() {
+export default async function HowItWorksPage() {
   return (
     <PublicLayout active="/how-it-works">
       <section className="page-hero"><div className="container">

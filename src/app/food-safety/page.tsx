@@ -3,7 +3,7 @@ import { PublicLayout } from "@/components/public-shell";
 
 export const metadata: Metadata = { title: "Food safety" };
 
-export default function FoodSafetyPage() {
+export default async function FoodSafetyPage() {
   return (
     <PublicLayout active="/food-safety">
       <section className="page-hero"><div className="container">

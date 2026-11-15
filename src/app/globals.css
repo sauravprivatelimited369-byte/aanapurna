@@ -834,3 +834,29 @@ select.form-control { appearance: auto; }
 .agreement-body p { margin: 0; font-size: 12.5px; line-height: 1.68; color: var(--ink-soft); }
 .checkbox-row { display: flex; gap: 9px; align-items: flex-start; margin-top: 14px; font-size: 12.5px; line-height: 1.6; color: var(--ink-soft); cursor: pointer; }
 .checkbox-row input { margin-top: .22em; flex: none; }
+
+/* ---- Language switcher ---------------------------------------------------
+   Two languages, both named in their own script. Kept visually quiet: a person
+   looking for their language should find it without it competing with "Log in". */
+.locale-switcher { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line, rgba(255,255,255,0.14)); border-radius: 999px; }
+.locale-switcher__choice { appearance: none; border: 0; background: transparent; color: var(--muted, rgba(255,255,255,0.62)); font: inherit; font-size: 0.78rem; line-height: 1; padding: 0.34rem 0.6rem; border-radius: 999px; cursor: pointer; transition: color 120ms ease, background 120ms ease; }
+.locale-switcher__choice:hover { color: var(--fg, #fff); }
+.locale-switcher__choice.is-active { background: var(--surface-2, rgba(255,255,255,0.1)); color: var(--fg, #fff); }
+.locale-switcher__choice:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
+.locale-switcher__choice:disabled { opacity: 0.6; cursor: progress; }
+
+/* ---- Request timeline ----------------------------------------------------
+   Reads as a sequence, not a dashboard. The rule down the left is what makes
+   it a timeline rather than a list of unrelated rows. */
+.request-timeline { display: block; margin-top: 0.4rem; }
+.request-timeline__body { margin-top: 0.6rem; padding-left: 0.85rem; border-left: 2px solid var(--line, rgba(255,255,255,0.14)); display: grid; gap: 0.65rem; }
+.request-timeline__facts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; font-size: 0.82rem; }
+.request-timeline__stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.request-timeline__stage { position: relative; }
+/* The dot sits on the rule. It marks a moment that actually happened. */
+.request-timeline__stage::before { content: ""; position: absolute; left: -1.12rem; top: 0.85rem; width: 7px; height: 7px; border-radius: 50%; background: var(--line, rgba(255,255,255,0.28)); }
+.request-timeline__stage.is-current::before { background: var(--accent, #7dd3fc); box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.16); }
+@media (prefers-reduced-motion: no-preference) {
+  .request-timeline__body { animation: request-timeline-open 160ms ease-out; }
+}
+@keyframes request-timeline-open { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
