@@ -12,6 +12,7 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
  */
 
 export const GITHUB_JWKS_URL = "https://token.actions.githubusercontent.com/.well-known/jwks";
+export const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 
 export type GithubJwk = { kid: string; kty: string; n: string; e: string; alg?: string; use?: string };
 
@@ -32,6 +33,10 @@ export type GithubOidcExpectations = {
   repository: string;
   /** Allowed git refs, for example `["refs/heads/main"]`. */
   refs: string[];
+  /** Exact trusted workflow_ref; prevents another workflow on main using this audience. */
+  workflowRef: string;
+  /** Allowed GitHub event names, such as schedule and workflow_dispatch. */
+  eventNames: string[];
   /** The audience requested by the workflow. */
   audience: string;
   /** Injected for tests. */
@@ -44,7 +49,7 @@ export type GithubOidcExpectations = {
 
 export type GithubOidcResult =
   | { ok: true; claims: GithubOidcClaims }
-  | { ok: false; reason: "malformed" | "unknown-key" | "bad-signature" | "expired" | "not-yet-valid" | "wrong-audience" | "wrong-repository" | "wrong-ref" };
+  | { ok: false; reason: "malformed" | "unknown-key" | "bad-signature" | "expired" | "not-yet-valid" | "wrong-issuer" | "wrong-audience" | "wrong-repository" | "wrong-ref" | "wrong-workflow" | "wrong-event" };
 
 function decodeSegment(segment: string): Record<string, unknown> | null {
   try {
@@ -100,9 +105,14 @@ export function verifyGithubOidcToken(token: string, expectations: GithubOidcExp
   if (typeof claims.exp !== "number") return { ok: false, reason: "malformed" };
   if (now - skew > claims.exp) return { ok: false, reason: "expired" };
   if (typeof claims.nbf === "number" && now + skew < claims.nbf) return { ok: false, reason: "not-yet-valid" };
+  if (claims.iss !== GITHUB_OIDC_ISSUER) return { ok: false, reason: "wrong-issuer" };
   if (!audienceMatches(claims.aud, expectations.audience)) return { ok: false, reason: "wrong-audience" };
   if (claims.repository !== expectations.repository) return { ok: false, reason: "wrong-repository" };
   if (typeof claims.ref !== "string" || !expectations.refs.includes(claims.ref)) return { ok: false, reason: "wrong-ref" };
+  if (claims.workflow_ref !== expectations.workflowRef) return { ok: false, reason: "wrong-workflow" };
+  if (typeof claims.event_name !== "string" || !expectations.eventNames.includes(claims.event_name)) {
+    return { ok: false, reason: "wrong-event" };
+  }
 
   return { ok: true, claims };
 }

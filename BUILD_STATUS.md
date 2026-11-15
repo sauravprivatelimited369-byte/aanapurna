@@ -1,5 +1,13 @@
 # Build status
 
+## Live production re-audit — 2026-11-15 UTC
+
+**Current state: NOT READY for a real pilot.** The canonical production `/api/health` was read during this turn: database `ok` (1,345 ms at that observation); email `test_sink` (capture only, not delivery to a user inbox); worker heartbeat `never_seen`; scheduled-drain heartbeat `never_seen`; push keys configured (not proof of a real device delivery); `OPERATIONS_ENABLED=false`; launch readiness incomplete. Supabase reports the hosted project database, Auth service and Storage healthy. Vercel reports the deployment for current `main` commit `976b19c` ready. Current GitHub Actions history shows CI success, but scheduled worker-drain executions have occurred hours apart rather than at the nominal five-minute cron.
+
+**Code defect fixed in this branch:** `.github/workflows/worker-drain.yml` called `aanapurna-link-preview.vercel.app`, while the production URL is `annapurna-link.vercel.app`. That could drain a preview environment instead of the live production environment, consistent with the live production health endpoint still reporting no scheduled drain. The drain endpoint's GitHub OIDC trust was also broader than necessary: it accepted an obsolete branch ref and did not require the exact worker workflow or scheduler/manual-dispatch event. The branch now targets the canonical production host and verifies repository, main ref, exact workflow, audience and event. These changes are **not live until reviewed, merged and deployed**.
+
+**Verification in this branch:** `npm ci` (0 reported vulnerabilities), TypeScript, ESLint, full Vitest suite (479/479), focused worker route/OIDC tests, and a production build with synthetic-only environment values passed. A build without required production environment values correctly failed closed at route collection. No production email, real user account, scheduled trigger or device notification was tested in this turn. SMTP capture remains a hard blocker for production account activation. See [`PRODUCTION_READINESS_REPORT.md`](PRODUCTION_READINESS_REPORT.md) for the evidence ledger.
+
 ## Device notifications and sign-up email on the hosted site, which has no worker — 2026-11-15
 
 The owner's request: "Fix it to real website." Device notifications (the section below) were merged and did not work on `annapurna-link.vercel.app`: nobody could turn them on, and nothing would have sent one. On `arena/62186364-aanapurna`. **This section supersedes the description of push delivery in the one below it**: `sendPushToUser`, "sweeps unpushed notifications every minute" and `app_push_targets` as something the web process calls no longer describe the code.

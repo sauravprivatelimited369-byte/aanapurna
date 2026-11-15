@@ -3,7 +3,9 @@ import { createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 import { verifyGithubOidcToken, type GithubJwk, type GithubOidcClaims } from "@/worker/github-oidc";
 
 const REPOSITORY = "sauravprivatelimited369-byte/aanapurna";
-const REFS = ["refs/heads/main", "refs/heads/arena/5b937561-aanapurna"];
+const REFS = ["refs/heads/main"];
+const WORKFLOW_REF = `${REPOSITORY}/.github/workflows/worker-drain.yml@refs/heads/main`;
+const EVENT_NAMES = ["schedule", "workflow_dispatch"];
 const AUDIENCE = "annapurna-link-worker";
 const KID = "test-key-1";
 
@@ -25,14 +27,22 @@ function claims(overrides: Partial<GithubOidcClaims> = {}): GithubOidcClaims {
     nbf: 1_700_000_000,
     repository: REPOSITORY,
     ref: "refs/heads/main",
-    workflow_ref: `${REPOSITORY}/.github/workflows/worker-drain.yml@refs/heads/main`,
+    workflow_ref: WORKFLOW_REF,
     event_name: "workflow_dispatch",
     ...overrides,
   };
 }
 
 function verify(token: string, now = 1_900_000_000) {
-  return verifyGithubOidcToken(token, { repository: REPOSITORY, refs: REFS, audience: AUDIENCE, keys, now });
+  return verifyGithubOidcToken(token, {
+    repository: REPOSITORY,
+    refs: REFS,
+    workflowRef: WORKFLOW_REF,
+    eventNames: EVENT_NAMES,
+    audience: AUDIENCE,
+    keys,
+    now,
+  });
 }
 
 beforeAll(() => {
@@ -49,8 +59,19 @@ describe("GitHub Actions OIDC verification", () => {
     if (result.ok) expect(result.claims.repository).toBe(REPOSITORY);
   });
 
-  it("accepts the working branch ref as well as main", () => {
-    expect(verify(sign(claims({ ref: "refs/heads/arena/5b937561-aanapurna" }))).ok).toBe(true);
+  it("rejects a non-main ref even when the workflow is otherwise valid", () => {
+    expect(verify(sign(claims({ ref: "refs/heads/feature" })))).toEqual({ ok: false, reason: "wrong-ref" });
+  });
+
+  it("rejects another workflow on main", () => {
+    expect(verify(sign(claims({ workflow_ref: `${REPOSITORY}/.github/workflows/ci.yml@refs/heads/main` })))).toEqual({
+      ok: false,
+      reason: "wrong-workflow",
+    });
+  });
+
+  it("rejects pull request and other non-scheduler event tokens", () => {
+    expect(verify(sign(claims({ event_name: "pull_request" })))).toEqual({ ok: false, reason: "wrong-event" });
   });
 
   it("rejects a token signed by a key it does not know", () => {
@@ -69,6 +90,10 @@ describe("GitHub Actions OIDC verification", () => {
 
   it("rejects an expired token", () => {
     expect(verify(sign(claims({ exp: 1_800_000_000 })))).toEqual({ ok: false, reason: "expired" });
+  });
+
+  it("rejects a token with the wrong issuer", () => {
+    expect(verify(sign(claims({ iss: "https://attacker.example" })))).toEqual({ ok: false, reason: "wrong-issuer" });
   });
 
   it("rejects a token minted for another audience", () => {

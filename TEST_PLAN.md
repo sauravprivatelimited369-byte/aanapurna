@@ -64,19 +64,24 @@ alive after its response. The last was observed once in production on 2026-11-15
 three seconds after the request that queued it; `HOSTED_DEPLOYMENT.md`, "Evidence and limits") and
 is reported continuously by `/api/health` under `delivery`.
 
-## Status board
+## Status board — re-run 2026-11-15 UTC on the active improvement branch
 
-| Suite | Local result | Evidence |
+| Suite | Local result | Evidence / limits |
 |---|---|---|
+| `npm ci` | PASS | 496 packages installed; npm reported 0 vulnerabilities at install time |
 | `npm run typecheck` | PASS | clean |
 | `npm run lint` | PASS | clean |
-| `npm test` | PASS | 168 / 168 |
-| `npm run build` | PASS | 44 routes, `/preview` static |
-| Playwright | NOT RUN here | Browser download blocked in this sandbox; the same suite ran green in CI |
-| `npm run test:local-domain` | NOT RUN here | Needs a real PostgreSQL; available in CI |
-| `npm run test:hosted-shape` | PASS (2026-11-15) | 37 expectations, on PostgreSQL 16.15 and 17.11; also CI job `hosted-shape` |
-| `scripts/hosted-smoke.mjs` | NOT RUN after the latest deploy | Last recorded run: 9/9 |
-| Restore drill | NOT RUN | Script exists, no successful restore observed |
+| `npm test -- --reporter=dot` | PASS | 479 / 479 tests, 41 files |
+| `npm run build` without production env | EXPECTED FAIL | Fails closed during route collection because `DATABASE_URL` is required in production; no real env was available |
+| `npm run build` with synthetic production-shaped env | PASS | Optimized build generated all routes; fake `example.test` database URLs and synthetic keys only; no live DB was contacted |
+| `npm audit --audit-level=moderate` and production-only audit | PASS | 0 reported vulnerabilities |
+| Playwright | NOT RUN here | No live authenticated browser flow in this audit; historical CI evidence is not a substitute for this deployment's account flow |
+| `npm run test:local-domain` | NOT RUN here | Requires a separately provisioned disposable PostgreSQL service |
+| `npm run test:hosted-shape` | NOT RUN in this turn | Previous CI result is historical; not re-executed on this working branch |
+| `scripts/hosted-smoke.mjs` | NOT RUN | No controlled test identity/inbox authorized; no account created |
+| Production email | BLOCKED | Live health reports `test_sink`, not real inbox delivery |
+| Production worker/scheduler | NOT READY | Live health reports worker and scheduled drain `never_seen`; the branch fixes the scheduled workflow target but is not deployed |
+| Real device push / restore drill | NOT TESTED | Configuration and scripts exist; no physical-device test or successful recovery was observed |
 
 ## What this plan cannot prove
 

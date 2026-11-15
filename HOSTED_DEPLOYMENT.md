@@ -9,10 +9,9 @@
 | Project / team | `prj_ioMsFVvCdLPvelL6gURUChyoiboJ` · `team_mAUU3kiruUaeDwNSjViG0cQK` (writer nation) |
 | Database | Supabase `wlpibnftabirwtziwubv`, PostgreSQL only (Supabase Auth unused) |
 
-**Status: provisioned preview, not production-ready.** This document records what
-the authorized Supabase and Vercel connectors actually created, what remains
-owner-only, and the evidence gathered. No secret value is printed here or
-committed to Git.
+**Status: live web deployment on production alias, not production-ready for food operations.** This document includes historical provisioning notes; those notes must not be read as current database state. The live `/api/health` endpoint was checked on 2026-11-15 UTC: PostgreSQL responded and the launch-readiness function reported the current owner gates. Supabase separately reports its PostgreSQL, Auth and Storage services healthy. The live email configuration is a test capture sink, worker heartbeat and scheduled-drain heartbeat have never been observed in the production database, and `OPERATIONS_ENABLED` is false. The current production audit is in [`PRODUCTION_READINESS_REPORT.md`](PRODUCTION_READINESS_REPORT.md). No secret value is printed here or committed to Git.
+
+**Scheduler target finding (2026-11-15):** the committed worker workflow used the `aanapurna-link-preview.vercel.app` alias rather than the canonical production URL. Production health still reported no scheduled drain. This branch changes the workflow target to `https://annapurna-link.vercel.app` and narrows GitHub OIDC trust to the `main`-branch worker-drain workflow and `schedule` / `workflow_dispatch` events. This is a proposed fix, not live verification; it takes effect only after merge and deployment, and the actual next scheduled heartbeat remains to be observed.
 
 ## Architecture decision
 
@@ -44,12 +43,13 @@ The Supabase project's `postgres` role was used as the migrator role; three
 additional `NOBYPASSRLS` login roles were created (`annapurna_app`,
 `annapurna_auth`, `annapurna_worker`). `REVOKE CREATE ON SCHEMA public FROM
 PUBLIC`, `USAGE` grants, a `graphile_worker` schema and the `drizzle`
-migrations table were applied through the connector. Eleven placeholder hash
-rows were initially inserted without DDL; they were later **removed** so the
-Vercel build command `npm run db:migrate && npm run db:check && npm run build`
-can apply the repository's real Drizzle/Graphile Worker migrations and verify
-them. The hosted database currently has **zero** app tables and zero migration
-rows until that build succeeds.
+migrations table were applied through the connector. The earlier statement that
+the hosted database had zero application tables was a point-in-time note from
+before the first successful Vercel migration/build and is no longer current: the
+live health route now successfully reads `service_health` and
+`app_launch_readiness()`. Supabase's migration-history connector lists one
+platform migration, so it is not treated as an inventory of the application's
+Drizzle migrations.
 
 ## Environment variables
 
@@ -271,11 +271,12 @@ to `APP_URL`.
    App Password for that account, and `SMTP_FROM` using the same address. Any
    other provider's SMTP settings work the same way. Do not paste the password
    in chat, commit it, or put it in a public variable.
-2. Run `HOSTED_SMOKE_BASE_URL=https://aanapurna-link-preview.vercel.app npm run smoke:hosted`
+2. Run `HOSTED_SMOKE_BASE_URL=https://annapurna-link.vercel.app npm run smoke:hosted`
    from a network that can reach the site, then re-run it with `-- --register`
-   and a disposable address. Registration and sign-in are `POST` requests, which
-   this sandbox cannot send because its egress to `*.vercel.app` is TLS-reset, so
-   the authenticated flows and cookie flags still need that owner-side run.
+   and an owner-controlled disposable inbox only after real email delivery is
+   configured. Registration and sign-in are `POST` requests; no authenticated
+   production flow was run in this audit, so account cookies and redirects remain
+   unverified against the current live deployment.
 3. The Vercel deployment cannot host the long-lived worker. Email and device
    notifications are sent by the web tier itself, straight after the request
    that queued them (see "Delivery straight after the request" below).
@@ -402,13 +403,12 @@ shared secret:
   double-sending.
 - Authorization is a GitHub Actions OIDC token: the workflow requests an ID token
   for the audience `annapurna-link-worker`, and the route verifies the RS256
-  signature against `token.actions.githubusercontent.com`'s published keys, then
-  requires `repository = sauravprivatelimited369-byte/aanapurna` and a ref in
-  `refs/heads/main` or `refs/heads/arena/5b937561-aanapurna`. Nothing has to be
-  copied into Vercel, GitHub secrets or the repository, and ten unit tests cover
-  tampering, expiry, wrong audience, wrong repository and wrong ref.
-  `WORKER_TRIGGER_TOKEN` optionally adds a static bearer token for other
-  schedulers; it is unset here.
+  signature against `token.actions.githubusercontent.com`'s published keys. The
+  change in this branch restricts it to `repository = sauravprivatelimited369-byte/aanapurna`,
+  `refs/heads/main`, the exact `.github/workflows/worker-drain.yml` workflow, and
+  only the `schedule` or `workflow_dispatch` event. Nothing has to be copied into
+  Vercel, GitHub secrets or the repository. `WORKER_TRIGGER_TOKEN` optionally
+  adds a static bearer token for other schedulers; it is unset here.
 - `.github/workflows/worker-drain.yml` is scheduled for every five minutes and
   is also dispatchable. It first asserts that an anonymous `POST` is rejected
   with `401`, then drains with its OIDC token and fails the run if the response
@@ -422,19 +422,19 @@ Honest limits of this arrangement:
   started at 22:55 UTC on 14 November and at 02:14, 09:25 and 16:28 UTC on the
   15th. The two verification emails real people had been sent left five and
   twelve hours after they signed up, against a link that lasts one hour.
-- Scheduled workflows only run from the default branch. GitHub also refuses to
-  dispatch, or even list, a workflow file that is absent from the default branch:
-  `gh workflow run worker-drain.yml --ref arena/5b937561-aanapurna` returned
-  `HTTP 404` and `actions/workflows` listed only `ci.yml`, `deploy-pages.yml` and
-  `diag.yml`. So the drain schedule and even a manual dispatch start working only
-  after this branch is merged to `main` — there is no way to trigger it from
-  this branch, and this session could not run it. Until then the route is
-  deployed and its authorization is unit-tested, but the scheduler is dormant.
+- The workflow file is present on `main`, but its recorded runs are several
+  hours apart rather than five minutes apart. GitHub's schedule therefore is not
+  a dependable service-level timer. The live health endpoint reports
+  `scheduledDrain: never_seen`; recent green action results were sent to the
+  preview alias, not confirmed against the production queue. This branch changes
+  the target to the canonical URL, but the production heartbeat still needs to
+  be verified after merge and deployment.
 - GitHub disables scheduled workflows after 60 days without repository activity,
-  so it needs the same monitoring any scheduler does.
-- With `SMTP_USER`/`SMTP_PASS` still unset the drain defers rows rather than
-  sending them; it reports `status: "deferred"`, which is the correct behaviour
-  but is not email delivery.
+  so it needs the same monitoring any scheduler does. Treat Actions as a delayed
+  recovery trigger, not the production worker. A persistent worker or dependable
+  external scheduler remains blocked on owner-approved infrastructure/cost.
+- The configured email transport is a capture sink. Any SMTP acceptance there
+  is not email delivered to a user's inbox.
 
 ### Delivery straight after the request (what the hosted site relies on)
 

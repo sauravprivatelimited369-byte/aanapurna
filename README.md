@@ -6,7 +6,7 @@
 
 Annapurna Link is a controlled-launch food redistribution platform. It records partner requests, food offers, deliveries and operational reviews. It does not inspect or certify food as safe. Real donation operations stay disabled until the owner approves an operating area and policy.
 
-**Project status:** pre-pilot; this repository is not a live food service. `OPERATIONS_ENABLED=false` by default, and the public impact endpoint shows only backend-derived verified records.
+**Project status:** pre-pilot; this repository is not a live food service. `OPERATIONS_ENABLED=false` by default, and the public impact endpoint shows only backend-derived verified records. A live read-only audit on 2026-11-15 found the production email transport is a capture sink (not delivery to user inboxes), production worker and scheduled-drain heartbeats are unseen, and launch gates remain incomplete. Do not treat account activation or real operations as ready. See [`PRODUCTION_READINESS_REPORT.md`](PRODUCTION_READINESS_REPORT.md) and [`MASTER_IMPROVEMENT_REGISTER.md`](MASTER_IMPROVEMENT_REGISTER.md) for current evidence and blockers.
 
 If this careful, auditable approach is useful, **[star the repository](https://github.com/sauravprivatelimited369-byte/aanapurna)** to help people discover it. Stars are not proof of safety, production readiness or verified impact. No paid offering or revenue model is currently approved; any sustainable funding or hosted-service plan needs stakeholder validation before implementation.
 
