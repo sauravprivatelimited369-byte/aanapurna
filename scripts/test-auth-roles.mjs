@@ -134,14 +134,31 @@ try {
     id += 1;
   }
 
-  await check(id, 'Admin API is available to the granted Admin and denied to a Generator', async () => {
+  await check(id, 'Admin API requires a second factor and is then available; a Generator is refused', async () => {
     const adminCookie = await login(adminUser.email);
     const generatorCookie = await login(users.generator.email);
+
+    // A freshly bootstrapped platform role has not confirmed a second factor yet (migration 15).
+    // Pages stay readable so the account can reach the enrolment screen; application APIs refuse.
+    const beforeEnrolment = await http('/api/admin/overview', { cookie: adminCookie });
+    assert(beforeEnrolment.status === 403, `Admin API returned ${beforeEnrolment.status} before second-factor enrolment.`);
+    const refusal = await beforeEnrolment.json().catch(() => ({}));
+    assert(
+      refusal?.error?.code === 'TWO_FACTOR_ENROLMENT_REQUIRED',
+      `Unexpected refusal before enrolment: ${JSON.stringify(refusal?.error ?? {})}`,
+    );
+    const readablePage = await http('/admin', { cookie: adminCookie });
+    assert(readablePage.status === 200, `Admin page returned ${readablePage.status} before enrolment; it must stay readable so the account can enrol.`);
+
+    // Simulate what a confirmed TOTP enrolment writes. The enrolment itself is Better Auth's code;
+    // this test is about the authorisation gate that reads the flag.
+    await admin.query('UPDATE public."user" SET two_factor_enabled = true WHERE id = $1', [adminUser.id]);
+
     const allowed = await http('/api/admin/overview', { cookie: adminCookie });
-    assert(allowed.status === 200, `Admin API returned ${allowed.status}.`);
+    assert(allowed.status === 200, `Admin API returned ${allowed.status} after enrolment.`);
     const denied = await http('/api/admin/overview', { cookie: generatorCookie });
     assert(denied.status === 403, `Generator received Admin API status ${denied.status}.`);
-    return 'Admin 200, Generator 403';
+    return 'before enrolment 403 TWO_FACTOR_ENROLMENT_REQUIRED, page readable; after enrolment 200; Generator 403';
   });
 
   await check(id + 1, 'Verified account without an approved role stays pending', async () => {
