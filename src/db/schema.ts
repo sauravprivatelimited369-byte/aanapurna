@@ -377,6 +377,32 @@ export const deliveryJobs = pgTable(
  * captures. It exists so a distance can be estimated without collecting coordinates from anyone
  * first, and so the application never invents a number it cannot support.
  */
+/**
+ * Owner declarations that no code can verify. Each row names who declared it, when it must be
+ * renewed, and what evidence is held. The launch gate reads these instead of trusting prose.
+ */
+export const platformAttestations = pgTable("platform_attestations", {
+  key: text("key").primaryKey(),
+  label: text("label").notNull(),
+  value: jsonb("value").notNull().default({}),
+  evidenceReference: text("evidence_reference"),
+  recordedBy: text("recorded_by").references(() => user.id, { onDelete: "set null" }),
+  recordedAt: instant("recorded_at").notNull().defaultNow(),
+  expiresAt: instant("expires_at"),
+});
+
+/** A staffed rota. Readiness requires real coverage, not an intention to be reachable. */
+export const onCallShifts = pgTable("on_call_shifts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  startsAt: instant("starts_at").notNull(),
+  endsAt: instant("ends_at").notNull(),
+  channel: text("channel").notNull(),
+  notes: text("notes"),
+  createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+  createdAt: instant("created_at").notNull().defaultNow(),
+}, (table) => [index("on_call_shifts_window_idx").on(table.startsAt, table.endsAt)]);
+
 export const geoPlaces = pgTable("geo_places", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),

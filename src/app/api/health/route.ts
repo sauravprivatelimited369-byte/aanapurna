@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkDatabase, pool } from "@/db";
 import { getEmailDeliveryStatus } from "@/email/config";
+import { evaluateReadiness } from "@/domain/readiness";
 import { evaluateWorkerHealth, WORKER_SERVICE_KEY, type WorkerHealth } from "@/worker/heartbeat";
 
 /**
@@ -19,6 +20,21 @@ async function readWorkerHealth(): Promise<WorkerHealth> {
   }
 }
 
+/**
+ * Readiness without reading the declarations themselves. The SQL function returns booleans only,
+ * because this endpoint is public: it may name the missing requirement, never the policy number.
+ */
+async function readDeclaredReadiness(): Promise<Record<string, boolean> | null> {
+  try {
+    const { rows } = await pool.query<{ readiness: Record<string, boolean> }>(
+      "select app_launch_readiness() as readiness",
+    );
+    return rows[0]?.readiness ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -26,6 +42,27 @@ export async function GET() {
   const database = await checkDatabase();
   const email = getEmailDeliveryStatus();
   const worker = await readWorkerHealth();
+  const declared = await readDeclaredReadiness();
+
+  // A missing function means the migration has not run, which is itself an unmet requirement, so
+  // readiness reports every owner declaration as absent rather than silently omitting them.
+  const readiness = evaluateReadiness({
+    now: new Date(),
+    declared: declared ?? {},
+    attestations: [],
+    onCallShifts: [],
+    email: {
+      configured: email.configured,
+      testSink: email.testSink,
+      localOnly: email.localOnly,
+      missingSettings: email.missingSettings,
+    },
+    scanner: {
+      mode: (process.env.FILE_SCAN_MODE ?? "disabled").trim().toLowerCase(),
+      hostConfigured: Boolean(process.env.CLAMAV_HOST?.trim()),
+    },
+  });
+
   const body = {
     status: database.ok ? "ok" : "degraded",
     application: "annapurna-link",
@@ -48,6 +85,14 @@ export async function GET() {
       lastError: typeof worker.details.lastError === "string" ? worker.details.lastError : null,
     },
     realOperationsEnabled: process.env.OPERATIONS_ENABLED === "true",
+    // Names of unmet requirements only, never their values.
+    launchReadiness: {
+      complete: readiness.complete,
+      missing: readiness.missing,
+      unmetOwnerActions: readiness.items
+        .filter((item) => !item.satisfied)
+        .map((item) => ({ key: item.key, ownerAction: item.ownerAction })),
+    },
   };
   return NextResponse.json(body, {
     status: database.ok ? 200 : 503,

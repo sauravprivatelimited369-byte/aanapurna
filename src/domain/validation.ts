@@ -328,3 +328,78 @@ export const dataRequestUpdateSchema = z.object({
   status: z.enum(["in_review", "awaiting_user", "completed", "rejected"]),
   resolution: safeText(800),
 }).strict();
+
+/**
+ * Owner declarations. These are the facts no query can prove: who the entity is, what cover
+ * exists, who answers data-protection questions, and when an outsider last tried to break in.
+ * Each requires held evidence, so a declaration cannot be a bare assertion.
+ */
+const evidenceReference = z.string().trim().min(3).max(500);
+const isoDay = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.");
+const futureDay = z.string().trim().datetime({ offset: true }).or(isoDay);
+
+export const attestationSchema = z.discriminatedUnion("key", [
+  z.object({
+    key: z.literal("legal_entity"),
+    evidenceReference,
+    expiresAt: futureDay.nullish(),
+    value: z.object({
+      entityName: safeText(200),
+      jurisdiction: safeText(120),
+      registeredAddress: safeText(500),
+      registrationReference: z.string().trim().max(120).optional().default(""),
+      liabilityPosition: safeText(500),
+    }).strict(),
+  }).strict(),
+  z.object({
+    key: z.literal("insurance"),
+    evidenceReference,
+    expiresAt: futureDay,
+    value: z.object({
+      insurer: safeText(160),
+      policyReference: safeText(120),
+      coverageSummary: safeText(1_000),
+      liabilityLimit: z.string().trim().max(120).optional().default(""),
+    }).strict(),
+  }).strict(),
+  z.object({
+    key: z.literal("data_protection_contact"),
+    evidenceReference,
+    expiresAt: futureDay.nullish(),
+    value: z.object({
+      contactName: safeText(160),
+      contactEmail: z.string().trim().email().max(320),
+      hours: safeText(120),
+      postalAddress: safeText(500),
+    }).strict(),
+  }).strict(),
+  z.object({
+    key: z.literal("penetration_test"),
+    evidenceReference,
+    expiresAt: futureDay.nullish(),
+    value: z.object({
+      provider: safeText(160),
+      reportReference: safeText(160),
+      completedOn: isoDay,
+      scopeSummary: safeText(1_000),
+    }).strict(),
+  }).strict(),
+]);
+
+export const onCallShiftSchema = z.object({
+  userId: z.string().trim().min(1).max(64).optional(),
+  email: z.string().trim().email().max(320).optional(),
+  startsAt: z.string().trim().datetime({ offset: true }),
+  endsAt: z.string().trim().datetime({ offset: true }),
+  channel: safeText(160),
+  notes: z.string().trim().max(500).optional().default(""),
+}).strict().refine((value) => Boolean(value.userId || value.email), {
+  message: "Name the person on call, by account email or account id.",
+  path: ["email"],
+}).refine((value) => new Date(value.endsAt) > new Date(value.startsAt), {
+  message: "The shift must end after it starts.",
+  path: ["endsAt"],
+}).refine((value) => new Date(value.endsAt).getTime() - new Date(value.startsAt).getTime() <= 14 * 86_400_000, {
+  message: "Schedule shifts of at most fourteen days.",
+  path: ["endsAt"],
+});

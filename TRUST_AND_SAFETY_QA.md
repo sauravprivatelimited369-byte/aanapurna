@@ -376,11 +376,11 @@ Everything below is a real, open gap. None of it is solved by adding copy to the
 | G4a | No second factor | **Fixed (migration 15)** — TOTP enrolment with 10 backup codes, required for platform roles before application APIs serve them | — | Code | — |
 | G4b | CSP report-only | **Fixed** — enforcing nonce-based policy from `src/proxy.ts`; pre-rendered public pages use a documented relaxed policy | — | Code | — |
 | G4c | RLS not `FORCE`'d | **Fixed (migration 16)** — `FORCE ROW LEVEL SECURITY` on all 26 policies-bearing tables; the owner holds `BYPASSRLS`, so migrations and definer functions still work | — | Code | — |
-| G4d | No independent penetration test | **Open** — cannot be self-administered | Unknown vulnerabilities remain unknown | External review | Owner |
-| G5 | No legal entity, insurance, liability position or signed partner agreement | **Open** | Nobody is contractually answerable for harm | Legal | Owner |
-| G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | **Machine half ready, people half open** — `scripts/incident-readiness.mjs` checks every code path an incident needs (session revocation, append-only audit, second factor, recovery, data-request intake), and `ops/INCIDENT_READINESS.md` holds the 45-minute drill script | Nobody is on call, and no drill has been run with a clock | People | Owner: a named contact and a rota, then run the drill once |
+| G4d | No independent penetration test | **Tracked, still open (migration 17)** — a test cannot be self-administered, so the only honest engineering is to score it: `platform_attestations` holds the provider, report reference and completion date, `/api/admin/readiness` and `/api/health` report it as unmet until such a record is less than twelve months old, and the check re-opens by itself when it lapses | Unknown vulnerabilities remain unknown | External review | Owner: commission the test, then record the report reference |
+| G5 | No legal entity, insurance, liability position or signed partner agreement | **Enforced as records (migration 17), still open** — `platform_attestations` stores the entity (name, jurisdiction, address, registration reference, liability position) and the insurance (insurer, policy, coverage, expiry) with an evidence reference and the administrator who declared it. Until both exist and the policy has not expired, launch readiness is false. Nothing here forms a company or buys a policy | No entity or cover exists yet, so nobody is contractually answerable for harm; signed partner agreements remain outstanding | Legal | Owner: register the entity, buy cover, record both |
+| G6 | No named data-protection owner; no staffed on-call; breach-reporting process unexercised | **Both halves wired, people half open** — `scripts/incident-readiness.mjs` checks every code path an incident needs (session revocation, append-only audit, second factor, recovery, data-request intake); `platform_attestations` now holds the named data-protection contact (published on `/privacy` and `/contact` only once declared) and `on_call_shifts` holds the rota that readiness and the support-page response window are derived from | Nobody is on call on the hosted deployment and no drill has been run with a clock | People | Owner: record the contact, schedule a shift, then run the drill once |
 | G7 | Backups scripted but hosted restore unproven | **Partially fixed** — restore is now verifiable: baseline manifest, manifest query and comparator (`ops/RESTORE_DRILL.md`). Supabase branching refused on the current plan; the restore itself needs one owner action | Recovery time still unknown | Ops | Owner: Pro plan branch, or run `pg_dump`/`pg_restore` once |
-| G8 | No human account-recovery path or published response time | **Recovery path fixed; response window now configurable** — operator-issued single-use reset link (role-gated, second factor, reason audited), and the support page publishes a window only when `SUPPORT_RESPONSE_HOURS` is set by an operator who has staffed it. Unset, it states plainly that nothing is promised | The window is not set on the hosted deployment | Config + people | Owner: set `SUPPORT_RESPONSE_HOURS` when a rota exists |
+| G8 | No human account-recovery path or published response time | **Recovery path fixed; response window now derived from the rota** — operator-issued single-use reset link (role-gated, second factor, reason audited); the support page computes its window from `app_on_call_coverage()`, `SUPPORT_RESPONSE_HOURS` is only a cap, and with no shift recorded it states plainly that nothing is promised | No shift is recorded on the hosted deployment | People | Owner: schedule the first shift; the window then appears on its own |
 | G9a | Partner evidence expiring while the organisation stays verified | **Partially fixed (migration 14)** — operations are now reminded 14 days ahead, once per document | Re-validation decision is still manual | Code + ops | Operations |
 | G9b | File scanning not configured | **Code complete, blocked on a scanner endpoint** — `storePrivateDocument` speaks ClamAV `INSTREAM` over TCP, verifies magic bytes, and refuses every upload in production unless `FILE_SCAN_MODE=clamav` with a reachable `CLAMAV_HOST`/`CLAMAV_PORT` | Uploads stay blocked (fail-closed), so nothing unscanned is ever served | Infra | Owner: a clamd endpoint reachable from the web tier, or a managed scanning service |
 | G10 | Food-safety policy is `draft`; no qualified professional has signed it or the area rules | **Open** | No real food may move | Professional review | Owner |
@@ -388,6 +388,16 @@ Everything below is a real, open gap. None of it is solved by adding copy to the
 "Fixed" here means the code, migration and tests exist and the migration is applied to the hosted
 database. It does not mean the hosted deployment has been exercised end to end with real accounts —
 `OPERATIONS_ENABLED` is still `false`.
+
+G4d, G5, G6 and G8 share one mechanism, added in migration 17. `platform_attestations` stores what
+only a person can declare — the entity, its insurance, the named data-protection contact, the last
+independent test — with an evidence reference, the administrator who recorded it and an expiry.
+`on_call_shifts` stores the rota. `app_launch_readiness()` reduces those to five booleans, so
+`/api/health` can report *which* requirement is unmet without publishing a policy number or an
+address, and the operations console shows the detail to a signed-in administrator. Insurance
+expiring, a rota ending or a test ageing past twelve months re-opens the gap without anyone editing a
+document. What none of this does is incorporate the company, buy the cover, nominate the person or
+commission the test; it only makes the absence visible and checkable.
 
 ---
 
@@ -399,7 +409,13 @@ database. It does not mean the hosted deployment has been exercised end to end w
   inspection.
 - "We have a firewall and encryption, so the data is protected." Row-level policies and restricted
   roles are real; a provider-level network control has not been configured or evidenced.
-- "Our team will help you within X hours." No such commitment exists until a named person owns it.
+- "Our team will help you within X hours." The support page derives its window from a recorded
+  on-call shift and says nothing when no shift exists. Do not quote a window that the rota does not
+  support.
+- "We have a legal entity / insurance / a data-protection officer / a recent penetration test."
+  Each of those is a stored declaration with an evidence reference, a date and an expiry that can be
+  checked at `/api/health` and in the operations console. If the record is absent or expired, the
+  claim is false — the launch gate reports it as unmet rather than assuming somebody handled it.
 - "Impact verified" from anything other than verified receipts — sample and demo records are
   labelled and excluded from totals.
 

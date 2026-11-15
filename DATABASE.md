@@ -1,6 +1,6 @@
 # Database implementation and limits
 
-PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and fourteen ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
+PostgreSQL is the source of truth. The repository contains the Drizzle schema in `src/db/schema.ts` and seventeen ordered SQL migrations in `drizzle/`; migration metadata is in `drizzle/meta/`. GitHub stores these definitions, **not** the running database or its private records. The database needs a persistent PostgreSQL server and an independently protected backup. Migration 11, `20261113190000_auth_registration_and_guards.sql`, adds transient Better Auth intake columns, the RLS-protected `registration_profiles` table, an `account_status`/`demo_account` guard trigger, and a session-expiry index. It is additive: no existing row is rewritten. Migration 12,
 `20261114120000_revoke_public_api_privileges.sql`, removes every table, sequence
 and function privilege held by Supabase's `anon` and `authenticated` PostgREST
 roles and resets the matching default privileges, so a future object cannot
@@ -11,7 +11,17 @@ sweep (`app_escalate_delivery_backlog`), the two bookkeeping columns those funct
 (`delivery_jobs.escalated_at`, `private_documents.expiry_notified_at`), and one narrow additional
 state transition: operations may release an uncollected assignment (`assigned -> open`). The columns
 are deliberately not granted to the application role; only the `SECURITY DEFINER` functions write
-them. `npm run db:check` now requires both functions and at least fourteen migrations.
+them. `npm run db:check` now requires both functions and at least fourteen migrations. Migration 17,
+`20261115180000_owner_attestations_and_launch_gate.sql`, adds the two tables that hold owner
+declarations no query can verify — `platform_attestations` (legal entity, insurance, data-protection
+contact, penetration test, each with an evidence reference, the administrator who recorded it and an
+expiry) and `on_call_shifts` (the rota) — with `FORCE ROW LEVEL SECURITY` on both and write policies
+restricted to `operations_admin`/`security_admin` inside a domain transition. Four `SECURITY DEFINER`
+readers expose only what each caller is entitled to: `app_launch_readiness()` returns five booleans,
+`app_on_call_coverage()` returns coverage without identities, `app_public_data_protection_contact()`
+and `app_legal_entity()` return the published contact and entity, and each returns nothing until a
+declaration exists. `app_on_call_person(email)` resolves a rota entry to an account id without
+granting the application role sight of `public."user"`.
 
 ## Existing model
 
@@ -19,6 +29,7 @@ them. `npm run db:check` now requires both functions and at least fourteen migra
 - Organisations, memberships, service areas, helper profiles and policy versions.
 - Donations, private donation details, offers, delivery jobs, private destination snapshots, encrypted delivery codes, custody events and receipts.
 - Audit events, notifications, encrypted email outbox, support cases, safety incidents, private-document metadata and data requests.
+- Owner declarations and the on-call rota (migration 17), plus the seeded `geo_places` gazetteer (migration 16).
 
 Consult the schema and migrations for fields, foreign keys, unique constraints and indexes; this is a summary, not a claim that every requested product entity or policy workflow is implemented. Private file contents are stored separately from the database. Do not commit real data, exports, document files, keys or `.env` to GitHub.
 

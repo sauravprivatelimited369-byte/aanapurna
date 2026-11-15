@@ -297,6 +297,14 @@ Migration `20261115090000_helper_dispatch_and_escalation.sql` is the fourteenth 
   revocation, the append-only audit trail, second-factor enforcement, operator recovery and
   data-request intake; `ops/INCIDENT_READINESS.md` is the 45-minute drill. Running the drill needs two
   people.
-- **Still open:** no standby rota or named coordinator (people), and no SMTP credential, so no mail
-  reaches a user on its own. See the status column in
+- **Owner declarations and the launch gate (migration 17):** `platform_attestations` records the
+  legal entity, insurance, named data-protection contact and last independent penetration test with
+  an evidence reference, the administrator who declared it and an expiry; `on_call_shifts` records
+  the rota. `app_launch_readiness()` reduces them to five booleans for `/api/health`, and the
+  operations console shows the detail behind an admin role. Insurance expiring or a shift ending
+  re-opens the gap by itself. The support page's response window is derived from real coverage, and
+  `/privacy` and `/contact` publish a contact only once one is recorded. This makes the absence of
+  each fact checkable; it does not create the entity, buy the cover or commission the test.
+- **Still open:** no standby rota, no named coordinator and no legal entity or insurance (people and
+  lawyers), and no SMTP credential, so no mail reaches a user on its own. See the status column in
   [`TRUST_AND_SAFETY_QA.md`](TRUST_AND_SAFETY_QA.md).

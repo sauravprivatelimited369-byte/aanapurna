@@ -34,10 +34,12 @@
     "rate_limit": 2,
     "delivery_jobs": 0,
     "user": 3,
-    "registration_profiles": 3
+    "registration_profiles": 3,
+    "platform_attestations": 0,
+    "on_call_shifts": 0
   },
   "totalRows": 71,
-  "schemaFingerprint": "319a9e661a9f1eb79432088741186085",
-  "migrations": 16,
-  "policies": 67
+  "schemaFingerprint": "4d92959de2ccfd424aa854b6f977866c",
+  "migrations": 17,
+  "policies": 74
 }

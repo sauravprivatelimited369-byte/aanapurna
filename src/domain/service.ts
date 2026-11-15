@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
-import { withUserContext, type AppTransaction } from "@/db";
+import { pool, withUserContext, type AppTransaction } from "@/db";
 import {
   auditEvents,
   deliveryCodes,
@@ -15,7 +15,9 @@ import {
   helperProfiles,
   notifications,
   organizationMemberships,
+  onCallShifts,
   organizations,
+  platformAttestations,
   policyVersions,
   privateDocuments,
   receipts,
@@ -24,10 +26,13 @@ import {
   serviceAreas,
   supportCases,
   userProfiles,
+  user,
   custodyEvents,
 } from "@/db/schema";
 import { HttpError } from "@/lib/http";
 import { auth } from "@/lib/auth";
+import { getEmailDeliveryStatus } from "@/email/config";
+import { evaluateReadiness } from "@/domain/readiness";
 import { withPasswordResetCapture } from "@/email/reset-link-capture";
 import { canAccessOrganization, hasAnyRole, type Identity } from "@/lib/identity";
 import { assessTransit, normalizePlaceName, type Coordinates, type TransitAssessment } from "@/domain/transit";
@@ -57,6 +62,8 @@ import {
   type supportCaseUpdateSchema,
   type dataRequestCreateSchema,
   type dataRequestUpdateSchema,
+  type attestationSchema,
+  type onCallShiftSchema,
 } from "@/domain/validation";
 import { z } from "zod";
 
@@ -78,6 +85,8 @@ type SupportCaseCreate = z.infer<typeof supportCaseCreateSchema>;
 type SupportCaseUpdate = z.infer<typeof supportCaseUpdateSchema>;
 type DataRequestCreate = z.infer<typeof dataRequestCreateSchema>;
 type DataRequestUpdate = z.infer<typeof dataRequestUpdateSchema>;
+type AttestationInput = z.infer<typeof attestationSchema>;
+type OnCallShiftInput = z.infer<typeof onCallShiftSchema>;
 
 type Policy = z.infer<typeof policyRulesSchema> & { version: string };
 
@@ -2473,4 +2482,193 @@ export async function adminOverview(identity: Identity) {
       emailOutbox: { pending: Number(outbox?.pending ?? 0), failed: Number(outbox?.failed ?? 0) },
     };
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Launch readiness
+ *
+ * The register's last five gaps are owner acts, not code paths. The point of the tables behind
+ * these functions is that the product stops describing them as "pending" and starts reporting
+ * which named fact is missing, with an expiry that silently re-opens the gap.
+ * ------------------------------------------------------------------ */
+
+const ATTESTATION_LABELS = {
+  legal_entity: "Legal entity",
+  insurance: "Insurance",
+  data_protection_contact: "Data-protection contact",
+  penetration_test: "Independent penetration test",
+} as const;
+
+type AttestationKey = keyof typeof ATTESTATION_LABELS;
+
+function requireAttestationWrite(identity: Identity): void {
+  if (!hasAnyRole(identity, ["security_admin", "operations_admin"])) {
+    throw new HttpError(403, "Only a security or operations administrator can record platform declarations.", "ATTESTATION_WRITE_FORBIDDEN");
+  }
+}
+
+function scannerStatus(): { mode: string; hostConfigured: boolean } {
+  const mode = (process.env.FILE_SCAN_MODE ?? "disabled").trim().toLowerCase();
+  return { mode, hostConfigured: Boolean(process.env.CLAMAV_HOST?.trim()) };
+}
+
+/**
+ * Read the declarations and the rota, then decide what is missing. Callers surface the names of
+ * missing items only; the values themselves stay behind the admin role.
+ */
+export async function getLaunchReadiness(identity: Identity) {
+  if (!hasAnyRole(identity, ["operations_admin", "security_admin", "safety_officer", "support_agent"])) {
+    throw new HttpError(403, "You do not have access to the operations workspace.", "OPERATIONS_ACCESS_REQUIRED");
+  }
+  const [attestations, shifts] = await withUserContext(identity.id, async (tx) => {
+    const attestationRows = await tx.select({
+      key: platformAttestations.key,
+      label: platformAttestations.label,
+      value: platformAttestations.value,
+      evidenceReference: platformAttestations.evidenceReference,
+      recordedBy: platformAttestations.recordedBy,
+      recordedAt: platformAttestations.recordedAt,
+      expiresAt: platformAttestations.expiresAt,
+    }).from(platformAttestations);
+    const shiftRows = await tx.select({
+      userId: onCallShifts.userId,
+      startsAt: onCallShifts.startsAt,
+      endsAt: onCallShifts.endsAt,
+      channel: onCallShifts.channel,
+    }).from(onCallShifts).where(sql`${onCallShifts.endsAt} > now() - interval '1 day'`);
+    return [attestationRows, shiftRows] as const;
+  });
+  const email = getEmailDeliveryStatus();
+  return evaluateReadiness({
+    now: new Date(),
+    attestations: attestations.map((row) => ({
+      key: row.key,
+      label: row.label,
+      value: (row.value ?? {}) as Record<string, unknown>,
+      evidenceReference: row.evidenceReference,
+      recordedBy: row.recordedBy,
+      recordedAt: row.recordedAt.toISOString(),
+      expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+    })),
+    onCallShifts: shifts.map((shift) => ({
+      userId: shift.userId,
+      startsAt: shift.startsAt.toISOString(),
+      endsAt: shift.endsAt.toISOString(),
+      channel: shift.channel,
+    })),
+    email: {
+      configured: email.configured,
+      testSink: email.testSink,
+      localOnly: email.localOnly,
+      missingSettings: email.missingSettings,
+    },
+    scanner: scannerStatus(),
+  });
+}
+
+export async function recordAttestation(identity: Identity, input: AttestationInput) {
+  requireAttestationWrite(identity);
+  const label = ATTESTATION_LABELS[input.key as AttestationKey];
+  return withDomainContext(identity.id, async (tx) => {
+    const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
+    if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+      throw new HttpError(422, "Use an ISO date for the expiry.", "ATTESTATION_EXPIRY_INVALID");
+    }
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      throw new HttpError(422, "Record a declaration that is still valid; this expiry has already passed.", "ATTESTATION_EXPIRY_PAST");
+    }
+    await tx.insert(platformAttestations).values({
+      key: input.key,
+      label,
+      value: input.value,
+      evidenceReference: input.evidenceReference,
+      recordedBy: identity.id,
+      recordedAt: new Date(),
+      expiresAt,
+    }).onConflictDoUpdate({
+      target: platformAttestations.key,
+      set: {
+        label,
+        value: input.value,
+        evidenceReference: input.evidenceReference,
+        recordedBy: identity.id,
+        recordedAt: new Date(),
+        expiresAt,
+      },
+    });
+    // The declaration and the audit line are written together: a claim with no trail of who made
+    // it is exactly what this table exists to prevent.
+    await audit(tx, identity, `attestation.${input.key}`, "platform_attestation", input.key, undefined, {
+      evidenceReference: input.evidenceReference,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    });
+    return { key: input.key, label, recordedAt: new Date().toISOString(), expiresAt: expiresAt?.toISOString() ?? null };
+  });
+}
+
+export async function clearAttestation(identity: Identity, key: AttestationKey, reason: string) {
+  requireAttestationWrite(identity);
+  if (!(key in ATTESTATION_LABELS)) {
+    throw new HttpError(422, "Unknown declaration.", "ATTESTATION_KEY_INVALID");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    const deleted = await tx.delete(platformAttestations).where(eq(platformAttestations.key, key)).returning({ key: platformAttestations.key });
+    if (deleted.length === 0) throw new HttpError(404, "That declaration is not recorded.", "ATTESTATION_NOT_FOUND");
+    await audit(tx, identity, `attestation.${key}.withdrawn`, "platform_attestation", key, reason, {});
+    return { key, withdrawn: true };
+  });
+}
+
+export async function scheduleOnCallShift(identity: Identity, input: OnCallShiftInput) {
+  requireAttestationWrite(identity);
+  const startsAt = new Date(input.startsAt);
+  const endsAt = new Date(input.endsAt);
+  if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+    throw new HttpError(422, "Use ISO timestamps for the shift.", "SHIFT_TIME_INVALID");
+  }
+  if (endsAt.getTime() <= startsAt.getTime()) {
+    throw new HttpError(422, "The shift must end after it starts.", "SHIFT_WINDOW_INVALID");
+  }
+  if (endsAt.getTime() <= Date.now()) {
+    throw new HttpError(422, "That shift is already over, so it would not cover anyone.", "SHIFT_IN_PAST");
+  }
+  return withDomainContext(identity.id, async (tx) => {
+    // A shift is a promise by a real account holder, so the person must exist before it is recorded.
+    // The lookup goes through a SECURITY DEFINER function: the application role has no sight of the
+    // account table, and a rota entry must not become a way to enumerate it.
+    const personId = input.userId
+      ? (await tx.select({ id: user.id }).from(user).where(eq(user.id, input.userId)).limit(1)).at(0)?.id
+      : (await tx.execute<{ id: string | null }>(sql`select public.app_on_call_person(${input.email ?? ""}) as id`)).rows.at(0)?.id;
+    if (!personId) throw new HttpError(404, "Choose a person with an account.", "SHIFT_PERSON_UNKNOWN");
+    const [shift] = await tx.insert(onCallShifts).values({
+      userId: personId,
+      startsAt,
+      endsAt,
+      channel: input.channel,
+      notes: input.notes || null,
+      createdBy: identity.id,
+    }).returning({ id: onCallShifts.id });
+    await audit(tx, identity, "on_call.shift_scheduled", "on_call_shift", shift.id, undefined, {
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      channel: input.channel,
+      person: personId,
+    });
+    return { id: shift.id, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() };
+  });
+}
+
+/**
+ * The published contact, read through the SECURITY DEFINER functions so a visitor needs no role.
+ * Returns null until a named person has actually been recorded, which is why the privacy page can
+ * promise a working address only when there is one.
+ */
+export async function getPublishedContacts(): Promise<{
+  legalEntity: Record<string, unknown> | null;
+  dataProtection: Record<string, unknown> | null;
+}> {
+  const { rows } = await pool.query<{ entity: Record<string, unknown> | null; contact: Record<string, unknown> | null }>(
+    "select app_legal_entity() as entity, app_public_data_protection_contact() as contact",
+  );
+  return { legalEntity: rows[0]?.entity ?? null, dataProtection: rows[0]?.contact ?? null };
 }

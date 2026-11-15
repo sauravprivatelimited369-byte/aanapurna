@@ -113,6 +113,13 @@
       "when": 1794820800000,
       "tag": "20261115140000_transit_limits_and_self_collection",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1794835200000,
+      "tag": "20261115180000_owner_attestations_and_launch_gate",
+      "breakpoints": true
     }
   ]
 }

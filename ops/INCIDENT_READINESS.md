@@ -19,12 +19,17 @@ Run `node scripts/incident-readiness.mjs` to check the code-side preconditions. 
 | Notify affected people in-product | `notifyUser` / `notifyOrganization` | notification tests |
 | Document what a restore must match | `ops/backups/hosted-manifest-2026-11-15.json` | `tests/backup-manifest.test.ts` |
 | Answer a contract question honestly | `TRUST_AND_SAFETY_QA.md` gap register | this file |
+| Show whether the rota and declarations are real | `platform_attestations`, `on_call_shifts` (migration 17) | `tests/launch-readiness.test.ts`, `tests/integration/local-domain.ts` |
 
 ## What only a person can do
 
-1. **Name the data-protection contact** and put the address where users can find it. Today no name
-   is published anywhere, which is why `G6` stays open.
-2. **Hold the rota.** A breach noticed on a Sunday is only a capability if somebody is on call.
+1. **Name the data-protection contact.** Record them in the operations console under *Launch
+   readiness* (name, published address, hours, postal address, evidence reference). `/privacy` and
+   `/contact` publish the name and address only after that record exists; until then they say no
+   contact is configured. That is why `G6` stays open.
+2. **Hold the rota.** Schedule the first shift in the same panel. A breach noticed on a Sunday is
+   only a capability if somebody is on call, and the support page derives its response window from
+   the recorded coverage rather than from `SUPPORT_RESPONSE_HOURS`, which is now only a cap.
 3. **Run the drill once.** A drill is a rehearsal with a clock, not a checklist. The suggested
    scenario is: "a `security_admin` account is suspected compromised at 21:40 on a Saturday".
 

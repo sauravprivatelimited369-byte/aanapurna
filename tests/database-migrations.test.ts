@@ -19,6 +19,7 @@ const migrationFiles = [
   "20261115090000_helper_dispatch_and_escalation.sql",
   "20261115120000_two_factor_for_privileged_accounts.sql",
   "20261115140000_transit_limits_and_self_collection.sql",
+  "20261115180000_owner_attestations_and_launch_gate.sql",
 ];
 
 let database: PGlite;

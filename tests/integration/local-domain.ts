@@ -237,7 +237,90 @@ try {
   assert(reserveFailure?.status === "rejected" && [404, 409].includes(reserveFailure.reason?.status), "Losing Receiver must receive a safe unavailable/conflict error.");
   const jobCount = await admin.query<{ count: number }>("SELECT count(*)::int count FROM public.delivery_jobs WHERE donation_id=$1", [competing.id]);
   assert.equal(jobCount.rows[0]!.count, 1);
-  console.log("PASS: synthetic onboarding/review, matching, competing claims/reservations, pickup window, RLS code privacy, OTP lock/replay, one receipt/impact and incident hold.");
+  phase = "launch readiness reflects stored declarations";
+  const before = await service.getLaunchReadiness(operations);
+  assert.equal(before.complete, false);
+  for (const key of ["legal_entity", "insurance", "data_protection_contact", "on_call", "penetration_test"]) {
+    assert(before.missing.includes(key as never), `${key} must start unmet.`);
+  }
+  const publishedBefore = await service.getPublishedContacts();
+  assert.equal(publishedBefore.dataProtection, null, "No contact may be published before one is declared.");
+  assert.equal(publishedBefore.legalEntity, null);
+  await assert.rejects(service.getLaunchReadiness(generator), "A Generator must not read platform declarations.");
+  await assert.rejects(service.recordAttestation(generator, {
+    key: "legal_entity", evidenceReference: "fictional", expiresAt: null,
+    value: { entityName: "Fictional Foods Pvt Ltd", jurisdiction: "IN-OD", registeredAddress: "Fictional address", registrationReference: "", liabilityPosition: "Fictional position" },
+  }), "Only an administrator may declare the entity.");
+  // A declaration without held evidence is exactly the claim this table exists to stop.
+  await assert.rejects(service.recordAttestation(operations, {
+    key: "legal_entity", evidenceReference: "", expiresAt: null,
+    value: { entityName: "Fictional Foods Pvt Ltd", jurisdiction: "IN-OD", registeredAddress: "Fictional address", registrationReference: "", liabilityPosition: "Fictional position" },
+  }));
+  await service.recordAttestation(operations, {
+    key: "legal_entity", evidenceReference: "fictional-mca-cin", expiresAt: null,
+    value: { entityName: "Fictional Foods Pvt Ltd", jurisdiction: "IN-OD", registeredAddress: "Fictional address", registrationReference: "", liabilityPosition: "Fictional position" },
+  });
+  await service.recordAttestation(operations, {
+    key: "insurance", evidenceReference: "fictional-policy", expiresAt: "2030-01-01",
+    value: { insurer: "Fictional Insurance", policyReference: "POL-FICTIONAL", coverageSummary: "Fictional cover", liabilityLimit: "Fictional limit" },
+  });
+  await service.recordAttestation(operations, {
+    key: "data_protection_contact", evidenceReference: "fictional-notice", expiresAt: null,
+    value: { contactName: "Fictional Contact", contactEmail: "privacy@example.test", hours: "Mon-Fri 09:00-18:00 IST", postalAddress: "Fictional address" },
+  });
+  const today = new Date().toISOString().slice(0, 10);
+  await service.recordAttestation(operations, {
+    key: "penetration_test", evidenceReference: "fictional-report", expiresAt: null,
+    value: { provider: "Fictional Security", reportReference: "PT-FICTIONAL", completedOn: today, scopeSummary: "Fictional scope" },
+  });
+  // A rota entry that ended before now never counts as coverage.
+  await service.scheduleOnCallShift(operations, {
+    email: `${prefix}-admin@example.test`,
+    startsAt: new Date(Date.now() - 48 * 3_600_000).toISOString(),
+    endsAt: new Date(Date.now() - 24 * 3_600_000).toISOString(),
+    channel: "fictional phone", notes: "past shift",
+  }).then(() => { throw new Error("A shift that is already over must be refused."); }, () => undefined);
+  const coverageBefore = await admin.query<{ coverage: { coveredNow: boolean; hoursAhead: number } }>("SELECT public.app_on_call_coverage() coverage");
+  assert.equal(coverageBefore.rows[0]!.coverage.coveredNow, false);
+  await service.scheduleOnCallShift(operations, {
+    email: `${prefix}-admin@example.test`,
+    startsAt: new Date(Date.now() - 3_600_000).toISOString(),
+    endsAt: new Date(Date.now() + 23 * 3_600_000).toISOString(),
+    channel: "fictional phone", notes: "covering shift",
+  });
+  const gate = await service.getLaunchReadiness(operations);
+  const declaredKeys = ["legal_entity", "insurance", "data_protection_contact", "on_call", "penetration_test"] as const;
+  for (const key of declaredKeys) {
+    assert(!gate.missing.includes(key), `${key} must be met once declared with evidence: ${gate.items.find((item) => item.key === key)?.detail}`);
+  }
+  const coverageAfter = await admin.query<{ coverage: { coveredNow: boolean; hoursAhead: number } }>("SELECT public.app_on_call_coverage() coverage");
+  assert.equal(coverageAfter.rows[0]!.coverage.coveredNow, true);
+  assert(coverageAfter.rows[0]!.coverage.hoursAhead >= 20, "Coverage must reflect the recorded shift, not a configured promise.");
+  const published = await service.getPublishedContacts();
+  assert.equal((published.dataProtection as { contactEmail?: string } | null)?.contactEmail, "privacy@example.test");
+  assert.equal((published.legalEntity as { entityName?: string } | null)?.entityName, "Fictional Foods Pvt Ltd");
+  // The public endpoint must agree with the gate it reports on, and must expose names only.
+  const publicGate = await admin.query<{ readiness: Record<string, boolean> }>("SELECT public.app_launch_readiness() readiness");
+  for (const key of declaredKeys) {
+    assert.equal(publicGate.rows[0]!.readiness[key === "on_call" ? "on_call" : key], true, `app_launch_readiness must report ${key} as met.`);
+  }
+  // An expired policy re-opens the gap by itself: no one has to remember to edit a document.
+  await admin.query("UPDATE public.platform_attestations SET expires_at = now() - interval '1 day' WHERE key = 'insurance'");
+  const lapsed = await service.getLaunchReadiness(operations);
+  assert(lapsed.missing.includes("insurance"), "A lapsed policy must make readiness fail without any code change.");
+  const lapsedPublic = await admin.query<{ readiness: Record<string, boolean> }>("SELECT public.app_launch_readiness() readiness");
+  assert.equal(lapsedPublic.rows[0]!.readiness.insurance, false);
+  // The application role cannot read or write declarations on its own: it needs a signed-in
+  // administrator, which is what FORCE ROW LEVEL SECURITY is there to enforce.
+  const appPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+  try {
+    const leaked = await appPool.query<{ count: string }>("SELECT count(*)::text count FROM public.platform_attestations");
+    assert.equal(leaked.rows[0]?.count, "0", "Declarations must not be visible without an authenticated role.");
+    await assert.rejects(appPool.query("INSERT INTO public.platform_attestations (key,label,value) VALUES ('insurance','Insurance','{}'::jsonb)"));
+  } finally {
+    await appPool.end();
+  }
+  console.log("PASS: synthetic onboarding/review, matching, competing claims/reservations, pickup window, RLS code privacy, OTP lock/replay, one receipt/impact, incident hold and launch readiness.");
   await db.pool.end();
   await db.authPool.end();
 } catch (error) {

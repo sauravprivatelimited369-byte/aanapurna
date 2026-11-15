@@ -18,7 +18,7 @@ owner is the ability to tell whether a restore was faithful.
 
 1. **A recorded baseline** — `ops/backups/hosted-manifest-2026-11-15.json`, captured from the live
    database on 2026-11-15 after migration 16: 33 tables, 71 rows (43 of them the gazetteer),
-   schema fingerprint `319a9e66…`, 16 migrations, 67 row-level-security policies.
+   schema fingerprint `4d92959d…` (refreshed after migration 17), 17 migrations, 74 row-level-security policies.
 2. **A manifest query** — `node scripts/verify-restore.mjs --sql`. It counts every table, fingerprints
    every column definition and counts the policies. It runs against any PostgreSQL database holding
    this schema.
