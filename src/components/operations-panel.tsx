@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { LaunchReadinessPanel } from "@/components/launch-readiness-panel";
 import { DirectoryPanel } from "@/components/directory-panel";
+import { RetentionPanel } from "@/components/retention-panel";
 import { OrganizationDocuments } from "@/components/organization-documents";
 
 type ServiceArea = { id: string; label: string; countryCode: string; stateOrRegion: string | null; cityOrDistrict: string | null; timezone: string; active: boolean };
@@ -297,6 +298,11 @@ export function OperationsPanel({ platformRoles, userId, initialOverview }: { pl
     {(isOperations || isSecurity) && <LaunchReadinessPanel canWrite={isOperations || isSecurity} />}
 
     {(isOperations || isSecurity) && <DirectoryPanel canWrite={isOperations || isSecurity} />}
+
+    {/* Retention is readable by safety officers too, but only operations and security may act. */}
+    {(isOperations || isSecurity || isSafety) && (
+      <RetentionPanel canWrite={isOperations || isSecurity} canErase={isSecurity} />
+    )}
 
     {(isOperations || isSecurity) && <section id="account-recovery" className="app-card app-card--full">
       <div className="app-card-title"><div><h2>Account recovery</h2><p>Issue the single-use password-reset link for an account and hand it over yourself. Use this when this deployment cannot deliver mail. Your second factor is required and the reason is audited.</p></div></div>

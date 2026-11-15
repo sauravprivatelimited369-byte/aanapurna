@@ -32,7 +32,8 @@
     "test:local-backup": "node --env-file=.env scripts/test-local-backup.mjs",
     "smtp:verify": "node --env-file=.env scripts/verify-smtp.mjs",
     "check:production-config": "tsx scripts/check-production-config.ts",
-    "smoke:hosted": "node scripts/hosted-smoke.mjs"
+    "smoke:hosted": "node scripts/hosted-smoke.mjs",
+    "retention": "tsx scripts/retention.ts"
   },
   "dependencies": {
     "@tailwindcss/postcss": "4.3.5",

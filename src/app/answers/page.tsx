@@ -115,10 +115,12 @@ const ANSWERS: readonly Answer[] = [
       "TLS with a pinned Supabase root certificate and certificate verification, so a machine-in-the-middle with a random certificate is rejected.",
       "Private documents live outside the database, behind an authorised download handler that writes an audit event for every read.",
       "An incident response procedure names a single voice for the incident, with containment, scoping, evidence preservation and notification steps.",
+      "Retention runs. A nightly job at 03:15 IST deletes read notifications, spent one-time codes, expired delivery codes and failed email dead letters, and scrubs the free text from closed incidents and old audit rows. A preview shows the exact counts before anything goes, produced by the same function that performs the sweep.",
+      "A record on legal hold is never deleted, whatever the window says. Holds are scoped, need a name and a reason, and cannot be deleted — only released.",
     ],
     limits:
-      "There is no application-level WAF and no IP allowlist in this repository. Network exposure is governed by the hosting providers, and setting database network restrictions is an owner action in their console. Backups are scripted but a real hosted restore has not been exercised yet, and there is no staffed on-call rota today.",
-    gate: { label: "Owner gate", detail: "Supabase network restrictions, a tested restore, and a scheduled on-call shift are console and people actions, not code." },
+      "There is no application-level WAF and no IP allowlist in this repository. Network exposure is governed by the hosting providers, and setting database network restrictions is an owner action in their console. Backups are scripted but a real hosted restore has not been exercised yet, and there is no staffed on-call rota today. Audit rows are never deleted, because they are the evidence the rest of the system worked: past six years only their free text goes, and the guard that refuses every other change to them is tested.",
+    gate: { label: "Owner gate", detail: "Supabase network restrictions, a tested restore, and a scheduled on-call shift are console and people actions, not code. The retention windows are enforced in code, but the numbers themselves — 90 days for a notification, 6 years for audit detail — are a legal decision nobody has signed off. The defaults are a defensible starting point, not advice." },
   },
   {
     id: "apis",

@@ -504,3 +504,38 @@ export const directoryPlaceUpdateSchema = z.object({
   (value) => Object.keys(value).some((key) => key !== "slug"),
   { message: "Change at least one field." },
 );
+
+/**
+ * Retention windows. The bounds mirror the CHECK constraint in migration 21, so an invalid window is
+ * rejected with a readable message before the database has to say no.
+ */
+export const retentionSettingsSchema = z.object({
+  notificationsDays: z.number().int().min(7).max(3650).optional(),
+  otpDays: z.number().int().min(1).max(30).optional(),
+  deliveryCodesDays: z.number().int().min(1).max(365).optional(),
+  closedIncidentsDays: z.number().int().min(30).max(3650).optional(),
+  failedJobsDays: z.number().int().min(1).max(365).optional(),
+  auditYears: z.number().int().min(1).max(25).optional(),
+}).strict().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: "Change at least one retention window." },
+);
+
+export const retentionHoldSchema = z.object({
+  scopeType: z.enum(["user", "organization", "job", "donation"]),
+  subjectId: z.string().trim().min(1).max(200),
+  reason: z.string().trim().min(10).max(1000),
+}).strict();
+
+export const retentionHoldReleaseSchema = z.object({
+  reason: z.string().trim().min(10).max(1000),
+}).strict();
+
+export const retentionRunSchema = z.object({
+  dryRun: z.boolean().optional().default(false),
+}).strict();
+
+export const erasureSchema = z.object({
+  userId: z.string().trim().min(1).max(200),
+  reason: z.string().trim().min(10).max(1000),
+}).strict();

@@ -148,6 +148,13 @@
       "when": 1794848400000,
       "tag": "20261115230000_food_safety_attestation_and_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794873600000,
+      "tag": "20261116090000_data_retention_and_holds",
+      "breakpoints": true
     }
   ]
 }

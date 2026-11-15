@@ -746,3 +746,67 @@ export const accountRecoveryRequests = pgTable(
   },
   (table) => [index("account_recovery_status_idx").on(table.status, table.createdAt)],
 );
+
+/**
+ * The retention windows the sweeper obeys, in one row.
+ *
+ * The privacy page quotes these numbers and `public.app_apply_retention` reads them, so the sentence
+ * a person reads and the deletion that happens cannot drift apart. `id = 1` is enforced by a CHECK.
+ */
+export const dataRetentionSettings = pgTable("data_retention_settings", {
+  id: integer("id").primaryKey().default(1),
+  notificationsDays: integer("notifications_days").notNull().default(90),
+  otpDays: integer("otp_days").notNull().default(1),
+  deliveryCodesDays: integer("delivery_codes_days").notNull().default(30),
+  closedIncidentsDays: integer("closed_incidents_days").notNull().default(730),
+  failedJobsDays: integer("failed_jobs_days").notNull().default(30),
+  auditYears: integer("audit_years").notNull().default(6),
+  updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+  updatedAt: instant("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * A legal or investigative hold. While a hold is unreleased, every retention window is skipped for
+ * the rows that belong to its scope. Held rows are still visible to staff, never deleted.
+ */
+export const retentionHolds = pgTable(
+  "retention_holds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scopeType: text("scope_type").notNull(),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(() => organizations.id, { onDelete: "cascade" }),
+    deliveryJobId: uuid("delivery_job_id").references(() => deliveryJobs.id, { onDelete: "cascade" }),
+    donationId: uuid("donation_id").references(() => donations.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    placedBy: text("placed_by").notNull().references(() => user.id),
+    placedAt: instant("placed_at").notNull().defaultNow(),
+    releasedBy: text("released_by").references(() => user.id),
+    releasedAt: instant("released_at"),
+    releaseReason: text("release_reason"),
+  },
+  (table) => [
+    index("retention_holds_active_user_idx").on(table.userId),
+    index("retention_holds_active_org_idx").on(table.organizationId),
+  ],
+);
+
+/**
+ * One row per retention action that ran, including previews and hold-skips. Append-only: the
+ * application has SELECT and nothing else, and the sweep writes through a SECURITY DEFINER function.
+ */
+export const dataScrubLog = pgTable(
+  "data_scrub_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id").notNull(),
+    category: text("category").notNull(),
+    action: text("action").notNull(),
+    windowDays: integer("window_days"),
+    affectedRows: integer("affected_rows").notNull().default(0),
+    skippedByHold: integer("skipped_by_hold").notNull().default(0),
+    dryRun: boolean("dry_run").notNull().default(false),
+    executedAt: instant("executed_at").notNull().defaultNow(),
+  },
+  (table) => [index("data_scrub_log_time_idx").on(table.executedAt)],
+);

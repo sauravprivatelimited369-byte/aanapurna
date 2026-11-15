@@ -60,7 +60,25 @@ The local setup and Compose create separate `annapurna_app`, `annapurna_auth`, a
 
 ## Migrations and retention
 
-Run `npm run local:migrate` on a native development instance, or `docker compose run --rm migrate` with Compose. Migrations must be reviewed before use in any shared or production environment. Do not use schema push as a production deployment method. Neither the repository nor a GitHub workflow replaces encrypted, access-controlled database and upload-volume backups and a tested restoration. Retention, legal holds, erasure, review of all records and operational policies remain owner/legal decisions; no production retention schedule is implied.
+Run `npm run local:migrate` on a native development instance, or `docker compose run --rm migrate` with Compose. Migrations must be reviewed before use in any shared or production environment. Do not use schema push as a production deployment method. Neither the repository nor a GitHub workflow replaces encrypted, access-controlled database and upload-volume backups and a tested restoration. Retention, legal holds, erasure, review of all records and operational policies remain owner/legal decisions. What migration 21 adds is the mechanism, not the policy: the windows are a single row that a human sets, and the process that obeys it is enforced.
+
+### What is enforced (migration 21)
+
+| Object | What it does |
+|---|---|
+| `data_retention_settings` | One row (`id = 1`, enforced by CHECK) holding the six windows. The defaults are 90 days for read notifications, 1 day for spent one-time codes, 30 days for expired delivery codes, 730 days for closed incident free text, 30 days for failed email dead letters, and 6 years for audit free text. `audit_years` cannot be set below 1 or above 25. |
+| `retention_holds` | A legal hold scoped to a user, organisation, delivery job or donation. An active hold outranks every window. The scope and the populated column must agree (CHECK). A release is all-or-nothing and needs a reason (CHECK). The table has no DELETE grant and a `USING (false)` DELETE policy, so a hold is history once placed. |
+| `data_scrub_log` | One row per action, including dry runs and hold-skips. The application role has `SELECT` only; the sweep writes through a `SECURITY DEFINER` function. |
+| `app_apply_retention(boolean)` | The whole sweep in one transaction. `true` previews and writes only the log rows. A hold is filtered before the delete, so preview counts equal applied counts. |
+| `app_redact_user(text, text)` | Fulfils an erasure request by overwriting identifying columns and deleting credentials, while keeping receipts, custody events and the audit trail. Records an `identity.redacted` audit row. |
+
+`npm run retention -- --dry-run` previews and `npm run retention` applies; the worker runs the same function nightly at 03:15 IST on the `apply-retention` task.
+
+### Two deliberate limits
+
+**Audit rows are never deleted.** `audit_events` has been append-only since migration 3. Migration 21 does not weaken that: it replaces the blanket guard with one that permits exactly one shape of change, and only when the transaction sets `app.retention_scrub` locally — `details` may only become `{}`, `reason` may only become `'[scrubbed]'`, and every identity and timestamp column must be unchanged. Past the audit window the trail keeps who did what, when and to which record, and loses the prose. `tests/database-migrations.test.ts` proves a content rewrite, an actor change and a delete are all still refused.
+
+**The windows are maximums, not targets.** Nothing is deleted early, and a row on hold is never deleted at all. Whether 90 days for a notification is the right number is an owner and legal decision; the repository only guarantees that whatever number is set is the number enforced.
 
 
 ## Disposable backup/restore drill

@@ -24,6 +24,7 @@ const migrationFiles = [
   "20261115203000_joka_directory.sql",
   "20261115213000_directory_phone_consent.sql",
   "20261115230000_food_safety_attestation_and_recovery.sql",
+  "20261116090000_data_retention_and_holds.sql",
 ];
 
 let database: PGlite;
@@ -1049,5 +1050,213 @@ describe("Transit limits and receiver self-collection", () => {
       SET status = 'resolved', resolution = 'Link issued after an identity check by phone'
       WHERE reference = 'AL-REC-2026-FIXTURE01'
     `)).rejects.toThrow(/account_recovery_resolution_fields_check/);
+  });
+});
+
+/**
+ * Migration 21's controls, exercised as the application role rather than by reading its source.
+ * The point of these is the part most likely to be wrong in a way nobody notices: that a legal hold
+ * actually stops a deletion, and that the row count in the preview is the count that then happens.
+ */
+describe("retention controls in the database", () => {
+  beforeAll(async () => {
+    await database.exec(`
+      INSERT INTO public."user" (id, name, email, email_verified) VALUES
+        ('retention-held', 'Held', 'retention-held@example.test', true),
+        ('retention-free', 'Free', 'retention-free@example.test', true),
+        ('retention-admin', 'Admin', 'retention-admin@example.test', true);
+      INSERT INTO public.user_profiles (user_id, account_status) VALUES
+        ('retention-held', 'active'), ('retention-free', 'active'), ('retention-admin', 'active');
+      INSERT INTO public.notifications (user_id, kind, title, body, created_at) VALUES
+        ('retention-held', 'test', 'held old', 'body', now() - interval '400 days'),
+        ('retention-free', 'test', 'free old', 'body', now() - interval '400 days'),
+        ('retention-free', 'test', 'free new', 'body', now());
+    `);
+  });
+
+  it("ships exactly one settings row and refuses a second", async () => {
+    const rows = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.data_retention_settings",
+    );
+    expect(rows.rows[0]?.count).toBe(1);
+    await expect(
+      database.query("INSERT INTO public.data_retention_settings (id) VALUES (2)"),
+    ).rejects.toThrow(/data_retention_settings_singleton/);
+  });
+
+  it("refuses a window outside the audit floor", async () => {
+    await expect(
+      database.query("UPDATE public.data_retention_settings SET audit_years = 0 WHERE id = 1"),
+    ).rejects.toThrow(/data_retention_settings_windows/);
+  });
+
+  it("refuses a hold whose declared scope contradicts the column it fills", async () => {
+    await expect(database.query(`
+      INSERT INTO public.retention_holds (scope_type, user_id, organization_id, reason, placed_by)
+      VALUES ('user', 'retention-held', gen_random_uuid(), 'Scope does not match the row', 'retention-admin')
+    `)).rejects.toThrow(/retention_holds_scope_matches/);
+  });
+
+  it("refuses a release that leaves out who released it or why", async () => {
+    await database.query(`
+      INSERT INTO public.retention_holds (scope_type, user_id, reason, placed_by)
+      VALUES ('user', 'retention-held', 'Litigation hold, counsel reference LX-44', 'retention-admin')
+    `);
+    await expect(database.query(`
+      UPDATE public.retention_holds SET released_at = now() WHERE user_id = 'retention-held'
+    `)).rejects.toThrow(/retention_holds_release_complete/);
+  });
+
+  it("previews the same counts it then applies, and lets a hold win both times", async () => {
+    const preview = await database.query<{ category: string; affected_rows: number; skipped_by_hold: number }>(
+      "SELECT category, affected_rows, skipped_by_hold FROM public.app_apply_retention(true)",
+    );
+    const previewNotifications = preview.rows.find((row) => row.category === "notifications");
+    // Two old rows qualify, but one belongs to a held person and is counted as skipped.
+    expect(Number(previewNotifications?.affected_rows)).toBe(1);
+    expect(Number(previewNotifications?.skipped_by_hold)).toBe(1);
+
+    // The preview must not have deleted anything.
+    const before = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.notifications WHERE title LIKE '%old%'",
+    );
+    expect(before.rows[0]?.count).toBe(2);
+
+    const applied = await database.query<{ category: string; affected_rows: number; skipped_by_hold: number }>(
+      "SELECT category, affected_rows, skipped_by_hold FROM public.app_apply_retention(false)",
+    );
+    const appliedNotifications = applied.rows.find((row) => row.category === "notifications");
+    expect(Number(appliedNotifications?.affected_rows)).toBe(1);
+    expect(Number(appliedNotifications?.skipped_by_hold)).toBe(1);
+
+    const survivors = await database.query<{ title: string }>(
+      "SELECT title FROM public.notifications WHERE title LIKE '%old%' ORDER BY title",
+    );
+    // The held person's row survives; the unheld person's does not. This is the whole promise.
+    expect(survivors.rows.map((row) => row.title)).toEqual(["held old"]);
+  });
+
+  it("records what it did, including the rows it deliberately skipped", async () => {
+    const log = await database.query<{ category: string; dry_run: boolean; skipped_by_hold: number }>(
+      "SELECT category, dry_run, skipped_by_hold FROM public.data_scrub_log ORDER BY executed_at",
+    );
+    expect(log.rows.some((row) => row.dry_run)).toBe(true);
+    expect(log.rows.some((row) => !row.dry_run)).toBe(true);
+    expect(log.rows.some((row) => Number(row.skipped_by_hold) > 0)).toBe(true);
+  });
+
+  it("keeps audit rows and only scrubs their free text past the window", async () => {
+    await database.query(`
+      INSERT INTO public.audit_events (actor_user_id, action, entity_type, entity_id, reason, details, created_at)
+      VALUES ('retention-free', 'test.ancient', 'user', 'retention-free', 'An old note',
+              '{"note":"someone private"}'::jsonb, now() - interval '8 years');
+    `);
+    await database.query("SELECT * FROM public.app_apply_retention(false)");
+    const row = await database.query<{ action: string; details: unknown; reason: string | null }>(
+      "SELECT action, details, reason FROM public.audit_events WHERE action = 'test.ancient'",
+    );
+    // The row is still there — the trail survives — but the private note inside it is gone.
+    expect(row.rows).toHaveLength(1);
+    expect(row.rows[0]?.details).toEqual({});
+    expect(row.rows[0]?.reason).toBe("[scrubbed]");
+  });
+
+  it("redacts a person without deleting the accountability around them", async () => {
+    const result = await database.query<{
+      redacted_users: number;
+      redacted_accounts: number;
+      redacted_notifications: number;
+    }>("SELECT * FROM public.app_redact_user('retention-free', 'Erasure request DR-2026-004 fulfilled')");
+    expect(Number(result.rows[0]?.redacted_users)).toBe(1);
+
+    const person = await database.query<{ name: string; email: string }>(
+      "SELECT name, email FROM public.\"user\" WHERE id = 'retention-free'",
+    );
+    expect(person.rows[0]?.name).toBe("Redacted account");
+    expect(person.rows[0]?.email).toContain("@invalid");
+
+    // The erasure itself is audited: an erasure nobody can see is indistinguishable from data loss.
+    const audit = await database.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM public.audit_events WHERE action = 'identity.redacted' AND entity_id = 'retention-free'",
+    );
+    expect(audit.rows[0]?.count).toBe(1);
+  });
+
+  it("refuses a redaction with no reason recorded", async () => {
+    await expect(
+      database.query("SELECT * FROM public.app_redact_user('retention-held', 'short')"),
+    ).rejects.toThrow(/at least 10 characters/);
+  });
+
+  it("stops the application role from deleting a hold or rewriting the log", async () => {
+    // Seeded as the owner: the application role holds no INSERT on platform_roles, which is the point.
+    await database.query(`
+      INSERT INTO public.platform_roles (user_id, role, reason)
+      VALUES ('retention-admin', 'security_admin', 'Fixture: retention operator')
+    `);
+    // The log is read-only for the application: there is no DELETE policy and no grant.
+    await expect(
+      withRole("annapurna_app", "retention-admin", async () =>
+        database.query("DELETE FROM public.data_scrub_log"),
+      ),
+    ).rejects.toThrow(/permission denied|row-level security/);
+    // A hold is never destroyed; releasing it is the only exit.
+    await expect(
+      withRole("annapurna_app", "retention-admin", async () =>
+        database.query("DELETE FROM public.retention_holds"),
+      ),
+    ).rejects.toThrow(/permission denied|row-level security/);
+  });
+
+  it("gives a person with no platform role no sight of retention state", async () => {
+    const result = await withRole("annapurna_app", "retention-free", async () =>
+      database.query<{ count: number }>("SELECT count(*)::int AS count FROM public.data_retention_settings"),
+    );
+    expect(result.rows[0]?.count).toBe(0);
+  });
+});
+
+/**
+ * The append-only guarantee is the one control a retention feature is most likely to weaken by
+ * accident. These tests exist to make sure it stayed a guarantee: a scrub may remove information
+ * and nothing else, and an audit row can never be deleted or rewritten.
+ */
+describe("the audit trail stays append-only after migration 21", () => {
+  const rewrite = (sqlText: string) =>
+    database.transaction(async (tx) => {
+      await tx.exec("SELECT set_config('app.retention_scrub', 'true', true)");
+      await tx.exec(sqlText);
+    });
+
+  it("refuses an update that does not declare itself a retention scrub", async () => {
+    await expect(
+      database.query("UPDATE public.audit_events SET details = '{\"x\":1}'::jsonb"),
+    ).rejects.toThrow(/append-only records cannot be changed or deleted/);
+  });
+
+  it("refuses a content rewrite even when the scrub flag is set", async () => {
+    await expect(
+      rewrite("UPDATE public.audit_events SET details = '{\"secret\":\"rewritten\"}'::jsonb"),
+    ).rejects.toThrow(/may only empty audit details/);
+  });
+
+  it("refuses to change who did what, even inside a scrub", async () => {
+    await expect(
+      rewrite("UPDATE public.audit_events SET action = 'something.else' WHERE action = 'identity.redacted'"),
+    ).rejects.toThrow(/append-only|may not alter/);
+  });
+
+  it("refuses a delete even when the scrub flag is set", async () => {
+    await expect(
+      rewrite("DELETE FROM public.audit_events"),
+    ).rejects.toThrow(/append-only records cannot be changed or deleted/);
+  });
+
+  it("still allows the one narrowing change the retention window needs", async () => {
+    await rewrite("UPDATE public.audit_events SET details = '{}'::jsonb, reason = '[scrubbed]'");
+    const result = await database.query<{ details: unknown }>(
+      "SELECT details FROM public.audit_events WHERE action = 'identity.redacted'",
+    );
+    expect(result.rows[0]?.details).toEqual({});
   });
 });

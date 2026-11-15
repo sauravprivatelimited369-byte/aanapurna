@@ -4,7 +4,7 @@ import { run } from "graphile-worker";
 import { databaseConnectionTimeoutMillis, databaseSslOptions, databaseUrl } from "../lib/database-config";
 import { drainEmailOutboxOnce } from "./outbox-drain";
 import { tryRecordWorkerHeartbeat } from "./heartbeat";
-import { runEscalationSweep, runReadinessSweep } from "./escalation";
+import { runEscalationSweep, runReadinessSweep, runRetentionSweep } from "./escalation";
 
 // The delivery logic lives in ./outbox-drain so the same code can be driven by
 // this long-lived process or by a short-lived hosted scheduler invocation.
@@ -107,8 +107,27 @@ async function startWorker() {
           throw error;
         }
       },
+      // The retention windows. Nightly, and separate from every other sweep: this is the one job
+      // that deletes data, so it must fail on its own schedule rather than silently inside another.
+      "apply-retention": async () => {
+        try {
+          const result = await runRetentionSweep(pool);
+          await tryRecordWorkerHeartbeat(pool, {
+            event: "tick",
+            processed: result.totalAffected,
+            failed: 0,
+            lastError: null,
+          });
+        } catch (error) {
+          await tryRecordWorkerHeartbeat(pool, {
+            event: "tick",
+            lastError: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+          });
+          throw error;
+        }
+      },
     },
-    crontab: "* * * * * drain-email-outbox\n*/5 * * * * escalate-delivery-backlog\n*/15 * * * * escalate-platform-readiness",
+    crontab: "* * * * * drain-email-outbox\n*/5 * * * * escalate-delivery-backlog\n*/15 * * * * escalate-platform-readiness\n15 3 * * * apply-retention",
   });
 
   // The cron job runs once a minute and not at all when the queue is quiet, so
